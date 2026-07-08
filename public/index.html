@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>日常与健身记录</title>
-    <link rel="stylesheet" href="./styles.css?v=20260708-range-desktop">
+    <link rel="stylesheet" href="./styles.css?v=20260708-assessment-row">
   </head>
   <body>
     <header class="app-header">
@@ -56,26 +56,28 @@
               <button id="waterStepBtn" class="water-step-button" type="button">+500 ml</button>
             </div>
           </div>
-          <label class="range-field">
-            <span class="range-label">心情 1-5</span>
-            <input id="mood" type="range" min="1" max="5" value="3">
-            <span id="moodValue" class="range-value">3</span>
-          </label>
-          <label class="range-field">
-            <span class="range-label">精力 1-5</span>
-            <input id="energy" type="range" min="1" max="5" value="3">
-            <span id="energyValue" class="range-value">3</span>
-          </label>
-          <label class="range-field">
-            <span class="range-label">酸痛 1-5</span>
-            <input id="soreness" type="range" min="1" max="5" value="2">
-            <span id="sorenessValue" class="range-value">2</span>
-          </label>
-          <label class="range-field">
-            <span class="range-label">疼痛 0-5</span>
-            <input id="pain" type="range" min="0" max="5" value="0">
-            <span id="painValue" class="range-value">0</span>
-          </label>
+          <div class="assessment-row wide" aria-label="自我评估">
+            <label class="range-field">
+              <span class="range-label">心情 1-5</span>
+              <input id="mood" type="range" min="1" max="5" value="3">
+              <span id="moodValue" class="range-value">3</span>
+            </label>
+            <label class="range-field">
+              <span class="range-label">精力 1-5</span>
+              <input id="energy" type="range" min="1" max="5" value="3">
+              <span id="energyValue" class="range-value">3</span>
+            </label>
+            <label class="range-field">
+              <span class="range-label">酸痛 1-5</span>
+              <input id="soreness" type="range" min="1" max="5" value="2">
+              <span id="sorenessValue" class="range-value">2</span>
+            </label>
+            <label class="range-field">
+              <span class="range-label">疼痛 0-5</span>
+              <input id="pain" type="range" min="0" max="5" value="0">
+              <span id="painValue" class="range-value">0</span>
+            </label>
+          </div>
           <fieldset class="check-group">
             <legend>习惯</legend>
             <label><input id="habitWorkout" type="checkbox"> 健身</label>
@@ -212,6 +214,6 @@
     </main>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=20260708-range-desktop"></script>
+    <script src="./app.js?v=20260708-assessment-row"></script>
   </body>
 </html>
