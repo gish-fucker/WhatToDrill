@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>日常与健身记录</title>
-    <link rel="stylesheet" href="./styles.css?v=20260708-polish-1">
+    <link rel="stylesheet" href="./styles.css?v=20260708-polish-2">
   </head>
   <body>
     <header class="app-header">
@@ -104,7 +104,7 @@
           </div>
         </div>
 
-        <form id="workoutForm" class="form-grid">
+        <form id="workoutForm" class="form-grid workout-form">
           <label>
             日期
             <input id="workoutDate" type="date" required>
@@ -128,7 +128,7 @@
           </label>
         </form>
 
-        <div class="toolbar">
+        <div class="toolbar template-toolbar">
           <label>
             载入模板
             <select id="templateSelect"></select>
@@ -137,7 +137,16 @@
           <button id="saveTemplateBtn" class="ghost-button" type="button">保存为模板</button>
         </div>
 
-        <div id="exerciseRows" class="exercise-list"></div>
+        <div class="workout-builder">
+          <div class="builder-heading">
+            <div>
+              <p class="eyebrow">Exercises</p>
+              <h3>训练动作</h3>
+            </div>
+            <span class="muted">重量 · 次数 · RPE</span>
+          </div>
+          <div id="exerciseRows" class="exercise-list"></div>
+        </div>
       </section>
 
       <section id="insights" class="tab-panel">
@@ -151,12 +160,23 @@
 
         <div id="summaryGrid" class="summary-grid"></div>
         <div class="insight-layout">
-          <section class="plain-panel">
-            <h3>智能建议</h3>
+          <section class="plain-panel advice-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Coach</p>
+                <h3>智能建议</h3>
+              </div>
+              <span class="status-dot"></span>
+            </div>
             <div id="adviceOutput" class="advice-output">保存几条记录后，这里会生成更有用的建议。</div>
           </section>
-          <section class="plain-panel">
-            <h3>最近记录</h3>
+          <section class="plain-panel history-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Timeline</p>
+                <h3>最近记录</h3>
+              </div>
+            </div>
             <div id="historyList" class="history-list"></div>
           </section>
         </div>
@@ -214,6 +234,6 @@
     </main>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=20260708-polish-1"></script>
+    <script src="./app.js?v=20260708-polish-2"></script>
   </body>
 </html>

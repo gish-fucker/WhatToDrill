@@ -190,6 +190,7 @@ function addExerciseCard(exercise = { name: state.exercises[0]?.name || "", sets
   card.dataset.exerciseId = uid("exercise");
   card.innerHTML = `
     <header>
+      <span class="exercise-index"></span>
       <div class="exercise-title-row">
         <label>
           动作
@@ -198,12 +199,19 @@ function addExerciseCard(exercise = { name: state.exercises[0]?.name || "", sets
         <button class="ghost-button remove-exercise" type="button">移除</button>
       </div>
     </header>
+    <div class="set-header">
+      <span>重量</span>
+      <span>次数</span>
+      <span>RPE</span>
+      <span>备注</span>
+    </div>
     <div class="sets"></div>
     <button class="ghost-button add-set" type="button">添加一组</button>
   `;
   $("exerciseRows").appendChild(card);
   const sets = exercise.sets?.length ? exercise.sets : [{ weight: "", reps: "", rpe: 7, note: "" }];
   sets.forEach(set => addSetRow(card, set));
+  updateExerciseIndexes();
 }
 
 function addSetRow(card, set = { weight: "", reps: "", rpe: 7, note: "" }) {
@@ -211,19 +219,19 @@ function addSetRow(card, set = { weight: "", reps: "", rpe: 7, note: "" }) {
   row.className = "set-grid";
   row.innerHTML = `
     <label>
-      重量
+      <span class="set-label">重量</span>
       <input class="set-weight" type="number" min="0" step="0.5" value="${escapeAttr(set.weight ?? "")}">
     </label>
     <label>
-      次数
+      <span class="set-label">次数</span>
       <input class="set-reps" type="number" min="0" step="1" value="${escapeAttr(set.reps ?? "")}">
     </label>
     <label>
-      RPE
+      <span class="set-label">RPE</span>
       <input class="set-rpe" type="number" min="1" max="10" step="0.5" value="${escapeAttr(set.rpe ?? 7)}">
     </label>
     <label>
-      备注
+      <span class="set-label">备注</span>
       <input class="set-note" type="text" value="${escapeAttr(set.note ?? "")}">
     </label>
     <button class="ghost-button remove-set" type="button">删除</button>
@@ -245,7 +253,15 @@ function bindWorkoutRows() {
     }
     if (target.classList.contains("remove-exercise")) {
       card.remove();
+      updateExerciseIndexes();
     }
+  });
+}
+
+function updateExerciseIndexes() {
+  document.querySelectorAll(".exercise-card").forEach((card, index) => {
+    const label = card.querySelector(".exercise-index");
+    if (label) label.textContent = String(index + 1).padStart(2, "0");
   });
 }
 
@@ -364,16 +380,16 @@ function renderSummary() {
   const habitRate = recentDaily.length ? Math.round(recentDaily.filter(item => item.habits?.workout).length / recentDaily.length * 100) : 0;
 
   $("summaryGrid").innerHTML = [
-    summaryCard("14天训练", `${recentWorkouts.length} 次`),
-    summaryCard("训练组数", `${totalSets} 组`),
-    summaryCard("平均睡眠", avgSleep === null ? "暂无" : `${avgSleep.toFixed(1)}h`),
-    summaryCard("健身打卡率", `${habitRate}%`),
-    summaryCard("平均精力", avgEnergy === null ? "暂无" : `${avgEnergy.toFixed(1)}/5`)
+    summaryCard("14天训练", `${recentWorkouts.length} 次`, "Workout"),
+    summaryCard("训练组数", `${totalSets} 组`, "Volume"),
+    summaryCard("平均睡眠", avgSleep === null ? "暂无" : `${avgSleep.toFixed(1)}h`, "Recovery"),
+    summaryCard("健身打卡率", `${habitRate}%`, "Habit"),
+    summaryCard("平均精力", avgEnergy === null ? "暂无" : `${avgEnergy.toFixed(1)}/5`, "Energy")
   ].join("");
 }
 
-function summaryCard(label, value) {
-  return `<article class="summary-card"><span class="muted">${label}</span><strong>${value}</strong></article>`;
+function summaryCard(label, value, eyebrow = "Metric") {
+  return `<article class="summary-card"><span class="eyebrow">${escapeHtml(eyebrow)}</span><span class="muted">${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></article>`;
 }
 
 function renderHistory() {
@@ -383,7 +399,7 @@ function renderHistory() {
     .slice(0, 8)
     .map(log => `
       <article class="history-card">
-        <header><strong>${escapeHtml(log.date)}</strong><span class="muted">日常</span></header>
+        <header><strong>${escapeHtml(log.date)}</strong><span class="type-pill">日常</span></header>
         <p class="muted">睡眠 ${log.sleepHours ?? "未填"}h · 精力 ${log.energy}/5 · 心情 ${log.mood}/5 · 疼痛 ${log.pain}/5</p>
         ${log.note ? `<p>${escapeHtml(log.note)}</p>` : ""}
       </article>
@@ -395,7 +411,7 @@ function renderHistory() {
     .slice(0, 8)
     .map(workout => `
       <article class="history-card">
-        <header><strong>${escapeHtml(workout.date)} ${escapeHtml(workout.title)}</strong><span class="muted">训练</span></header>
+        <header><strong>${escapeHtml(workout.date)} ${escapeHtml(workout.title)}</strong><span class="type-pill workout-pill">训练</span></header>
         <p class="muted">${workout.exercises.length} 个动作 · ${countSets(workout)} 组 · RPE ${workout.sessionRpe}/10</p>
         <p>${workout.exercises.map(item => escapeHtml(item.name)).join("、")}</p>
       </article>
