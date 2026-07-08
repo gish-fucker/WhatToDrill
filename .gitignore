@@ -1,0 +1,5 @@
+server.log
+server.err.log
+output/
+.env
+node_modules/

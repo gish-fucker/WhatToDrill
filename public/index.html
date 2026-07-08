@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>日常与健身记录</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">Personal log</p>
+        <h1>日常与健身记录</h1>
+      </div>
+      <div class="header-actions">
+        <span id="aiStatus" class="status-pill">AI 状态检测中</span>
+        <button id="exportBtn" class="ghost-button" type="button">导出</button>
+      </div>
+    </header>
+
+    <main class="app-shell">
+      <nav class="tabs" aria-label="主导航">
+        <button class="tab active" data-tab="today" type="button">今天</button>
+        <button class="tab" data-tab="workout" type="button">训练</button>
+        <button class="tab" data-tab="insights" type="button">洞察</button>
+        <button class="tab" data-tab="library" type="button">动作与模板</button>
+      </nav>
+
+      <section id="today" class="tab-panel active">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Daily</p>
+            <h2>今天的生活状态</h2>
+          </div>
+          <button id="saveDailyBtn" type="button">保存今天</button>
+        </div>
+
+        <form id="dailyForm" class="form-grid">
+          <label>
+            日期
+            <input id="dailyDate" type="date" required>
+          </label>
+          <label>
+            睡眠小时
+            <input id="sleepHours" type="number" min="0" max="16" step="0.5" placeholder="7.5">
+          </label>
+          <label>
+            饮水 ml
+            <input id="waterMl" type="number" min="0" step="100" placeholder="1800">
+          </label>
+          <label>
+            心情 1-5
+            <input id="mood" type="range" min="1" max="5" value="3">
+            <span id="moodValue" class="range-value">3</span>
+          </label>
+          <label>
+            精力 1-5
+            <input id="energy" type="range" min="1" max="5" value="3">
+            <span id="energyValue" class="range-value">3</span>
+          </label>
+          <label>
+            酸痛 1-5
+            <input id="soreness" type="range" min="1" max="5" value="2">
+            <span id="sorenessValue" class="range-value">2</span>
+          </label>
+          <label>
+            疼痛 0-5
+            <input id="pain" type="range" min="0" max="5" value="0">
+            <span id="painValue" class="range-value">0</span>
+          </label>
+          <fieldset class="check-group">
+            <legend>习惯</legend>
+            <label><input id="habitWorkout" type="checkbox"> 健身</label>
+            <label><input id="habitStretch" type="checkbox"> 拉伸</label>
+            <label><input id="habitStudy" type="checkbox"> 学习</label>
+            <label><input id="habitEarlySleep" type="checkbox"> 早睡</label>
+          </fieldset>
+          <label class="wide">
+            备注
+            <textarea id="dailyNote" rows="4" placeholder="今天有什么影响状态的事？"></textarea>
+          </label>
+        </form>
+      </section>
+
+      <section id="workout" class="tab-panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Workout</p>
+            <h2>记录一次训练</h2>
+          </div>
+          <div class="button-row">
+            <button id="addExerciseRowBtn" class="ghost-button" type="button">添加动作</button>
+            <button id="saveWorkoutBtn" type="button">保存训练</button>
+          </div>
+        </div>
+
+        <form id="workoutForm" class="form-grid">
+          <label>
+            日期
+            <input id="workoutDate" type="date" required>
+          </label>
+          <label>
+            主题
+            <input id="workoutTitle" type="text" placeholder="Push / 腿 / 全身">
+          </label>
+          <label>
+            训练时长分钟
+            <input id="duration" type="number" min="0" step="5" placeholder="60">
+          </label>
+          <label>
+            整体难度 1-10
+            <input id="sessionRpe" type="range" min="1" max="10" value="6">
+            <span id="sessionRpeValue" class="range-value">6</span>
+          </label>
+          <label class="wide">
+            本次备注
+            <textarea id="workoutNote" rows="3" placeholder="状态、疼痛、技术感觉、下次想改什么"></textarea>
+          </label>
+        </form>
+
+        <div class="toolbar">
+          <label>
+            载入模板
+            <select id="templateSelect"></select>
+          </label>
+          <button id="loadTemplateBtn" class="ghost-button" type="button">载入</button>
+          <button id="saveTemplateBtn" class="ghost-button" type="button">保存为模板</button>
+        </div>
+
+        <div id="exerciseRows" class="exercise-list"></div>
+      </section>
+
+      <section id="insights" class="tab-panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Insight</p>
+            <h2>趋势与建议</h2>
+          </div>
+          <button id="generateAdviceBtn" type="button">生成建议</button>
+        </div>
+
+        <div id="summaryGrid" class="summary-grid"></div>
+        <div class="insight-layout">
+          <section class="plain-panel">
+            <h3>智能建议</h3>
+            <div id="adviceOutput" class="advice-output">保存几条记录后，这里会生成更有用的建议。</div>
+          </section>
+          <section class="plain-panel">
+            <h3>最近记录</h3>
+            <div id="historyList" class="history-list"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="library" class="tab-panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Library</p>
+            <h2>动作库与数据</h2>
+          </div>
+        </div>
+
+        <div class="library-layout">
+          <section class="plain-panel">
+            <h3>新增动作</h3>
+            <form id="exerciseLibraryForm" class="stacked-form">
+              <label>
+                动作名称
+                <input id="newExerciseName" type="text" placeholder="深蹲">
+              </label>
+              <label>
+                分类
+                <select id="newExerciseCategory">
+                  <option>力量</option>
+                  <option>有氧</option>
+                  <option>拉伸</option>
+                  <option>核心</option>
+                  <option>康复</option>
+                </select>
+              </label>
+              <button id="addLibraryExerciseBtn" type="button">添加动作</button>
+            </form>
+            <div id="exerciseLibraryList" class="chip-list"></div>
+          </section>
+
+          <section class="plain-panel">
+            <h3>训练模板</h3>
+            <div id="templateList" class="history-list"></div>
+          </section>
+
+          <section class="plain-panel">
+            <h3>数据备份</h3>
+            <div class="button-row">
+              <label class="file-button">
+                导入 JSON
+                <input id="importFile" type="file" accept="application/json">
+              </label>
+              <button id="resetDemoBtn" class="danger-button" type="button">清空数据</button>
+            </div>
+            <p class="muted">数据只保存在当前浏览器。换电脑或清理浏览器数据前，请先导出。</p>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="./app.js"></script>
+  </body>
+</html>
+
