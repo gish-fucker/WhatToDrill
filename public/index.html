@@ -8,7 +8,7 @@
     <title>日常与健身记录</title>
     <link rel="icon" href="./app-icon.svg" type="image/svg+xml">
     <link rel="manifest" href="./manifest.webmanifest">
-    <link rel="stylesheet" href="./styles.css?v=20260709-weekly-review">
+    <link rel="stylesheet" href="./styles.css?v=20260709-beginner-coach">
   </head>
   <body>
     <header class="app-header">
@@ -34,10 +34,11 @@
         <button class="tab" data-tab="library" type="button">动作与模板</button>
       </nav>
 
-      <section id="focusStrip" class="focus-strip" aria-label="今日状态"></section>
-      <section id="starterGuide" class="starter-guide" aria-label="开始记录"></section>
-
       <section id="today" class="tab-panel active">
+        <section id="dailyCoach" class="daily-coach" aria-label="今日建议"></section>
+        <section id="focusStrip" class="focus-strip" aria-label="今日状态"></section>
+        <section id="starterGuide" class="starter-guide" aria-label="开始记录"></section>
+
         <div class="section-heading">
           <div>
             <p class="eyebrow">Daily</p>
@@ -280,6 +281,6 @@
     </main>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=20260709-weekly-review"></script>
+    <script src="./app.js?v=20260709-beginner-coach"></script>
   </body>
 </html>

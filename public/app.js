@@ -7,14 +7,88 @@ const defaultExercises = [
   { name: "划船", category: "力量", lastUsed: "" },
   { name: "肩推", category: "力量", lastUsed: "" },
   { name: "引体向上", category: "力量", lastUsed: "" },
+  { name: "腿举", category: "力量", lastUsed: "" },
+  { name: "高位下拉", category: "力量", lastUsed: "" },
+  { name: "坐姿划船", category: "力量", lastUsed: "" },
+  { name: "哑铃肩推", category: "力量", lastUsed: "" },
+  { name: "罗马尼亚硬拉", category: "力量", lastUsed: "" },
+  { name: "臀桥", category: "力量", lastUsed: "" },
+  { name: "俯卧撑", category: "力量", lastUsed: "" },
+  { name: "死虫", category: "核心", lastUsed: "" },
   { name: "跑步", category: "有氧", lastUsed: "" },
+  { name: "快走", category: "有氧", lastUsed: "" },
+  { name: "动态拉伸", category: "恢复", lastUsed: "" },
+  { name: "髋部活动", category: "恢复", lastUsed: "" },
   { name: "平板支撑", category: "核心", lastUsed: "" }
+];
+
+const beginnerTemplates = [
+  {
+    id: "beginner_full_body",
+    name: "全身入门",
+    duration: 35,
+    sessionRpe: 6,
+    environment: "健身房",
+    exercises: [
+      { name: "腿举", sets: beginnerSets(3, "", 10, 6, "动作稳定，保留 3 次余力") },
+      { name: "卧推", sets: beginnerSets(3, "", 8, 6, "先用轻重量找轨迹") },
+      { name: "坐姿划船", sets: beginnerSets(3, "", 10, 6, "肩胛向后收，不耸肩") },
+      { name: "平板支撑", sets: beginnerSets(2, "", 30, 6, "按秒记录在次数里") }
+    ]
+  },
+  {
+    id: "beginner_upper",
+    name: "上肢入门",
+    duration: 30,
+    sessionRpe: 6,
+    environment: "健身房",
+    exercises: [
+      { name: "卧推", sets: beginnerSets(3, "", 8, 6, "重量宁轻不乱") },
+      { name: "高位下拉", sets: beginnerSets(3, "", 10, 6, "先让背发力") },
+      { name: "哑铃肩推", sets: beginnerSets(2, "", 10, 6, "核心收紧") },
+      { name: "坐姿划船", sets: beginnerSets(2, "", 10, 6, "控制回放") }
+    ]
+  },
+  {
+    id: "beginner_lower",
+    name: "下肢入门",
+    duration: 32,
+    sessionRpe: 6,
+    environment: "健身房",
+    exercises: [
+      { name: "腿举", sets: beginnerSets(3, "", 10, 6, "膝盖方向稳定") },
+      { name: "罗马尼亚硬拉", sets: beginnerSets(3, "", 8, 6, "背部保持中立") },
+      { name: "臀桥", sets: beginnerSets(3, "", 12, 6, "顶峰停 1 秒") },
+      { name: "死虫", sets: beginnerSets(2, "", 10, 5, "慢一点更有效") }
+    ]
+  },
+  {
+    id: "beginner_recovery",
+    name: "恢复拉伸",
+    duration: 15,
+    sessionRpe: 3,
+    environment: "居家",
+    exercises: [
+      { name: "快走", sets: beginnerSets(1, "", 10, 3, "按分钟记录在次数里") },
+      { name: "动态拉伸", sets: beginnerSets(2, "", 8, 3, "动作轻松，不追求拉到极限") },
+      { name: "髋部活动", sets: beginnerSets(2, "", 8, 3, "左右各做") },
+      { name: "平板支撑", sets: beginnerSets(2, "", 20, 4, "保持能说话的强度") }
+    ]
+  }
 ];
 
 const state = loadState();
 
+function beginnerSets(count, weight, reps, rpe, note) {
+  return Array.from({ length: count }, () => ({ weight, reps, rpe, note }));
+}
+
 function today() {
-  return new Date().toISOString().slice(0, 10);
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function uid(prefix) {
@@ -28,7 +102,7 @@ function loadState() {
       return {
         dailyLogs: parsed.dailyLogs || [],
         workouts: parsed.workouts || [],
-        exercises: parsed.exercises?.length ? parsed.exercises : defaultExercises,
+        exercises: mergeDefaultExercises(parsed.exercises),
         templates: parsed.templates || [],
         adviceHistory: parsed.adviceHistory || [],
         settings: {
@@ -43,13 +117,23 @@ function loadState() {
   return {
     dailyLogs: [],
     workouts: [],
-    exercises: defaultExercises,
+    exercises: mergeDefaultExercises([]),
     templates: [],
     adviceHistory: [],
     settings: {
       waterStepMl: 500
     }
   };
+}
+
+function mergeDefaultExercises(exercises = []) {
+  const merged = [...(Array.isArray(exercises) ? exercises : [])];
+  defaultExercises.forEach(exercise => {
+    if (!merged.some(item => item.name === exercise.name)) {
+      merged.push({ ...exercise });
+    }
+  });
+  return merged;
 }
 
 function saveState() {
@@ -174,6 +258,7 @@ function loadDailyIntoForm(date) {
   $("habitEarlySleep").checked = Boolean(log?.habits?.earlySleep);
   $("dailyNote").value = log?.note ?? "";
   ["mood", "energy", "soreness", "pain"].forEach(id => $(`${id}Value`).textContent = $(id).value);
+  renderDailyCoach();
   renderTodayDashboard();
 }
 
@@ -376,16 +461,48 @@ function saveTemplate() {
 
 function loadTemplate() {
   const id = $("templateSelect").value;
-  const template = state.templates.find(item => item.id === id);
+  const template = getAllTemplates().find(item => item.id === id);
   if (!template) {
     showToast("还没有可载入的模板");
     return;
   }
-  $("workoutTitle").value = template.name;
-  $("exerciseRows").innerHTML = "";
-  template.exercises.forEach(exercise => addExerciseCard(exercise));
-  renderWorkoutDashboard();
+  fillWorkoutFromTemplate(template, template.name);
   showToast("模板已载入");
+}
+
+function fillWorkoutFromTemplate(template, title) {
+  $("workoutDate").value = today();
+  $("workoutTitle").value = title || template.name;
+  $("duration").value = template.duration ?? "";
+  $("sessionRpe").value = template.sessionRpe ?? 6;
+  $("sessionRpeValue").textContent = $("sessionRpe").value;
+  $("workoutNote").value = template.environment
+    ? `今日建议：${template.environment} · 新手友好强度`
+    : "";
+  $("exerciseRows").innerHTML = "";
+  template.exercises.forEach(exercise => addExerciseCard(cloneExercise(exercise)));
+  renderWorkoutDashboard();
+}
+
+function cloneExercise(exercise) {
+  return {
+    name: exercise.name,
+    sets: (exercise.sets || []).map(set => ({ ...set }))
+  };
+}
+
+function getAllTemplates() {
+  return [
+    ...beginnerTemplates.map(template => ({ ...template, builtIn: true })),
+    ...state.templates.map(template => ({ ...template, builtIn: false }))
+  ];
+}
+
+function startDailyCoachWorkout() {
+  const recommendation = buildDailyCoachRecommendation();
+  fillWorkoutFromTemplate(recommendation.template, `今日建议 - ${recommendation.template.name}`);
+  activateTab("workout");
+  showToast(`已载入${recommendation.template.name}`);
 }
 
 function addLibraryExercise() {
@@ -469,24 +586,28 @@ function renderLibrary() {
     `)
     .join("") || emptyState("还没有动作", "添加第一个动作后，训练记录会更快。");
 
-  $("templateList").innerHTML = state.templates.length
-    ? state.templates.map(template => `
+  const allTemplates = getAllTemplates();
+  $("templateList").innerHTML = allTemplates.length
+    ? allTemplates.map(template => `
       <article class="template-card">
         <header>
           <strong>${escapeHtml(template.name)}</strong>
-          <button class="ghost-button delete-template" data-id="${template.id}" type="button">删除</button>
+          ${template.builtIn
+            ? `<span class="type-pill">新手推荐</span>`
+            : `<button class="ghost-button delete-template" data-id="${template.id}" type="button">删除</button>`}
         </header>
         <p class="muted">${template.exercises.map(item => escapeHtml(item.name)).join("、")}</p>
         <div class="template-meta">
           <span>${template.exercises.length} 个动作</span>
           <span>${template.exercises.reduce((sum, exercise) => sum + exercise.sets.length, 0)} 组</span>
+          ${template.duration ? `<span>${template.duration} 分钟</span>` : ""}
         </div>
       </article>
     `).join("")
     : emptyState("还没有模板", "在训练页把常用动作保存为模板。");
 
-  $("templateSelect").innerHTML = state.templates.length
-    ? state.templates.map(template => `<option value="${template.id}">${escapeHtml(template.name)}</option>`).join("")
+  $("templateSelect").innerHTML = allTemplates.length
+    ? allTemplates.map(template => `<option value="${template.id}">${template.builtIn ? "新手 · " : ""}${escapeHtml(template.name)}</option>`).join("")
     : `<option value="">暂无模板</option>`;
 }
 
@@ -581,6 +702,7 @@ function parseAdviceSections(text) {
 }
 
 function renderAll() {
+  renderDailyCoach();
   renderTodayDashboard();
   renderWorkoutDashboard();
   renderFocusStrip();
@@ -737,6 +859,142 @@ function starterStep(index, title, text, targetTab) {
       <small>${escapeHtml(text)}</small>
     </button>
   `;
+}
+
+function renderDailyCoach() {
+  const coach = $("dailyCoach");
+  if (!coach) return;
+  const recommendation = buildDailyCoachRecommendation();
+  const reasonList = recommendation.reasons.map(reason => `<li>${escapeHtml(reason)}</li>`).join("");
+
+  coach.innerHTML = `
+    <div class="daily-coach-main">
+      <div>
+        <p class="eyebrow">Daily Coach</p>
+        <h2>今日建议</h2>
+        <p class="muted">${escapeHtml(recommendation.summary)}</p>
+      </div>
+      <span class="coach-status ${escapeAttr(recommendation.statusKey)}">${escapeHtml(recommendation.statusLabel)}</span>
+    </div>
+    <div class="daily-coach-body">
+      <article class="coach-decision">
+        <span>${escapeHtml(recommendation.template.environment)} · ${escapeHtml(recommendation.durationText)}</span>
+        <strong>${escapeHtml(recommendation.template.name)}</strong>
+        <small>${escapeHtml(recommendation.intensityText)}</small>
+      </article>
+      <div class="coach-reasons">
+        <h3>为什么这样建议</h3>
+        <ul>${reasonList}</ul>
+        ${recommendation.caution ? `<p class="coach-caution">${escapeHtml(recommendation.caution)}</p>` : ""}
+      </div>
+      <div class="coach-actions">
+        <button id="startCoachWorkoutBtn" type="button">开始今天训练</button>
+        <button class="ghost-button" type="button" data-target-tab="today">只记录状态</button>
+      </div>
+    </div>
+  `;
+}
+
+function buildDailyCoachRecommendation() {
+  const daily = getDailyDraft();
+  const todayLog = state.dailyLogs.find(item => item.date === daily.date);
+  const hasBodyState = Boolean(todayLog) || daily.sleepHours !== null || daily.waterMl !== null;
+  const recentWorkouts = getRecent(state.workouts, 7);
+  const hardWorkouts = recentWorkouts.filter(workout => workout.sessionRpe >= 8);
+  const hardLast3 = recentWorkouts.filter(workout => daysBetween(workout.date, today()) <= 2 && workout.sessionRpe >= 8);
+  const latestWorkout = state.workouts.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
+  const daysSinceLastWorkout = latestWorkout ? daysBetween(latestWorkout.date, today()) : null;
+  const sleep = daily.sleepHours;
+  const energy = daily.energy;
+  const soreness = daily.soreness;
+  const pain = daily.pain;
+  const water = daily.waterMl ?? 0;
+  const reasons = [];
+  let statusKey = "normal";
+  let statusLabel = "正常练";
+  let template = pickBeginnerTemplate("normal", latestWorkout);
+  let summary = "今天适合做一次稳定的新手训练，重点是动作质量和完成感。";
+  let intensityText = "目标 RPE 6 左右，保留 3 次余力。";
+  let caution = "";
+
+  if (!hasBodyState) {
+    reasons.push("还没有今天的睡眠、饮水或状态记录。");
+    reasons.push("先用温和全身训练建立第一条节奏。");
+    reasons.push("记录越完整，后续建议会越贴近你。");
+    return {
+      statusKey: "starter",
+      statusLabel: "先建立记录",
+      template,
+      summary: "先记录今天的睡眠、精力和酸痛，我会给你今天的训练建议。",
+      reasons,
+      caution: "",
+      intensityText,
+      durationText: `${template.duration} 分钟`
+    };
+  }
+
+  if (pain >= 4) {
+    statusKey = "recovery";
+    statusLabel = "恢复日";
+    template = pickBeginnerTemplate("recovery");
+    summary = "今天疼痛信号偏高，先不要硬练，把目标放在恢复和活动度。";
+    intensityText = "轻松活动，不做负重冲刺。";
+    caution = "如果疼痛持续或加重，建议咨询专业人士。";
+    reasons.push(`疼痛 ${pain}/5，安全优先级高于训练量。`);
+  } else if ((sleep !== null && sleep < 6 && soreness >= 4) || hardLast3.length >= 2) {
+    statusKey = "light";
+    statusLabel = "轻量练";
+    template = pickBeginnerTemplate("light", latestWorkout);
+    summary = "今天适合保留训练习惯，但不要追求加量。";
+    intensityText = "目标 RPE 5-6，动作慢一点。";
+    if (sleep !== null && sleep < 6) reasons.push(`睡眠 ${formatMetric(sleep)}h，恢复基础偏弱。`);
+    if (soreness >= 4) reasons.push(`酸痛 ${soreness}/5，肌肉还在恢复中。`);
+    if (hardLast3.length >= 2) reasons.push("近 3 天高强度训练偏密集。");
+  } else if (energy >= 4 && pain <= 1 && (daysSinceLastWorkout === null || daysSinceLastWorkout >= 2)) {
+    statusKey = "normal";
+    statusLabel = "正常练";
+    template = pickBeginnerTemplate("normal", latestWorkout);
+    summary = "今天状态不错，适合做一次完整的新手训练。";
+    intensityText = "目标 RPE 6-7，不需要冲极限。";
+    reasons.push(`精力 ${energy}/5，主观状态可承受训练。`);
+    reasons.push(daysSinceLastWorkout === null ? "还没有训练记录，适合从全身入门开始。" : `距离上次训练 ${daysSinceLastWorkout} 天，恢复时间足够。`);
+  } else {
+    statusKey = "light";
+    statusLabel = "轻量练";
+    template = pickBeginnerTemplate("light", latestWorkout);
+    summary = "今天建议稳一点，用中低强度训练保持节奏。";
+    intensityText = "目标 RPE 5-6，结束时应该还有余力。";
+    reasons.push("当前状态没有明显红灯，但也不需要硬推强度。");
+  }
+
+  if (water < 1500) reasons.push(`饮水 ${water} ml 偏低，训练前先补一次水。`);
+  if (!recentWorkouts.length) reasons.push("还没有训练历史，系统先推荐新手友好的基础模板。");
+  if (hardWorkouts.length && statusKey !== "recovery") reasons.push(`最近 7 天有 ${hardWorkouts.length} 次高 RPE 训练，今天不建议冲极限。`);
+  if (!reasons.length) reasons.push("睡眠、疼痛和训练间隔没有明显风险信号。");
+
+  return {
+    statusKey,
+    statusLabel,
+    template,
+    summary,
+    reasons: reasons.slice(0, 3),
+    caution,
+    intensityText,
+    durationText: `${template.duration} 分钟`
+  };
+}
+
+function pickBeginnerTemplate(mode, latestWorkout = null) {
+  if (mode === "recovery") return beginnerTemplates.find(item => item.id === "beginner_recovery");
+  if (mode === "light") return beginnerTemplates.find(item => item.id === "beginner_full_body");
+  const latestTitle = `${latestWorkout?.title || ""} ${latestWorkout?.exercises?.map(item => item.name).join(" ") || ""}`;
+  if (/上肢|卧推|肩推|下拉|划船/.test(latestTitle)) {
+    return beginnerTemplates.find(item => item.id === "beginner_lower");
+  }
+  if (/下肢|腿|深蹲|硬拉|臀桥/.test(latestTitle)) {
+    return beginnerTemplates.find(item => item.id === "beginner_upper");
+  }
+  return beginnerTemplates.find(item => item.id === "beginner_full_body");
 }
 
 function renderWorkoutDashboard() {
@@ -1094,6 +1352,12 @@ function getRecent(items, days) {
   return items.filter(item => item.date >= startText);
 }
 
+function daysBetween(fromDate, toDate) {
+  const from = new Date(`${fromDate}T00:00:00`);
+  const to = new Date(`${toDate}T00:00:00`);
+  return Math.max(0, Math.round((to - from) / 86400000));
+}
+
 function getLastDays(count) {
   return Array.from({ length: count }, (_, index) => {
     const date = new Date();
@@ -1216,7 +1480,7 @@ function importData(file) {
       const imported = JSON.parse(reader.result);
       state.dailyLogs = imported.dailyLogs || [];
       state.workouts = imported.workouts || [];
-      state.exercises = imported.exercises?.length ? imported.exercises : defaultExercises;
+      state.exercises = mergeDefaultExercises(imported.exercises);
       state.templates = imported.templates || [];
       state.adviceHistory = imported.adviceHistory || [];
       state.settings = {
@@ -1259,7 +1523,10 @@ function bindActions() {
   $("addWaterBtn").addEventListener("click", addWaterServing);
   $("waterStepBtn").addEventListener("click", changeWaterStep);
   $("dailyDate").addEventListener("change", event => loadDailyIntoForm(event.target.value));
-  $("dailyForm").addEventListener("input", renderTodayDashboard);
+  $("dailyForm").addEventListener("input", () => {
+    renderDailyCoach();
+    renderTodayDashboard();
+  });
   $("workout").addEventListener("input", renderWorkoutDashboard);
   $("workout").addEventListener("change", renderWorkoutDashboard);
   $("saveWorkoutBtn").addEventListener("click", saveWorkoutWithFeedback);
@@ -1298,6 +1565,14 @@ function bindActions() {
     const step = event.target.closest(".starter-step");
     if (!step) return;
     activateTab(step.dataset.targetTab);
+  });
+  $("dailyCoach").addEventListener("click", event => {
+    if (event.target.closest("#startCoachWorkoutBtn")) {
+      startDailyCoachWorkout();
+      return;
+    }
+    const target = event.target.closest("[data-target-tab]");
+    if (target) activateTab(target.dataset.targetTab);
   });
 }
 
