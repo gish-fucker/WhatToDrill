@@ -1103,9 +1103,9 @@ async function checkAiStatus() {
   try {
     const response = await fetch("/api/health");
     const data = await response.json();
-    $("aiStatus").textContent = data.openaiConfigured ? `AI 已连接 · ${data.model}` : "AI 未配置 · 使用本地建议";
+    $("aiStatus").textContent = data.openaiConfigured ? `云端教练已连接 · ${data.model}` : "本地建议模式";
   } catch {
-    $("aiStatus").textContent = "纯静态模式 · 使用本地建议";
+    $("aiStatus").textContent = "离线可用 · 本地建议";
   }
 }
 

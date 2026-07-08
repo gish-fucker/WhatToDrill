@@ -125,6 +125,14 @@ h1 {
   letter-spacing: 0;
 }
 
+.app-tagline {
+  max-width: 560px;
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
 h2 {
   margin-bottom: 0;
   font-size: 24px;
@@ -167,6 +175,7 @@ h3 {
   color: var(--muted);
   padding: 0 14px;
   font-size: 14px;
+  font-weight: 700;
 }
 
 .app-shell {
@@ -1329,6 +1338,10 @@ input[type="checkbox"] {
 
   h1 {
     font-size: 30px;
+  }
+
+  .app-tagline {
+    font-size: 14px;
   }
 
   .form-grid {
