@@ -75,13 +75,19 @@ function setDateDefaults() {
 
 function bindTabs() {
   document.querySelectorAll(".tab").forEach(tab => {
-    tab.addEventListener("click", () => {
-      document.querySelectorAll(".tab").forEach(item => item.classList.remove("active"));
-      document.querySelectorAll(".tab-panel").forEach(panel => panel.classList.remove("active"));
-      tab.classList.add("active");
-      $(tab.dataset.tab).classList.add("active");
-    });
+    tab.addEventListener("click", () => activateTab(tab.dataset.tab));
   });
+}
+
+function activateTab(tabId) {
+  const tab = document.querySelector(`.tab[data-tab="${tabId}"]`);
+  const panel = $(tabId);
+  if (!tab || !panel) return;
+  document.querySelectorAll(".tab").forEach(item => item.classList.remove("active"));
+  document.querySelectorAll(".tab-panel").forEach(item => item.classList.remove("active"));
+  tab.classList.add("active");
+  panel.classList.add("active");
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function bindRanges() {
@@ -98,6 +104,23 @@ function sanitizeWaterStep(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return 500;
   return Math.round(parsed);
+}
+
+async function withButtonBusy(buttonId, busyText, action) {
+  const button = $(buttonId);
+  const previous = button.textContent;
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  button.textContent = busyText;
+  try {
+    return await action();
+  } finally {
+    window.setTimeout(() => {
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+      button.textContent = previous;
+    }, 260);
+  }
 }
 
 function saveDaily(options = {}) {
@@ -303,6 +326,10 @@ function saveWorkout() {
   showToast("训练已保存");
 }
 
+function saveWorkoutWithFeedback() {
+  return withButtonBusy("saveWorkoutBtn", "保存中", () => saveWorkout());
+}
+
 function markExercisesUsed(exercises, date) {
   exercises.forEach(item => {
     const exercise = state.exercises.find(existing => existing.name === item.name);
@@ -504,19 +531,19 @@ function renderFocusStrip() {
         : "生成智能建议";
 
   $("focusStrip").innerHTML = [
-    focusCard("今日饮水", `${water} ml`, water >= 1500 ? "状态稳定" : "偏低"),
-    focusCard("最近训练", workoutText, latestWorkout ? `${countSets(latestWorkout)} 组` : "等待记录"),
-    focusCard("下一步", nextAction, latestAdvice ? "建议已就绪" : "保持节奏")
+    focusCard("今日饮水", `${water} ml`, water >= 1500 ? "状态稳定" : "偏低", "today"),
+    focusCard("最近训练", workoutText, latestWorkout ? `${countSets(latestWorkout)} 组` : "等待记录", "workout"),
+    focusCard("下一步", nextAction, latestAdvice ? "建议已就绪" : "保持节奏", latestAdvice ? "insights" : "today")
   ].join("");
 }
 
-function focusCard(label, value, meta) {
+function focusCard(label, value, meta, targetTab) {
   return `
-    <article class="focus-card">
+    <button class="focus-card" type="button" data-target-tab="${escapeAttr(targetTab)}">
       <span>${escapeHtml(label)}</span>
       <strong>${escapeHtml(value)}</strong>
       <small>${escapeHtml(meta)}</small>
-    </article>
+    </button>
   `;
 }
 
@@ -550,21 +577,23 @@ function buildAdvicePayload() {
 }
 
 async function generateAdvice() {
-  $("adviceOutput").textContent = "正在生成建议...";
-  const payload = buildAdvicePayload();
-  try {
-    const response = await fetch("/api/advice", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "AI 服务不可用");
-    saveAdvice(data.advice, `OpenAI ${data.model}`);
-  } catch (error) {
-    const localAdvice = generateLocalAdvice(payload, error.message);
-    saveAdvice(localAdvice, "本地规则");
-  }
+  return withButtonBusy("generateAdviceBtn", "生成中", async () => {
+    $("adviceOutput").textContent = "正在生成建议...";
+    const payload = buildAdvicePayload();
+    try {
+      const response = await fetch("/api/advice", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "AI 服务不可用");
+      saveAdvice(data.advice, `OpenAI ${data.model}`);
+    } catch (error) {
+      const localAdvice = generateLocalAdvice(payload, error.message);
+      saveAdvice(localAdvice, "本地规则");
+    }
+  });
 }
 
 function saveAdvice(text, source) {
@@ -682,7 +711,7 @@ function bindActions() {
   $("addWaterBtn").addEventListener("click", addWaterServing);
   $("waterStepBtn").addEventListener("click", changeWaterStep);
   $("dailyDate").addEventListener("change", event => loadDailyIntoForm(event.target.value));
-  $("saveWorkoutBtn").addEventListener("click", saveWorkout);
+  $("saveWorkoutBtn").addEventListener("click", saveWorkoutWithFeedback);
   $("saveTemplateBtn").addEventListener("click", saveTemplate);
   $("loadTemplateBtn").addEventListener("click", loadTemplate);
   $("addLibraryExerciseBtn").addEventListener("click", addLibraryExercise);
@@ -708,6 +737,11 @@ function bindActions() {
     state.templates = state.templates.filter(item => item.id !== event.target.dataset.id);
     saveState();
     showToast("模板已删除");
+  });
+  $("focusStrip").addEventListener("click", event => {
+    const card = event.target.closest(".focus-card");
+    if (!card) return;
+    activateTab(card.dataset.targetTab);
   });
 }
 

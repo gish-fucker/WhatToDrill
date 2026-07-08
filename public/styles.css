@@ -60,6 +60,13 @@ button,
   transition: background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
 }
 
+button:disabled,
+button[aria-busy="true"] {
+  cursor: progress;
+  opacity: 0.72;
+  box-shadow: none;
+}
+
 button:hover,
 .file-button:hover {
   background: var(--primary-strong);
@@ -223,6 +230,23 @@ h3 {
   padding: 14px 16px;
   display: grid;
   gap: 4px;
+  color: inherit;
+  text-align: left;
+  min-height: 92px;
+  justify-content: stretch;
+  align-content: center;
+}
+
+.focus-card:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  transform: translateY(-1px);
+}
+
+.focus-card:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 4px var(--focus), var(--shadow-soft);
 }
 
 .focus-card span,
