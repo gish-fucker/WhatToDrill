@@ -1010,6 +1010,102 @@ input[type="checkbox"] {
   white-space: nowrap;
 }
 
+.weekly-review {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  gap: 14px;
+  margin-bottom: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  padding: 18px;
+}
+
+.weekly-review-main {
+  display: grid;
+  align-content: space-between;
+  gap: 16px;
+  min-width: 0;
+}
+
+.weekly-review-main h3 {
+  margin-bottom: 8px;
+  font-size: 22px;
+}
+
+.weekly-review-main p {
+  margin-bottom: 0;
+}
+
+.weekly-review-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.weekly-metric {
+  min-height: 112px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  padding: 13px;
+  display: grid;
+  align-content: space-between;
+  gap: 8px;
+}
+
+.weekly-metric span,
+.weekly-metric small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.weekly-metric strong {
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1.05;
+}
+
+.weekly-actions {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.weekly-action {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  padding: 13px;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.weekly-action span {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius);
+  background: var(--primary-soft);
+  color: var(--primary-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.weekly-action p {
+  margin-bottom: 0;
+  color: #34443c;
+  font-weight: 700;
+  line-height: 1.55;
+}
+
 .summary-card {
   min-height: 126px;
   display: flex;
@@ -1388,6 +1484,7 @@ input[type="checkbox"] {
   .today-dashboard,
   .workout-dashboard,
   .summary-grid,
+  .weekly-review,
   .readiness-panel,
   .insight-layout,
   .library-layout {
@@ -1416,6 +1513,11 @@ input[type="checkbox"] {
 
   .workout-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .weekly-review-grid,
+  .weekly-actions {
+    grid-template-columns: 1fr;
   }
 
   .starter-steps {

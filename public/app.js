@@ -586,6 +586,7 @@ function renderAll() {
   renderFocusStrip();
   renderStarterGuide();
   renderReadiness();
+  renderWeeklyReview();
   renderSummary();
   renderTrends();
   renderHistory();
@@ -593,6 +594,114 @@ function renderAll() {
   renderWorkoutExerciseOptions();
   renderAdvice();
   updateWaterStepUi();
+}
+
+function renderWeeklyReview() {
+  const review = buildWeeklyReview();
+  $("weeklyReview").innerHTML = `
+    <div class="weekly-review-main">
+      <div>
+        <p class="eyebrow">Weekly Review</p>
+        <h3>本周回顾</h3>
+        <p class="muted">${escapeHtml(review.summary)}</p>
+      </div>
+      <span class="type-pill">${escapeHtml(review.coverage)}</span>
+    </div>
+    <div class="weekly-review-grid">
+      ${weeklyMetric("训练", review.metrics.workouts, "本周次数")}
+      ${weeklyMetric("训练量", review.metrics.sets, "总组数")}
+      ${weeklyMetric("睡眠", review.metrics.sleep, "平均值")}
+      ${weeklyMetric("饮水", review.metrics.water, "达标天数")}
+    </div>
+    <div class="weekly-actions">
+      ${review.actions.map((action, index) => `
+        <article class="weekly-action">
+          <span>${String(index + 1).padStart(2, "0")}</span>
+          <p>${escapeHtml(action)}</p>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function weeklyMetric(label, value, note) {
+  return `
+    <article class="weekly-metric">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      <small>${escapeHtml(note)}</small>
+    </article>
+  `;
+}
+
+function buildWeeklyReview() {
+  const recentDaily = getRecent(state.dailyLogs, 7);
+  const recentWorkouts = getRecent(state.workouts, 7);
+  const totalSets = recentWorkouts.reduce((sum, workout) => sum + countSets(workout), 0);
+  const avgSleep = average(recentDaily.map(item => item.sleepHours).filter(value => value !== null));
+  const avgEnergy = average(recentDaily.map(item => item.energy));
+  const avgPain = average(recentDaily.map(item => item.pain));
+  const waterDays = recentDaily.filter(item => (item.waterMl || 0) >= 1800).length;
+  const highRpeCount = recentWorkouts.filter(item => item.sessionRpe >= 8).length;
+  const coverage = recentDaily.length || recentWorkouts.length
+    ? `${recentDaily.length} 天状态 · ${recentWorkouts.length} 次训练`
+    : "等待记录";
+  const summary = buildWeeklySummary(recentDaily, recentWorkouts, avgSleep, avgEnergy, avgPain, highRpeCount);
+
+  return {
+    coverage,
+    summary,
+    metrics: {
+      workouts: `${recentWorkouts.length} 次`,
+      sets: `${totalSets} 组`,
+      sleep: avgSleep === null ? "暂无" : `${avgSleep.toFixed(1)}h`,
+      water: `${waterDays}/${recentDaily.length || 7} 天`
+    },
+    actions: buildWeeklyActions(recentDaily, recentWorkouts, avgSleep, avgEnergy, avgPain, highRpeCount)
+  };
+}
+
+function buildWeeklySummary(dailyLogs, workouts, avgSleep, avgEnergy, avgPain, highRpeCount) {
+  if (!dailyLogs.length && !workouts.length) {
+    return "记录 3 天生活状态和 1 次训练后，这里会生成更准确的周回顾。";
+  }
+  if ((avgPain ?? 0) >= 2) return "本周疼痛信号偏高，下周更适合把恢复和动作质量放在第一位。";
+  if (highRpeCount >= 2) return "本周高强度训练较多，下周建议控制推进幅度，避免连续硬顶。";
+  if (avgSleep !== null && avgSleep < 6.5) return "本周睡眠偏少，训练表现可能受恢复限制，优先把睡眠拉回稳定区间。";
+  if (workouts.length >= 3 && (avgEnergy ?? 0) >= 3.5) return "本周训练节奏和主观状态都不错，下周可以选择一个核心动作小幅推进。";
+  return "本周数据正在形成节奏，继续保持记录，下周建议会更贴近你的真实状态。";
+}
+
+function buildWeeklyActions(dailyLogs, workouts, avgSleep, avgEnergy, avgPain, highRpeCount) {
+  if (!dailyLogs.length && !workouts.length) {
+    return [
+      "先连续记录 3 天睡眠、饮水、精力和疼痛。",
+      "完成一次包含重量、次数和 RPE 的训练记录。",
+      "记录后在洞察页生成第一条建议。"
+    ];
+  }
+
+  const actions = [];
+  if (avgSleep !== null && avgSleep < 6.5) {
+    actions.push("下周先把睡眠稳定到 6.5 小时以上，再考虑加训练量。");
+  } else {
+    actions.push("保持睡眠和饮水记录，让恢复判断继续变准。");
+  }
+  if (highRpeCount >= 2) {
+    actions.push("减少连续高 RPE 训练，至少安排一次技术或恢复日。");
+  } else if (workouts.length) {
+    actions.push("选择一个核心动作小幅加重或多做一组。");
+  } else {
+    actions.push("补一条训练记录，让系统开始识别你的训练负荷。");
+  }
+  if ((avgPain ?? 0) >= 2) {
+    actions.push("疼痛持续时避开不适部位，必要时咨询专业人士。");
+  } else if ((avgEnergy ?? 0) < 3) {
+    actions.push("精力偏低时先维持训练质量，不急着增加总量。");
+  } else {
+    actions.push("训练后写一句备注，记录技术感受或不适部位。");
+  }
+  return actions;
 }
 
 function renderStarterGuide() {
