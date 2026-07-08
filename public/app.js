@@ -508,6 +508,7 @@ function renderAdvice() {
 
 function renderAll() {
   renderFocusStrip();
+  renderReadiness();
   renderSummary();
   renderTrends();
   renderHistory();
@@ -515,6 +516,39 @@ function renderAll() {
   renderWorkoutExerciseOptions();
   renderAdvice();
   updateWaterStepUi();
+}
+
+function renderReadiness() {
+  const readiness = calculateReadiness();
+  const scoreStyle = `--score:${readiness.score}%`;
+  $("readinessPanel").innerHTML = `
+    <div class="readiness-main">
+      <div>
+        <p class="eyebrow">Readiness</p>
+        <h3>今日状态评分</h3>
+        <p class="muted">${escapeHtml(readiness.detail)}</p>
+      </div>
+      <div class="readiness-score" style="${scoreStyle}">
+        <strong>${readiness.score}</strong>
+        <span>${escapeHtml(readiness.label)}</span>
+      </div>
+    </div>
+    <div class="readiness-factors">
+      ${readiness.factors.map(factor => readinessFactor(factor)).join("")}
+    </div>
+  `;
+}
+
+function readinessFactor(factor) {
+  return `
+    <article class="readiness-factor">
+      <div>
+        <span>${escapeHtml(factor.label)}</span>
+        <strong>${escapeHtml(factor.value)}</strong>
+      </div>
+      <small>${escapeHtml(factor.note)}</small>
+    </article>
+  `;
 }
 
 function renderTrends() {
@@ -573,6 +607,7 @@ function renderFocusStrip() {
   const daily = state.dailyLogs.find(item => item.date === today());
   const latestWorkout = state.workouts.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
   const latestAdvice = state.adviceHistory.at(-1);
+  const readiness = calculateReadiness();
   const water = daily?.waterMl ?? 0;
   const workoutText = latestWorkout ? `${latestWorkout.date} · ${latestWorkout.title}` : "暂无训练";
   const nextAction = !daily
@@ -586,6 +621,7 @@ function renderFocusStrip() {
   $("focusStrip").innerHTML = [
     focusCard("今日饮水", `${water} ml`, water >= 1500 ? "状态稳定" : "偏低", "today"),
     focusCard("最近训练", workoutText, latestWorkout ? `${countSets(latestWorkout)} 组` : "等待记录", "workout"),
+    focusCard("状态评分", `${readiness.score}/100`, readiness.label, "insights"),
     focusCard("下一步", nextAction, latestAdvice ? "建议已就绪" : "保持节奏", latestAdvice ? "insights" : "today")
   ].join("");
 }
@@ -603,6 +639,84 @@ function focusCard(label, value, meta, targetTab) {
 function average(values) {
   if (!values.length) return null;
   return values.reduce((sum, item) => sum + Number(item), 0) / values.length;
+}
+
+function calculateReadiness() {
+  const latestDaily = state.dailyLogs
+    .slice()
+    .sort((a, b) => b.date.localeCompare(a.date))[0];
+  const recentWorkouts = getRecent(state.workouts, 7);
+  const recentRpe = average(recentWorkouts.map(item => item.sessionRpe).filter(value => value !== null && value !== undefined));
+  const recentSets = recentWorkouts.reduce((sum, workout) => sum + countSets(workout), 0);
+
+  let score = 70;
+  const sleepHours = latestDaily?.sleepHours ?? null;
+  const energy = latestDaily?.energy ?? null;
+  const soreness = latestDaily?.soreness ?? null;
+  const pain = latestDaily?.pain ?? null;
+
+  if (sleepHours === null) score -= 4;
+  else if (sleepHours >= 7.5) score += 10;
+  else if (sleepHours >= 6.5) score += 4;
+  else if (sleepHours >= 5.5) score -= 8;
+  else score -= 15;
+
+  if (energy === null) score -= 3;
+  else score += (energy - 3) * 6;
+
+  if (soreness !== null) score -= Math.max(0, soreness - 2) * 5;
+  if (pain !== null) score -= pain * 8;
+
+  if (recentRpe !== null && recentRpe >= 8) score -= 6;
+  if (recentSets >= 36) score -= 5;
+  if (recentWorkouts.length === 0) score -= 2;
+
+  score = clamp(Math.round(score), 0, 100);
+  const label = score >= 82 ? "适合推进" : score >= 66 ? "稳态训练" : score >= 48 ? "保守训练" : "优先恢复";
+  const detail = latestDaily
+    ? buildReadinessDetail(score, latestDaily, recentWorkouts)
+    : "还没有生活状态记录，先填一次睡眠、精力和疼痛，评分会立刻更准确。";
+
+  return {
+    score,
+    label,
+    detail,
+    factors: [
+      {
+        label: "睡眠",
+        value: sleepHours === null ? "未填" : `${formatMetric(sleepHours)}h`,
+        note: sleepHours === null ? "缺少恢复基线" : sleepHours >= 7 ? "恢复基础较好" : "建议优先补觉"
+      },
+      {
+        label: "精力",
+        value: energy === null ? "未填" : `${energy}/5`,
+        note: energy === null ? "等待记录" : energy >= 4 ? "可承受训练刺激" : "降低推进幅度"
+      },
+      {
+        label: "疼痛",
+        value: pain === null ? "未填" : `${pain}/5`,
+        note: pain === null ? "等待记录" : pain >= 2 ? "避开不适部位" : "风险较低"
+      },
+      {
+        label: "7日负荷",
+        value: `${recentSets}组`,
+        note: recentRpe === null ? "还缺训练强度" : `平均 RPE ${formatMetric(recentRpe)}`
+      }
+    ]
+  };
+}
+
+function buildReadinessDetail(score, daily, recentWorkouts) {
+  if (score >= 82) return "恢复与主观状态都不错，今天可以选择一个核心动作小幅推进。";
+  if ((daily.pain ?? 0) >= 2) return "疼痛分数偏高，建议减少高强度动作，优先做技术、活动度或恢复。";
+  if ((daily.sleepHours ?? 8) < 6.5) return "睡眠偏少，今天更适合维持训练质量，避免硬顶强度。";
+  if (recentWorkouts.length >= 4) return "最近训练频率较高，今天适合控制总组数，给恢复留空间。";
+  if (score >= 66) return "状态整体稳定，可以按计划训练，但把 RPE 留在可控区间。";
+  return "身体信号不够理想，今天适合保守一点，用记录换取明天更清楚的判断。";
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function getRecent(items, days) {
