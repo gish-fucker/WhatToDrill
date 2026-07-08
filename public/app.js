@@ -236,6 +236,7 @@ function addExerciseCard(exercise = { name: state.exercises[0]?.name || "", sets
   const sets = exercise.sets?.length ? exercise.sets : [{ weight: "", reps: "", rpe: 7, note: "" }];
   sets.forEach(set => addSetRow(card, set));
   updateExerciseIndexes();
+  renderWorkoutDashboard();
 }
 
 function addSetRow(card, set = { weight: "", reps: "", rpe: 7, note: "" }) {
@@ -271,13 +272,16 @@ function bindWorkoutRows() {
     if (!card) return;
     if (target.classList.contains("add-set")) {
       addSetRow(card);
+      renderWorkoutDashboard();
     }
     if (target.classList.contains("remove-set")) {
       target.closest(".set-grid").remove();
+      renderWorkoutDashboard();
     }
     if (target.classList.contains("remove-exercise")) {
       card.remove();
       updateExerciseIndexes();
+      renderWorkoutDashboard();
     }
   });
 }
@@ -349,6 +353,7 @@ function clearWorkoutForm() {
   $("workoutNote").value = "";
   $("exerciseRows").innerHTML = "";
   addExerciseCard();
+  renderWorkoutDashboard();
 }
 
 function saveTemplate() {
@@ -379,6 +384,7 @@ function loadTemplate() {
   $("workoutTitle").value = template.name;
   $("exerciseRows").innerHTML = "";
   template.exercises.forEach(exercise => addExerciseCard(exercise));
+  renderWorkoutDashboard();
   showToast("模板已载入");
 }
 
@@ -509,6 +515,7 @@ function renderAdvice() {
 
 function renderAll() {
   renderTodayDashboard();
+  renderWorkoutDashboard();
   renderFocusStrip();
   renderReadiness();
   renderSummary();
@@ -518,6 +525,75 @@ function renderAll() {
   renderWorkoutExerciseOptions();
   renderAdvice();
   updateWaterStepUi();
+}
+
+function renderWorkoutDashboard() {
+  const dashboard = $("workoutDashboard");
+  if (!dashboard) return;
+
+  const draft = getWorkoutDraft();
+  const setCount = draft.exercises.reduce((sum, exercise) => sum + exercise.sets.length, 0);
+  const totalVolume = draft.exercises.reduce((sum, exercise) => (
+    sum + exercise.sets.reduce((inner, set) => inner + ((set.weight || 0) * (set.reps || 0)), 0)
+  ), 0);
+  const avgRpe = average(draft.exercises.flatMap(exercise => exercise.sets.map(set => set.rpe).filter(value => value !== null)));
+  const intensity = draft.sessionRpe >= 8 ? "高强度" : draft.sessionRpe >= 6 ? "常规训练" : "技术恢复";
+  const action = buildWorkoutAction(draft, setCount, totalVolume, avgRpe);
+
+  dashboard.innerHTML = `
+    <div class="workout-brief">
+      <div>
+        <p class="eyebrow">Session</p>
+        <h3>${escapeHtml(draft.title || "未命名训练")}</h3>
+        <p class="muted">${escapeHtml(action)}</p>
+      </div>
+      <div class="workout-rpe">
+        <strong>${draft.sessionRpe}</strong>
+        <span>RPE</span>
+      </div>
+    </div>
+    <div class="workout-metrics">
+      ${workoutMetric("动作", `${draft.exercises.length}`, "当前结构")}
+      ${workoutMetric("有效组", `${setCount}`, setCount ? "可保存训练" : "等待组数据")}
+      ${workoutMetric("训练量", formatVolume(totalVolume), "重量 x 次数")}
+      ${workoutMetric("强度", intensity, avgRpe === null ? "等待组 RPE" : `组均 RPE ${formatMetric(avgRpe)}`)}
+    </div>
+  `;
+}
+
+function workoutMetric(label, value, note) {
+  return `
+    <article class="workout-metric">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      <small>${escapeHtml(note)}</small>
+    </article>
+  `;
+}
+
+function getWorkoutDraft() {
+  return {
+    date: $("workoutDate").value || today(),
+    title: $("workoutTitle").value.trim(),
+    duration: numberOrNull($("duration").value),
+    sessionRpe: Number($("sessionRpe").value),
+    note: $("workoutNote").value.trim(),
+    exercises: collectWorkoutExercises()
+  };
+}
+
+function buildWorkoutAction(draft, setCount, totalVolume, avgRpe) {
+  if (!draft.exercises.length) return "先添加一个动作，记录重量、次数和主观难度。";
+  if (setCount < 3) return "结构已经开始成形，再补几组数据会更适合保存。";
+  if (draft.sessionRpe >= 8 || (avgRpe !== null && avgRpe >= 8)) return "强度偏高，保存前建议写下状态和不适部位。";
+  if (totalVolume > 0) return "训练结构清晰，完成后保存即可进入趋势分析。";
+  return "动作已选择，补上重量和次数后会生成训练量。";
+}
+
+function formatVolume(value) {
+  if (!value) return "0 kg";
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}t`;
+  return `${Math.round(value)} kg`;
 }
 
 function renderTodayDashboard() {
@@ -967,6 +1043,8 @@ function bindActions() {
   $("waterStepBtn").addEventListener("click", changeWaterStep);
   $("dailyDate").addEventListener("change", event => loadDailyIntoForm(event.target.value));
   $("dailyForm").addEventListener("input", renderTodayDashboard);
+  $("workout").addEventListener("input", renderWorkoutDashboard);
+  $("workout").addEventListener("change", renderWorkoutDashboard);
   $("saveWorkoutBtn").addEventListener("click", saveWorkoutWithFeedback);
   $("saveTemplateBtn").addEventListener("click", saveTemplate);
   $("loadTemplateBtn").addEventListener("click", loadTemplate);
