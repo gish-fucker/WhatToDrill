@@ -3,15 +3,22 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#1f725f">
+    <meta name="description" content="记录生活状态、训练负荷和恢复节奏，让建议真正贴近你。">
     <title>日常与健身记录</title>
-    <link rel="stylesheet" href="./styles.css?v=20260708-product-shell">
+    <link rel="icon" href="./app-icon.svg" type="image/svg+xml">
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="stylesheet" href="./styles.css?v=20260708-brand-mark">
   </head>
   <body>
     <header class="app-header">
-      <div>
-        <p class="eyebrow">Personal log</p>
-        <h1>日常与健身记录</h1>
-        <p class="app-tagline">记录生活状态、训练负荷和恢复节奏，让建议真正贴近你。</p>
+      <div class="brand-block">
+        <img class="brand-mark" src="./app-icon.svg" alt="" aria-hidden="true">
+        <div>
+          <p class="eyebrow">Personal log</p>
+          <h1>日常与健身记录</h1>
+          <p class="app-tagline">记录生活状态、训练负荷和恢复节奏，让建议真正贴近你。</p>
+        </div>
       </div>
       <div class="header-actions">
         <span id="aiStatus" class="status-pill">建议模式检测中</span>
@@ -271,6 +278,6 @@
     </main>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=20260708-product-shell"></script>
+    <script src="./app.js?v=20260708-brand-mark"></script>
   </body>
 </html>

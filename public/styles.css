@@ -111,6 +111,26 @@ button:active,
   gap: 20px;
 }
 
+.brand-block {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  min-width: 0;
+}
+
+.brand-block > div {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.brand-mark {
+  width: 52px;
+  height: 52px;
+  flex: 0 0 52px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-soft);
+}
+
 h1,
 h2,
 h3,
@@ -123,6 +143,7 @@ h1 {
   font-size: clamp(32px, 3.2vw, 46px);
   line-height: 1.04;
   letter-spacing: 0;
+  overflow-wrap: anywhere;
 }
 
 .app-tagline {
@@ -131,6 +152,7 @@ h1 {
   color: var(--muted);
   font-size: 15px;
   line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 
 h2 {
@@ -1337,11 +1359,22 @@ input[type="checkbox"] {
   }
 
   h1 {
-    font-size: 30px;
+    font-size: 28px;
+  }
+
+  .brand-block {
+    gap: 10px;
+  }
+
+  .brand-mark {
+    width: 42px;
+    height: 42px;
+    flex-basis: 42px;
   }
 
   .app-tagline {
     font-size: 14px;
+    max-width: 280px;
   }
 
   .form-grid {
