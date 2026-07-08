@@ -174,6 +174,7 @@ function loadDailyIntoForm(date) {
   $("habitEarlySleep").checked = Boolean(log?.habits?.earlySleep);
   $("dailyNote").value = log?.note ?? "";
   ["mood", "energy", "soreness", "pain"].forEach(id => $(`${id}Value`).textContent = $(id).value);
+  renderTodayDashboard();
 }
 
 function addWaterServing() {
@@ -507,6 +508,7 @@ function renderAdvice() {
 }
 
 function renderAll() {
+  renderTodayDashboard();
   renderFocusStrip();
   renderReadiness();
   renderSummary();
@@ -516,6 +518,84 @@ function renderAll() {
   renderWorkoutExerciseOptions();
   renderAdvice();
   updateWaterStepUi();
+}
+
+function renderTodayDashboard() {
+  const dashboard = $("todayDashboard");
+  if (!dashboard) return;
+
+  const daily = getDailyDraft();
+  const readiness = calculateReadiness(daily);
+  const latestWorkout = state.workouts.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
+  const water = daily.waterMl ?? 0;
+  const waterTarget = 2000;
+  const waterRatio = clamp(Math.round(water / waterTarget * 100), 0, 100);
+  const recoveryLabel = daily.sleepHours === null
+    ? "等待睡眠记录"
+    : daily.sleepHours >= 7
+      ? "恢复基础不错"
+      : "恢复需要补一点";
+  const action = buildTodayAction(readiness, daily, latestWorkout);
+
+  dashboard.innerHTML = `
+    <div class="today-brief">
+      <div>
+        <p class="eyebrow">Today</p>
+        <h3>${escapeHtml(readiness.label)}</h3>
+        <p class="muted">${escapeHtml(action)}</p>
+      </div>
+      <div class="today-score" style="--score:${readiness.score}%">
+        <strong>${readiness.score}</strong>
+        <span>状态</span>
+      </div>
+    </div>
+    <div class="today-metrics">
+      ${todayMetric("饮水", `${water} ml`, `${waterRatio}% 目标`, waterRatio)}
+      ${todayMetric("睡眠", daily.sleepHours === null ? "未填" : `${formatMetric(daily.sleepHours)}h`, recoveryLabel)}
+      ${todayMetric("精力", `${daily.energy}/5`, daily.energy >= 4 ? "可推进" : "先稳住")}
+      ${todayMetric("训练", latestWorkout ? latestWorkout.title : "暂无", latestWorkout ? `${latestWorkout.date} · ${countSets(latestWorkout)} 组` : "记录后生成负荷")}
+    </div>
+  `;
+}
+
+function todayMetric(label, value, note, progress = null) {
+  return `
+    <article class="today-metric">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      <small>${escapeHtml(note)}</small>
+      ${progress === null ? "" : `<div class="mini-progress" aria-hidden="true"><span style="--progress:${progress}%"></span></div>`}
+    </article>
+  `;
+}
+
+function getDailyDraft() {
+  return {
+    id: `daily_${$("dailyDate").value || today()}`,
+    date: $("dailyDate").value || today(),
+    sleepHours: numberOrNull($("sleepHours").value),
+    waterMl: numberOrNull($("waterMl").value),
+    mood: Number($("mood").value),
+    energy: Number($("energy").value),
+    soreness: Number($("soreness").value),
+    pain: Number($("pain").value),
+    habits: {
+      workout: $("habitWorkout").checked,
+      stretch: $("habitStretch").checked,
+      study: $("habitStudy").checked,
+      earlySleep: $("habitEarlySleep").checked
+    },
+    note: $("dailyNote").value.trim()
+  };
+}
+
+function buildTodayAction(readiness, daily, latestWorkout) {
+  if ((daily.pain ?? 0) >= 2) return "今天先避开不适部位，把训练目标放在技术质量和恢复上。";
+  if ((daily.sleepHours ?? 8) < 6.5) return "睡眠偏少，适合降低强度，用一次稳定记录保住节奏。";
+  if ((daily.waterMl ?? 0) < 1500) return "饮水还偏低，先补一次水，再决定今天的训练强度。";
+  if (readiness.score >= 82) return "状态很好，可以选择一个核心动作小幅加重或多做一组。";
+  if (latestWorkout) return "维持计划即可，训练后补充备注会让建议更准确。";
+  return "先记录一次训练或生活状态，系统会开始形成你的个人节奏。";
 }
 
 function renderReadiness() {
@@ -641,8 +721,8 @@ function average(values) {
   return values.reduce((sum, item) => sum + Number(item), 0) / values.length;
 }
 
-function calculateReadiness() {
-  const latestDaily = state.dailyLogs
+function calculateReadiness(dailyOverride = null) {
+  const latestDaily = dailyOverride || state.dailyLogs
     .slice()
     .sort((a, b) => b.date.localeCompare(a.date))[0];
   const recentWorkouts = getRecent(state.workouts, 7);
@@ -886,6 +966,7 @@ function bindActions() {
   $("addWaterBtn").addEventListener("click", addWaterServing);
   $("waterStepBtn").addEventListener("click", changeWaterStep);
   $("dailyDate").addEventListener("change", event => loadDailyIntoForm(event.target.value));
+  $("dailyForm").addEventListener("input", renderTodayDashboard);
   $("saveWorkoutBtn").addEventListener("click", saveWorkoutWithFeedback);
   $("saveTemplateBtn").addEventListener("click", saveTemplate);
   $("loadTemplateBtn").addEventListener("click", loadTemplate);
