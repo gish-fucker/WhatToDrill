@@ -103,7 +103,10 @@ async function handleStatic(req, res) {
 
   try {
     const file = await readFile(filePath);
-    res.writeHead(200, { "content-type": mimeTypes[extname(filePath)] || "application/octet-stream" });
+    res.writeHead(200, {
+      "content-type": mimeTypes[extname(filePath)] || "application/octet-stream",
+      "cache-control": "no-store"
+    });
     res.end(file);
   } catch {
     res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
@@ -137,4 +140,3 @@ const server = http.createServer(async (req, res) => {
 server.listen(port, () => {
   console.log(`Habit fitness app running at http://localhost:${port}`);
 });
-

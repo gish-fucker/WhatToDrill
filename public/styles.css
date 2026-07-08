@@ -295,14 +295,18 @@ input[type="range"] {
   padding: 0;
 }
 
-.range-field {
+.range-field,
+label:has(> input[type="range"]) {
+  display: grid;
   grid-template-columns: minmax(86px, auto) minmax(120px, 1fr) 28px;
   align-items: center;
   gap: 10px;
 }
 
-.range-field input[type="range"] {
+.range-field input[type="range"],
+label:has(> input[type="range"]) input[type="range"] {
   min-height: 24px;
+  width: 100%;
 }
 
 .range-label {
@@ -507,6 +511,10 @@ input[type="checkbox"] {
   .range-field {
     grid-template-columns: minmax(98px, auto) minmax(120px, 1fr) 28px;
   }
+
+  label:has(> input[type="range"]) {
+    grid-template-columns: minmax(98px, auto) minmax(120px, 1fr) 28px;
+  }
 }
 
 @media (max-width: 560px) {
@@ -526,6 +534,11 @@ input[type="checkbox"] {
   }
 
   .range-field {
+    grid-template-columns: minmax(74px, auto) minmax(0, 1fr) 26px;
+    gap: 8px;
+  }
+
+  label:has(> input[type="range"]) {
     grid-template-columns: minmax(74px, auto) minmax(0, 1fr) 26px;
     gap: 8px;
   }
