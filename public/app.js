@@ -584,6 +584,7 @@ function renderAll() {
   renderTodayDashboard();
   renderWorkoutDashboard();
   renderFocusStrip();
+  renderStarterGuide();
   renderReadiness();
   renderSummary();
   renderTrends();
@@ -592,6 +593,41 @@ function renderAll() {
   renderWorkoutExerciseOptions();
   renderAdvice();
   updateWaterStepUi();
+}
+
+function renderStarterGuide() {
+  const guide = $("starterGuide");
+  if (!guide) return;
+  const hasStarted = state.dailyLogs.length || state.workouts.length || state.adviceHistory.length;
+  if (hasStarted) {
+    guide.hidden = true;
+    guide.innerHTML = "";
+    return;
+  }
+
+  guide.hidden = false;
+  guide.innerHTML = `
+    <div class="starter-copy">
+      <p class="eyebrow">Start</p>
+      <h2>用三条记录建立你的个人节奏</h2>
+      <p class="muted">先记录今天的状态，再补一组训练数据，系统就能开始把生活、训练和恢复连起来。</p>
+    </div>
+    <div class="starter-steps">
+      ${starterStep("01", "记录今日状态", "睡眠、饮水、精力和疼痛是所有建议的基础。", "today")}
+      ${starterStep("02", "添加首次训练", "哪怕只有一个动作，也能开始形成训练负荷。", "workout")}
+      ${starterStep("03", "生成第一条建议", "有了记录后，洞察页会整理出下一步行动。", "insights")}
+    </div>
+  `;
+}
+
+function starterStep(index, title, text, targetTab) {
+  return `
+    <button class="starter-step" type="button" data-target-tab="${escapeAttr(targetTab)}">
+      <span>${escapeHtml(index)}</span>
+      <strong>${escapeHtml(title)}</strong>
+      <small>${escapeHtml(text)}</small>
+    </button>
+  `;
 }
 
 function renderWorkoutDashboard() {
@@ -1148,6 +1184,11 @@ function bindActions() {
     const card = event.target.closest(".focus-card");
     if (!card) return;
     activateTab(card.dataset.targetTab);
+  });
+  $("starterGuide").addEventListener("click", event => {
+    const step = event.target.closest(".starter-step");
+    if (!step) return;
+    activateTab(step.dataset.targetTab);
   });
 }
 

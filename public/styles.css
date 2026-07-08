@@ -293,6 +293,83 @@ h3 {
   line-height: 1.25;
 }
 
+.starter-guide {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.75fr) minmax(0, 1.25fr);
+  gap: 16px;
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+  padding: 18px;
+}
+
+.starter-guide[hidden] {
+  display: none;
+}
+
+.starter-copy h2 {
+  margin-bottom: 8px;
+}
+
+.starter-copy p:last-child {
+  margin-bottom: 0;
+}
+
+.starter-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.starter-step {
+  min-height: 128px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: inherit;
+  padding: 14px;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  text-align: left;
+  white-space: normal;
+  box-shadow: none;
+}
+
+.starter-step:hover {
+  border-color: var(--line-strong);
+  background: #fff;
+  box-shadow: var(--shadow-soft);
+}
+
+.starter-step span {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius);
+  background: var(--primary-soft);
+  color: var(--primary-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.starter-step strong {
+  color: var(--text);
+  font-size: 17px;
+  line-height: 1.2;
+}
+
+.starter-step small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.55;
+}
+
 .section-heading {
   display: flex;
   align-items: flex-end;
@@ -1307,6 +1384,7 @@ input[type="checkbox"] {
 
 @media (max-width: 1040px) {
   .form-grid,
+  .starter-guide,
   .today-dashboard,
   .workout-dashboard,
   .summary-grid,
@@ -1338,6 +1416,10 @@ input[type="checkbox"] {
 
   .workout-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .starter-steps {
+    grid-template-columns: 1fr;
   }
 
   .check-group {
