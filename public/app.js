@@ -90,7 +90,10 @@ function beginnerSets(count, weight, reps, rpe, note) {
 }
 
 function today() {
-  const date = new Date();
+  return formatLocalDate(new Date());
+}
+
+function formatLocalDate(date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
@@ -1584,7 +1587,7 @@ function clamp(value, min, max) {
 function getRecent(items, days) {
   const start = new Date();
   start.setDate(start.getDate() - days + 1);
-  const startText = start.toISOString().slice(0, 10);
+  const startText = formatLocalDate(start);
   return items.filter(item => item.date >= startText);
 }
 
@@ -1598,7 +1601,7 @@ function getLastDays(count) {
   return Array.from({ length: count }, (_, index) => {
     const date = new Date();
     date.setDate(date.getDate() - (count - index - 1));
-    return date.toISOString().slice(0, 10);
+    return formatLocalDate(date);
   });
 }
 

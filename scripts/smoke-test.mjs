@@ -170,6 +170,8 @@ async function run() {
     const todayCheck = await evaluate(cdp, `(() => ({
       localToday: today(),
       inputDate: document.querySelector("#dailyDate").value,
+      lastTrendDate: getLastDays(7).at(-1),
+      recentIncludesToday: getRecent([{ date: today() }], 7).length,
       coachStatus: document.querySelector(".coach-status")?.textContent,
       coachTitle: document.querySelector(".coach-decision strong")?.textContent,
       onboardingVisible: !document.querySelector("#starterGuide").hidden,
@@ -177,6 +179,8 @@ async function run() {
       overflow: document.documentElement.scrollWidth > innerWidth
     }))()`);
     assert(todayCheck.localToday === todayCheck.inputDate, "Today input should use local browser date.");
+    assert(todayCheck.lastTrendDate === todayCheck.localToday, "Trend windows should end on local today.");
+    assert(todayCheck.recentIncludesToday === 1, "Recent filters should include local today.");
     assert(todayCheck.coachStatus === "先建立记录", "Empty daily coach should show starter status.");
     assert(todayCheck.coachTitle === "全身入门", "Empty daily coach should recommend full-body beginner template.");
     assert(todayCheck.onboardingVisible, "Empty first-run state should show onboarding.");
