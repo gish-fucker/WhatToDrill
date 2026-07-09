@@ -78,6 +78,7 @@ const beginnerTemplates = [
 ];
 
 const state = loadState();
+let lastWorkoutSummary = null;
 
 function beginnerSets(count, weight, reps, rpe, note) {
   return Array.from({ length: count }, () => ({ weight, reps, rpe, note }));
@@ -321,6 +322,7 @@ function addExerciseCard(exercise = { name: state.exercises[0]?.name || "", sets
   const sets = exercise.sets?.length ? exercise.sets : [{ weight: "", reps: "", rpe: 7, note: "" }];
   sets.forEach(set => addSetRow(card, set));
   updateExerciseIndexes();
+  renderWorkoutExecution();
   renderWorkoutDashboard();
 }
 
@@ -357,15 +359,18 @@ function bindWorkoutRows() {
     if (!card) return;
     if (target.classList.contains("add-set")) {
       addSetRow(card);
+      renderWorkoutExecution();
       renderWorkoutDashboard();
     }
     if (target.classList.contains("remove-set")) {
       target.closest(".set-grid").remove();
+      renderWorkoutExecution();
       renderWorkoutDashboard();
     }
     if (target.classList.contains("remove-exercise")) {
       card.remove();
       updateExerciseIndexes();
+      renderWorkoutExecution();
       renderWorkoutDashboard();
     }
   });
@@ -411,8 +416,10 @@ function saveWorkout() {
 
   state.workouts.push(workout);
   markExercisesUsed(exercises, workout.date);
+  lastWorkoutSummary = buildSavedWorkoutSummary(workout);
   saveState();
   clearWorkoutForm();
+  renderWorkoutExecution();
   showToast("训练已保存");
 }
 
@@ -438,7 +445,24 @@ function clearWorkoutForm() {
   $("workoutNote").value = "";
   $("exerciseRows").innerHTML = "";
   addExerciseCard();
+  renderWorkoutExecution();
   renderWorkoutDashboard();
+}
+
+function buildSavedWorkoutSummary(workout) {
+  const sets = countSets(workout);
+  const suggestion = workout.sessionRpe >= 8
+    ? "今天强度偏高，下次先维持重量和组数。"
+    : workout.sessionRpe <= 4
+      ? "今天强度很轻松，下次可以小幅增加一组或一点重量。"
+      : "节奏不错，下次先保持动作质量，再考虑小幅推进。";
+  return {
+    title: workout.title,
+    exercises: workout.exercises.length,
+    sets,
+    sessionRpe: workout.sessionRpe,
+    suggestion
+  };
 }
 
 function saveTemplate() {
@@ -481,6 +505,8 @@ function fillWorkoutFromTemplate(template, title) {
     : "";
   $("exerciseRows").innerHTML = "";
   template.exercises.forEach(exercise => addExerciseCard(cloneExercise(exercise)));
+  lastWorkoutSummary = null;
+  renderWorkoutExecution();
   renderWorkoutDashboard();
 }
 
@@ -704,6 +730,7 @@ function parseAdviceSections(text) {
 function renderAll() {
   renderDailyCoach();
   renderTodayDashboard();
+  renderWorkoutExecution();
   renderWorkoutDashboard();
   renderFocusStrip();
   renderStarterGuide();
@@ -716,6 +743,112 @@ function renderAll() {
   renderWorkoutExerciseOptions();
   renderAdvice();
   updateWaterStepUi();
+}
+
+function renderWorkoutExecution() {
+  const panel = $("workoutExecution");
+  if (!panel) return;
+  const draft = getWorkoutPlanDraft();
+  const isCoachSession = draft.title.startsWith("今日建议 -");
+  const isRecovery = /恢复|拉伸/.test(draft.title) || /恢复|居家/.test(draft.note);
+  const intent = isRecovery ? "恢复训练" : isCoachSession ? "今日建议" : draft.exercises.length ? "自由记录" : "等待开始";
+  const progress = buildWorkoutProgress(draft);
+  const guidance = buildExecutionGuidance(draft, progress, isRecovery);
+  const summary = lastWorkoutSummary ? savedWorkoutSummary(lastWorkoutSummary) : "";
+
+  panel.innerHTML = `
+    <div class="execution-main">
+      <div>
+        <p class="eyebrow">Workout Plan</p>
+        <h3>${escapeHtml(draft.title || "本次训练计划")}</h3>
+        <p class="muted">${escapeHtml(guidance)}</p>
+      </div>
+      <span class="type-pill">${escapeHtml(intent)}</span>
+    </div>
+    <div class="execution-progress">
+      <div class="progress-ring" style="--progress:${progress.percent}%">
+        <strong>${progress.percent}</strong>
+        <span>完成</span>
+      </div>
+      <div class="execution-stats">
+        ${executionStat("动作", `${draft.exercises.length}`, "计划结构")}
+        ${executionStat("组数", `${progress.completedSets}/${progress.plannedSets}`, "已记录/计划")}
+        ${executionStat("强度", progress.avgRpe === null ? `RPE ${draft.sessionRpe}` : `RPE ${formatMetric(progress.avgRpe)}`, "组均或整体")}
+        ${executionStat("时长", draft.duration === null ? "未填" : `${draft.duration} 分钟`, "预计/实际")}
+      </div>
+    </div>
+    <div class="execution-actions">
+      <button id="finishWorkoutBtn" type="button">完成并保存</button>
+      <button id="loadCoachWorkoutBtn" class="ghost-button" type="button">载入今日建议</button>
+      <button id="executionAddExerciseBtn" class="ghost-button" type="button">添加动作</button>
+    </div>
+    ${summary}
+  `;
+}
+
+function executionStat(label, value, note) {
+  return `
+    <article class="execution-stat">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      <small>${escapeHtml(note)}</small>
+    </article>
+  `;
+}
+
+function savedWorkoutSummary(summary) {
+  return `
+    <div class="execution-summary">
+      <strong>刚刚保存：${escapeHtml(summary.title)}</strong>
+      <span>${summary.exercises} 个动作 · ${summary.sets} 组 · RPE ${summary.sessionRpe}/10</span>
+      <p>${escapeHtml(summary.suggestion)}</p>
+    </div>
+  `;
+}
+
+function getWorkoutPlanDraft() {
+  const exercises = Array.from(document.querySelectorAll(".exercise-card")).map(card => {
+    const name = card.querySelector(".exercise-name").value;
+    const rows = Array.from(card.querySelectorAll(".set-grid")).map(row => ({
+      weight: numberOrNull(row.querySelector(".set-weight").value),
+      reps: numberOrNull(row.querySelector(".set-reps").value),
+      rpe: numberOrNull(row.querySelector(".set-rpe").value),
+      note: row.querySelector(".set-note").value.trim()
+    }));
+    return { name, rows };
+  }).filter(exercise => exercise.name);
+
+  return {
+    date: $("workoutDate").value || today(),
+    title: $("workoutTitle").value.trim(),
+    duration: numberOrNull($("duration").value),
+    sessionRpe: Number($("sessionRpe").value),
+    note: $("workoutNote").value.trim(),
+    exercises
+  };
+}
+
+function buildWorkoutProgress(draft) {
+  const rows = draft.exercises.flatMap(exercise => exercise.rows);
+  const plannedSets = rows.length;
+  const completedSets = rows.filter(set => set.weight !== null || isActualSetNote(set.note)).length;
+  const avgRpe = average(rows.map(set => set.rpe).filter(value => value !== null));
+  const percent = plannedSets ? clamp(Math.round(completedSets / plannedSets * 100), 0, 100) : 0;
+  return { plannedSets, completedSets, avgRpe, percent };
+}
+
+function isActualSetNote(note) {
+  if (!note) return false;
+  return /完成|实际|做完|已做|感觉|疼|痛|轻松|困难|失败|不适/.test(note);
+}
+
+function buildExecutionGuidance(draft, progress, isRecovery) {
+  if (!draft.exercises.length || progress.plannedSets === 0) return "先载入今日建议或添加第一个动作。";
+  if (isRecovery) return "保持轻松，结束时应该感觉更松，不是更累。";
+  if (draft.sessionRpe >= 8 || (progress.avgRpe !== null && progress.avgRpe >= 8)) return "强度偏高，后面组数先别加量，优先动作稳定。";
+  if (progress.completedSets === 0) return "先完成每个动作的第一组，重量可以保守。";
+  if (progress.percent >= 80) return "训练结构已经完整，可以保存并写一句备注。";
+  return "继续按计划记录，目标是稳稳完成，不需要冲极限。";
 }
 
 function renderWeeklyReview() {
@@ -1527,8 +1660,8 @@ function bindActions() {
     renderDailyCoach();
     renderTodayDashboard();
   });
-  $("workout").addEventListener("input", renderWorkoutDashboard);
-  $("workout").addEventListener("change", renderWorkoutDashboard);
+  $("workout").addEventListener("input", renderWorkoutSurfaces);
+  $("workout").addEventListener("change", renderWorkoutSurfaces);
   $("saveWorkoutBtn").addEventListener("click", saveWorkoutWithFeedback);
   $("saveTemplateBtn").addEventListener("click", saveTemplate);
   $("loadTemplateBtn").addEventListener("click", loadTemplate);
@@ -1574,6 +1707,24 @@ function bindActions() {
     const target = event.target.closest("[data-target-tab]");
     if (target) activateTab(target.dataset.targetTab);
   });
+  $("workoutExecution").addEventListener("click", event => {
+    if (event.target.closest("#finishWorkoutBtn")) {
+      saveWorkoutWithFeedback();
+      return;
+    }
+    if (event.target.closest("#loadCoachWorkoutBtn")) {
+      startDailyCoachWorkout();
+      return;
+    }
+    if (event.target.closest("#executionAddExerciseBtn")) {
+      addExerciseCard();
+    }
+  });
+}
+
+function renderWorkoutSurfaces() {
+  renderWorkoutExecution();
+  renderWorkoutDashboard();
 }
 
 function init() {

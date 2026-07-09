@@ -829,6 +829,128 @@ input[type="checkbox"] {
   grid-template-columns: 1fr 1.25fr 0.9fr 1.2fr;
 }
 
+.workout-execution {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.9fr) minmax(0, 1.35fr) minmax(148px, 0.42fr);
+  gap: 14px;
+  margin-bottom: 16px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, #ffffff 0%, #f7faf7 58%, #f4f0ea 100%);
+  box-shadow: var(--shadow);
+}
+
+.execution-main {
+  display: grid;
+  align-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.execution-main h3 {
+  margin-bottom: 8px;
+  font-size: 25px;
+  overflow-wrap: anywhere;
+}
+
+.execution-main p {
+  margin-bottom: 0;
+}
+
+.execution-progress {
+  display: grid;
+  grid-template-columns: 108px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.progress-ring {
+  width: 108px;
+  height: 108px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at center, var(--surface) 0 58%, transparent 59%),
+    conic-gradient(var(--primary) var(--progress), var(--line) 0);
+  display: grid;
+  place-items: center;
+  align-content: center;
+  color: var(--primary-strong);
+}
+
+.progress-ring strong {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.progress-ring span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.execution-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.execution-stat {
+  min-width: 0;
+  min-height: 92px;
+  display: grid;
+  align-content: space-between;
+  gap: 6px;
+  border: 1px solid rgba(220, 227, 222, 0.8);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.74);
+  padding: 12px;
+}
+
+.execution-stat span,
+.execution-stat small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.execution-stat strong {
+  color: var(--text);
+  font-size: 19px;
+  line-height: 1.08;
+  overflow-wrap: anywhere;
+}
+
+.execution-actions {
+  display: grid;
+  align-content: center;
+  gap: 10px;
+}
+
+.execution-summary {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 4px;
+  border: 1px solid #cbded7;
+  border-radius: var(--radius);
+  background: rgba(227, 240, 236, 0.72);
+  padding: 12px 14px;
+}
+
+.execution-summary strong {
+  color: var(--primary-strong);
+}
+
+.execution-summary span,
+.execution-summary p {
+  color: var(--muted);
+  margin: 0;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .workout-dashboard {
   display: grid;
   grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.35fr);
@@ -1600,6 +1722,7 @@ input[type="checkbox"] {
   .form-grid,
   .starter-guide,
   .daily-coach,
+  .workout-execution,
   .today-dashboard,
   .workout-dashboard,
   .summary-grid,
@@ -1635,6 +1758,11 @@ input[type="checkbox"] {
   }
 
   .workout-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .execution-progress,
+  .execution-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1690,6 +1818,8 @@ input[type="checkbox"] {
 
   .assessment-row,
   .daily-coach-body,
+  .execution-progress,
+  .execution-stats,
   .today-brief,
   .today-metrics,
   .workout-brief,
@@ -1748,9 +1878,15 @@ input[type="checkbox"] {
 
   .today-brief,
   .today-metric,
+  .workout-execution,
+  .execution-stat,
   .workout-brief,
   .workout-metric {
     min-height: auto;
+  }
+
+  .execution-actions button {
+    width: 100%;
   }
 
   .focus-strip {
