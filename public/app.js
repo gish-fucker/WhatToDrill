@@ -79,6 +79,11 @@ const beginnerTemplates = [
 
 const state = loadState();
 let lastWorkoutSummary = null;
+const onboardingTouched = {
+  energy: false,
+  soreness: false,
+  pain: false
+};
 
 function beginnerSets(count, weight, reps, rpe, note) {
   return Array.from({ length: count }, () => ({ weight, reps, rpe, note }));
@@ -181,6 +186,10 @@ function bindRanges() {
     const output = $(`${id}Value`);
     input.addEventListener("input", () => {
       output.textContent = input.value;
+      if (Object.prototype.hasOwnProperty.call(onboardingTouched, id)) {
+        onboardingTouched[id] = true;
+        renderStarterGuide();
+      }
     });
   });
 }
@@ -235,6 +244,9 @@ function saveDaily(options = {}) {
   } else {
     state.dailyLogs.push(log);
   }
+  onboardingTouched.energy = true;
+  onboardingTouched.soreness = true;
+  onboardingTouched.pain = true;
   saveState();
   if (!options.silent) showToast("今天的记录已保存");
 }
@@ -784,6 +796,25 @@ function renderAll() {
   updateWaterStepUi();
 }
 
+function startOnboardingRecord() {
+  const form = $("dailyForm");
+  form.scrollIntoView({ behavior: "smooth", block: "start" });
+  highlightOnboardingFields();
+}
+
+function viewStarterCoach() {
+  $("dailyCoach").scrollIntoView({ behavior: "smooth", block: "start" });
+  showToast("先看 starter 建议，保存状态后会更贴近你");
+}
+
+function highlightOnboardingFields() {
+  ["sleepHours", "energy", "soreness", "pain"].forEach(id => {
+    const field = $(id).closest("label") || $(id);
+    field.classList.add("onboarding-highlight");
+    window.setTimeout(() => field.classList.remove("onboarding-highlight"), 1800);
+  });
+}
+
 function renderWorkoutExecution() {
   const panel = $("workoutExecution");
   if (!panel) return;
@@ -997,7 +1028,7 @@ function buildWeeklyActions(dailyLogs, workouts, avgSleep, avgEnergy, avgPain, h
 function renderStarterGuide() {
   const guide = $("starterGuide");
   if (!guide) return;
-  const hasStarted = state.dailyLogs.length || state.workouts.length || state.adviceHistory.length;
+  const hasStarted = state.dailyLogs.length || state.workouts.length;
   if (hasStarted) {
     guide.hidden = true;
     guide.innerHTML = "";
@@ -1005,27 +1036,64 @@ function renderStarterGuide() {
   }
 
   guide.hidden = false;
+  const steps = buildOnboardingSteps();
   guide.innerHTML = `
-    <div class="starter-copy">
+    <div class="starter-copy onboarding-copy">
       <p class="eyebrow">Start</p>
-      <h2>用三条记录建立你的个人节奏</h2>
-      <p class="muted">先记录今天的状态，再补一组训练数据，系统就能开始把生活、训练和恢复连起来。</p>
+      <h2>先记录 4 个状态，我会给你今天怎么练的建议。</h2>
+      <p class="muted">不知道怎么填也没关系，先按现在的感觉。疼痛高时，我会优先建议恢复。</p>
+      <div class="onboarding-actions">
+        <button id="startOnboardingRecordBtn" type="button">开始 60 秒记录</button>
+        <button id="viewStarterCoachBtn" class="ghost-button" type="button">直接看今日建议</button>
+      </div>
+      <p class="privacy-note">数据先保存在本机，可随时导出。</p>
     </div>
-    <div class="starter-steps">
-      ${starterStep("01", "记录今日状态", "睡眠、饮水、精力和疼痛是所有建议的基础。", "today")}
-      ${starterStep("02", "添加首次训练", "哪怕只有一个动作，也能开始形成训练负荷。", "workout")}
-      ${starterStep("03", "生成第一条建议", "有了记录后，洞察页会整理出下一步行动。", "insights")}
+    <div class="onboarding-checklist">
+      ${steps.map(onboardingStep).join("")}
     </div>
   `;
 }
 
-function starterStep(index, title, text, targetTab) {
+function buildOnboardingSteps() {
+  const daily = getDailyDraft();
+  const savedToday = state.dailyLogs.some(item => item.date === daily.date);
+  return [
+    {
+      key: "sleep",
+      title: "睡眠",
+      text: daily.sleepHours === null ? "填昨晚大概睡了多久" : `${formatMetric(daily.sleepHours)} 小时`,
+      done: daily.sleepHours !== null
+    },
+    {
+      key: "energy",
+      title: "精力",
+      text: `现在是 ${daily.energy}/5`,
+      done: savedToday || onboardingTouched.energy
+    },
+    {
+      key: "soreness",
+      title: "酸痛",
+      text: `现在是 ${daily.soreness}/5`,
+      done: savedToday || onboardingTouched.soreness
+    },
+    {
+      key: "pain",
+      title: "疼痛",
+      text: `现在是 ${daily.pain}/5`,
+      done: savedToday || onboardingTouched.pain
+    }
+  ];
+}
+
+function onboardingStep(step) {
   return `
-    <button class="starter-step" type="button" data-target-tab="${escapeAttr(targetTab)}">
-      <span>${escapeHtml(index)}</span>
-      <strong>${escapeHtml(title)}</strong>
-      <small>${escapeHtml(text)}</small>
-    </button>
+    <div class="onboarding-step ${step.done ? "done" : ""}">
+      <span>${step.done ? "✓" : ""}</span>
+      <div>
+        <strong>${escapeHtml(step.title)}</strong>
+        <small>${escapeHtml(step.text)}</small>
+      </div>
+    </div>
   `;
 }
 
@@ -1730,9 +1798,13 @@ function bindActions() {
     activateTab(card.dataset.targetTab);
   });
   $("starterGuide").addEventListener("click", event => {
-    const step = event.target.closest(".starter-step");
-    if (!step) return;
-    activateTab(step.dataset.targetTab);
+    if (event.target.closest("#startOnboardingRecordBtn")) {
+      startOnboardingRecord();
+      return;
+    }
+    if (event.target.closest("#viewStarterCoachBtn")) {
+      viewStarterCoach();
+    }
   });
   $("dailyCoach").addEventListener("click", event => {
     if (event.target.closest("#startCoachWorkoutBtn")) {

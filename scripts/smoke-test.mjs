@@ -172,12 +172,41 @@ async function run() {
       inputDate: document.querySelector("#dailyDate").value,
       coachStatus: document.querySelector(".coach-status")?.textContent,
       coachTitle: document.querySelector(".coach-decision strong")?.textContent,
+      onboardingVisible: !document.querySelector("#starterGuide").hidden,
+      onboardingText: document.querySelector("#starterGuide")?.innerText,
       overflow: document.documentElement.scrollWidth > innerWidth
     }))()`);
     assert(todayCheck.localToday === todayCheck.inputDate, "Today input should use local browser date.");
     assert(todayCheck.coachStatus === "先建立记录", "Empty daily coach should show starter status.");
     assert(todayCheck.coachTitle === "全身入门", "Empty daily coach should recommend full-body beginner template.");
+    assert(todayCheck.onboardingVisible, "Empty first-run state should show onboarding.");
+    assert(todayCheck.onboardingText.includes("开始 60 秒记录"), "Onboarding should expose the 60-second record action.");
     assert(!todayCheck.overflow, "Today desktop layout should not overflow.");
+
+    await evaluate(cdp, `document.querySelector("#startOnboardingRecordBtn").click()`);
+    await delay(900);
+    const onboardingAction = await evaluate(cdp, `(() => ({
+      formTop: document.querySelector("#dailyForm").getBoundingClientRect().top,
+      formBottom: document.querySelector("#dailyForm").getBoundingClientRect().bottom,
+      viewportHeight: innerHeight,
+      highlighted: document.querySelectorAll(".onboarding-highlight").length
+    }))()`);
+    assert(onboardingAction.formTop < onboardingAction.viewportHeight && onboardingAction.formBottom > 0, "Onboarding primary action should scroll the daily form into view.");
+    assert(onboardingAction.highlighted >= 4, "Onboarding primary action should highlight key body-state fields.");
+
+    await evaluate(cdp, `document.querySelector("#sleepHours").value = "7";
+      document.querySelector("#sleepHours").dispatchEvent(new Event("input", { bubbles: true }));
+      document.querySelector("#saveDailyBtn").click();`);
+    await delay(500);
+    const afterDailySave = await evaluate(cdp, `(() => ({
+      hidden: document.querySelector("#starterGuide").hidden,
+      dailyLogs: JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)})).dailyLogs.length
+    }))()`);
+    assert(afterDailySave.dailyLogs === 1, "Saving daily state should create the first daily log.");
+    assert(afterDailySave.hidden, "Saving a daily log should hide onboarding.");
+
+    await evaluate(cdp, `localStorage.removeItem(${JSON.stringify(storageKey)})`);
+    await reload(cdp);
 
     await evaluate(cdp, `document.querySelector("#startCoachWorkoutBtn").click()`);
     await delay(300);
