@@ -601,6 +601,47 @@ async function run() {
     assert(reminderEngine.notifications.length === 2, "Reminder scheduler should deliver two local notifications in the test hook.");
     assert(reminderEngine.lastDaily && reminderEngine.lastWorkout, "Reminder scheduler should persist last sent dates.");
 
+    const csvExport = await evaluate(cdp, `(() => {
+      const snapshot = JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)}));
+      state.dailyLogs = [{
+        id: "csv-daily",
+        date: today(),
+        sleepHours: 7.5,
+        waterMl: 2100,
+        mood: 4,
+        energy: 5,
+        soreness: 1,
+        pain: 0,
+        habits: {},
+        note: "备注, 含逗号和\\"引号\\""
+      }];
+      state.workouts = [{
+        id: "csv-workout",
+        date: today(),
+        title: "CSV 训练",
+        duration: 42,
+        sessionRpe: 7,
+        note: "训练备注",
+        exercises: [
+          { name: "腿举", sets: [{ weight: 40, reps: 10, rpe: 7, note: "" }] },
+          { name: "卧推", sets: [{ weight: 30, reps: 8, rpe: 7, note: "" }] }
+        ]
+      }];
+      const csv = buildCsvSummary();
+      const hasButton = Boolean(document.querySelector("#exportCsvBtn"));
+      const overflow = document.documentElement.scrollWidth > innerWidth;
+      Object.assign(state, normalizeImportedState(snapshot));
+      localStorage.setItem(${JSON.stringify(storageKey)}, JSON.stringify(state));
+      renderAll();
+      return { csv, hasButton, overflow };
+    })()`);
+    assert(csvExport.hasButton, "Data panel should expose a CSV export button.");
+    assert(csvExport.csv.startsWith("type,date,title,metric_1,metric_2,metric_3,note"), "CSV export should include a stable header.");
+    assert(csvExport.csv.includes("daily,") && csvExport.csv.includes("workout,"), "CSV export should include daily and workout rows.");
+    assert(csvExport.csv.includes('"备注, 含逗号和""引号"""'), "CSV export should escape commas and quotes.");
+    assert(csvExport.csv.includes("腿举 / 卧推"), "CSV export should summarize workout exercises.");
+    assert(!csvExport.overflow, "Data panel with CSV export should not overflow.");
+
     await evaluate(cdp, `document.querySelector('[data-tab="library"]').click(); window.scrollTo(0, 0);`);
     await delay(100);
     const invalidImport = await evaluate(cdp, `(async () => {

@@ -2626,6 +2626,57 @@ function exportData() {
   URL.revokeObjectURL(url);
 }
 
+function exportCsvSummary() {
+  const csv = buildCsvSummary();
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `habit-fitness-summary-${today()}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+  showToast("CSV 汇总已导出");
+}
+
+function buildCsvSummary() {
+  const header = ["type", "date", "title", "metric_1", "metric_2", "metric_3", "note"];
+  const dailyRows = state.dailyLogs
+    .slice()
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map(log => [
+      "daily",
+      log.date,
+      "生活状态",
+      `sleep=${log.sleepHours ?? ""}`,
+      `water=${log.waterMl ?? 0}`,
+      `energy=${log.energy}/5 pain=${log.pain}/5`,
+      log.note || ""
+    ]);
+  const workoutRows = state.workouts
+    .slice()
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map(workout => [
+      "workout",
+      workout.date,
+      workout.title,
+      `duration=${workout.duration ?? ""}`,
+      `sets=${countSets(workout)}`,
+      `rpe=${workout.sessionRpe ?? ""}`,
+      [
+        workout.exercises.map(item => item.name).join(" / "),
+        workout.note || ""
+      ].filter(Boolean).join(" | ")
+    ]);
+  const rows = [header, ...dailyRows, ...workoutRows];
+  return rows.map(row => row.map(csvCell).join(",")).join("\n");
+}
+
+function csvCell(value) {
+  const text = String(value ?? "");
+  if (!/[",\n\r]/.test(text)) return text;
+  return `"${text.replaceAll('"', '""')}"`;
+}
+
 async function exportWeeklyReport() {
   const report = buildWeeklyReportText();
   try {
@@ -2912,6 +2963,7 @@ function bindActions() {
   $("generateAdviceBtn").addEventListener("click", generateAdvice);
   $("exportBtn").addEventListener("click", exportData);
   $("exportMirrorBtn").addEventListener("click", exportData);
+  $("exportCsvBtn").addEventListener("click", exportCsvSummary);
   $("importFile").addEventListener("change", event => {
     const file = event.target.files?.[0];
     if (file) importData(file);

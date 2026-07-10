@@ -8,7 +8,7 @@
     <title>日常与健身记录</title>
     <link rel="icon" href="./app-icon.svg" type="image/svg+xml">
     <link rel="manifest" href="./manifest.webmanifest">
-    <link rel="stylesheet" href="./styles.css?v=20260710-install-v1">
+    <link rel="stylesheet" href="./styles.css?v=20260710-csv-export-v1">
   </head>
   <body>
     <header class="app-header">
@@ -333,6 +333,7 @@
                 <input id="importFile" type="file" accept="application/json">
               </label>
               <button id="exportMirrorBtn" class="ghost-button" type="button">导出备份</button>
+              <button id="exportCsvBtn" class="ghost-button" type="button">导出 CSV</button>
               <button id="resetDemoBtn" class="danger-button" type="button">清空数据</button>
             </div>
             <div id="importPreview" class="import-preview" aria-live="polite"></div>
@@ -373,6 +374,6 @@
     </main>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=20260710-install-v1"></script>
+    <script src="./app.js?v=20260710-csv-export-v1"></script>
   </body>
 </html>
