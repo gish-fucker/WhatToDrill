@@ -180,6 +180,7 @@ async function run() {
       retentionConfidence: document.querySelector("#retentionInsights .confidence-pill")?.textContent,
       retentionText: document.querySelector("#retentionInsights")?.innerText,
       safetyText: document.querySelector("#safetyStrip")?.innerText,
+      exerciseProgressText: document.querySelector("#exerciseProgress")?.innerText,
       overflow: document.documentElement.scrollWidth > innerWidth
     }))()`);
     assert(todayCheck.localToday === todayCheck.inputDate, "Today input should use local browser date.");
@@ -193,6 +194,7 @@ async function run() {
     assert(todayCheck.retentionConfidence === "数据偏少", "Empty review center should show low-data confidence.");
     assert(todayCheck.retentionText.includes("数据还不足"), "Empty review center should explain missing data.");
     assert(todayCheck.safetyText.includes("不是医疗诊断"), "Today tab should show a non-medical safety reminder.");
+    assert(todayCheck.exerciseProgressText.includes("还没有可分析的动作"), "Empty exercise progress should explain missing workout data.");
     assert(!todayCheck.overflow, "Today desktop layout should not overflow.");
 
     await evaluate(cdp, `document.querySelector("#pain").value = "4";
@@ -414,6 +416,44 @@ async function run() {
     assert(riskReview.report.includes("## 下周行动"), "Weekly report should include next actions.");
     assert(riskReview.report.includes("## 安全说明"), "Weekly report should include safety disclaimer.");
     assert(!riskReview.overflow, "Insights desktop layout should not overflow.");
+
+    await evaluate(cdp, `(() => {
+      const days = getLastDays(7);
+      const workouts = [days[1], days[3], days[6]].map((date, index) => ({
+        id: "progress-workout-" + index,
+        date,
+        title: "动作进步 " + (index + 1),
+        duration: 40,
+        sessionRpe: index === 2 ? 6 : 7,
+        note: "",
+        exercises: [{
+          name: "腿举",
+          sets: [
+            { weight: 20 + index * 5, reps: 10, rpe: index === 2 ? 6 : 7, note: "" },
+            { weight: 20 + index * 5, reps: 8, rpe: 7, note: "" }
+          ]
+        }]
+      }));
+      localStorage.setItem(${JSON.stringify(storageKey)}, JSON.stringify({
+        dailyLogs: [],
+        workouts,
+        exercises: [{ name: "腿举", category: "力量", lastUsed: days[6] }],
+        templates: [],
+        adviceHistory: [],
+        settings: { waterStepMl: 500, waterTargetMl: 2000, weeklyWorkoutTarget: 2, trainingGoal: "general", preferredEnvironment: "gym", conservativeMode: false }
+      }));
+    })()`);
+    await reload(cdp);
+    await evaluate(cdp, `document.querySelector('[data-tab="insights"]').click(); window.scrollTo(0, 0);`);
+    await delay(250);
+    const progressReview = await evaluate(cdp, `(() => ({
+      text: document.querySelector("#exerciseProgress")?.innerText,
+      overflow: document.documentElement.scrollWidth > innerWidth
+    }))()`);
+    assert(progressReview.text.includes("腿举"), "Exercise progress should show repeated exercise names.");
+    assert(progressReview.text.includes("可判断"), "Exercise progress should mark exercises with enough sessions.");
+    assert(progressReview.text.includes("小幅加重量") || progressReview.text.includes("多做一组"), "Exercise progress should suggest a next progression when RPE is manageable.");
+    assert(!progressReview.overflow, "Exercise progress desktop layout should not overflow.");
 
     await evaluate(cdp, `document.querySelector('[data-tab="library"]').click(); window.scrollTo(0, 0);`);
     await delay(250);

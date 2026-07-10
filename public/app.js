@@ -672,6 +672,158 @@ function summaryCard(label, value, eyebrow = "Metric") {
   return `<article class="summary-card"><span class="eyebrow">${escapeHtml(eyebrow)}</span><span class="muted">${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></article>`;
 }
 
+function renderExerciseProgress() {
+  const panel = $("exerciseProgress");
+  if (!panel) return;
+  const progress = buildExerciseProgress();
+  const cards = progress.items.length
+    ? progress.items.map(exerciseProgressCard).join("")
+    : emptyState("还没有可分析的动作", "保存至少 2 次包含重量、次数或 RPE 的训练后，这里会显示动作进步。");
+
+  panel.innerHTML = `
+    <div class="progress-heading">
+      <div>
+        <p class="eyebrow">Exercise Progress</p>
+        <h3>动作进步</h3>
+        <p class="muted">${escapeHtml(progress.summary)}</p>
+      </div>
+      <span class="type-pill">${escapeHtml(progress.coverage)}</span>
+    </div>
+    <div class="exercise-progress-grid">
+      ${cards}
+    </div>
+  `;
+}
+
+function exerciseProgressCard(item) {
+  return `
+    <article class="exercise-progress-card">
+      <header>
+        <div>
+          <strong>${escapeHtml(item.name)}</strong>
+          <span class="muted">${escapeHtml(item.category)}</span>
+        </div>
+        <span class="confidence-pill ${escapeAttr(item.level)}">${escapeHtml(item.levelLabel)}</span>
+      </header>
+      <div class="exercise-progress-metrics">
+        ${exerciseProgressMetric("最近", item.latestText)}
+        ${exerciseProgressMetric("最佳", item.bestText)}
+        ${exerciseProgressMetric("次数", `${item.sessions} 次`)}
+      </div>
+      <p>${escapeHtml(item.suggestion)}</p>
+    </article>
+  `;
+}
+
+function exerciseProgressMetric(label, value) {
+  return `
+    <div>
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+    </div>
+  `;
+}
+
+function buildExerciseProgress() {
+  const exerciseMap = new Map();
+  const recentWorkouts = state.workouts
+    .slice()
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .slice(-12);
+
+  recentWorkouts.forEach(workout => {
+    workout.exercises.forEach(exercise => {
+      const usableSets = (exercise.sets || []).filter(set => (
+        set.weight !== null || set.reps !== null || set.rpe !== null || set.note
+      ));
+      if (!usableSets.length) return;
+      const entry = exerciseMap.get(exercise.name) || {
+        name: exercise.name,
+        category: state.exercises.find(item => item.name === exercise.name)?.category || "训练",
+        sessions: 0,
+        sets: [],
+        latestDate: "",
+        latestBest: null,
+        bestEstimate: null
+      };
+      const bestSet = pickBestSet(usableSets);
+      const estimate = estimateSetStrength(bestSet);
+      entry.sessions += 1;
+      entry.sets.push(...usableSets);
+      entry.latestDate = workout.date;
+      entry.latestBest = bestSet;
+      if (estimate !== null && (entry.bestEstimate === null || estimate > entry.bestEstimate)) {
+        entry.bestEstimate = estimate;
+      }
+      exerciseMap.set(exercise.name, entry);
+    });
+  });
+
+  const items = Array.from(exerciseMap.values())
+    .map(buildExerciseProgressItem)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 4);
+
+  return {
+    coverage: items.length ? `${items.length} 个动作` : "等待训练",
+    summary: items.length
+      ? "用最近训练记录整理动作趋势，帮你决定下次是保持、补记录还是小幅推进。"
+      : "动作进步需要真实训练组数据，先从一次完整训练记录开始。",
+    items
+  };
+}
+
+function buildExerciseProgressItem(entry) {
+  const bestText = entry.bestEstimate === null ? "暂无" : `${formatMetric(entry.bestEstimate)}`;
+  const latestText = formatSetSummary(entry.latestBest);
+  const level = entry.sessions >= 3 ? "high" : entry.sessions >= 2 ? "medium" : "low";
+  const levelLabel = entry.sessions >= 3 ? "可判断" : entry.sessions >= 2 ? "初步趋势" : "样本少";
+  const suggestion = buildExerciseProgressSuggestion(entry, level);
+  const score = entry.sessions * 10 + entry.sets.length + (entry.bestEstimate || 0) / 100;
+
+  return {
+    name: entry.name,
+    category: entry.category,
+    sessions: entry.sessions,
+    latestText,
+    bestText,
+    level,
+    levelLabel,
+    suggestion,
+    score
+  };
+}
+
+function pickBestSet(sets) {
+  return sets.slice().sort((a, b) => (estimateSetStrength(b) || 0) - (estimateSetStrength(a) || 0))[0];
+}
+
+function estimateSetStrength(set) {
+  const weight = Number(set.weight || 0);
+  const reps = Number(set.reps || 0);
+  if (!weight && !reps) return null;
+  if (!weight) return reps;
+  if (!reps) return weight;
+  return Math.round(weight * (1 + reps / 30));
+}
+
+function formatSetSummary(set) {
+  if (!set) return "暂无";
+  const parts = [];
+  if (set.weight !== null && set.weight !== undefined && set.weight !== "") parts.push(`${set.weight}kg`);
+  if (set.reps !== null && set.reps !== undefined && set.reps !== "") parts.push(`${set.reps}次`);
+  if (set.rpe !== null && set.rpe !== undefined && set.rpe !== "") parts.push(`RPE ${set.rpe}`);
+  return parts.join(" · ") || "已记录";
+}
+
+function buildExerciseProgressSuggestion(entry, level) {
+  const latestRpe = entry.latestBest?.rpe ?? null;
+  if (level === "low") return "先再记录 1 到 2 次同一动作，趋势会更可靠。";
+  if (latestRpe !== null && latestRpe >= 8) return "最近强度偏高，下次先维持重量和次数，优先动作质量。";
+  if (entry.sessions >= 3 && latestRpe !== null && latestRpe <= 6) return "完成感稳定，下次可以小幅加重量或多做一组。";
+  return "保持同一动作和相近组数，继续观察重量、次数和 RPE 是否稳定。";
+}
+
 function renderHistory() {
   const dailyCards = state.dailyLogs
     .slice()
@@ -961,6 +1113,7 @@ function renderAll() {
   renderRetentionInsights();
   renderWeeklyReview();
   renderSummary();
+  renderExerciseProgress();
   renderTrends();
   renderHistory();
   renderLibrary();
