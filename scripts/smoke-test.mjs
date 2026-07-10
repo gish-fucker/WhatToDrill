@@ -331,6 +331,53 @@ async function run() {
     assert(riskReview.report.includes("## 风险提醒"), "Weekly report should include risk section.");
     assert(riskReview.report.includes("## 下周行动"), "Weekly report should include next actions.");
     assert(!riskReview.overflow, "Insights desktop layout should not overflow.");
+
+    await evaluate(cdp, `document.querySelector('[data-tab="library"]').click(); window.scrollTo(0, 0);`);
+    await delay(250);
+    const invalidImport = await evaluate(cdp, `(async () => {
+      const file = new File([JSON.stringify({ dailyLogs: "broken" })], "broken-backup.json", { type: "application/json" });
+      importData(file);
+      await new Promise(resolve => setTimeout(resolve, 250));
+      return {
+        preview: document.querySelector("#importPreview")?.innerText,
+        disabled: document.querySelector("#confirmImportBtn")?.disabled,
+        workouts: JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)})).workouts.length
+      };
+    })()`);
+    assert(invalidImport.preview.includes("需修复"), "Invalid import should show a blocked preview.");
+    assert(invalidImport.disabled, "Invalid import should disable confirmation.");
+    assert(invalidImport.workouts === 2, "Invalid import should not overwrite current data.");
+
+    const validImport = await evaluate(cdp, `(async () => {
+      const payload = {
+        dailyLogs: [{ id: "import-daily", date: today(), sleepHours: 7, waterMl: 2000, mood: 4, energy: 4, soreness: 2, pain: 0, habits: {}, note: "" }],
+        workouts: [{ id: "import-workout", date: today(), title: "导入训练", duration: 35, sessionRpe: 6, note: "", exercises: [{ name: "腿举", sets: [{ weight: 20, reps: 10, rpe: 6, note: "" }] }] }],
+        exercises: [{ name: "腿举", category: "力量", lastUsed: today() }],
+        templates: [],
+        adviceHistory: [],
+        settings: { waterStepMl: 300 }
+      };
+      const file = new File([JSON.stringify(payload)], "valid-backup.json", { type: "application/json" });
+      importData(file);
+      await new Promise(resolve => setTimeout(resolve, 250));
+      const before = document.querySelector("#importPreview")?.innerText;
+      document.querySelector("#confirmImportBtn").click();
+      await new Promise(resolve => setTimeout(resolve, 350));
+      const parsed = JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)}));
+      return {
+        before,
+        dailyLogs: parsed.dailyLogs.length,
+        workouts: parsed.workouts.length,
+        waterStep: parsed.settings.waterStepMl,
+        health: document.querySelector("#dataHealth")?.innerText,
+        previewAfter: document.querySelector("#importPreview")?.innerText
+      };
+    })()`);
+    assert(validImport.before.includes("可导入"), "Valid import should show an importable preview.");
+    assert(validImport.dailyLogs === 1 && validImport.workouts === 1, "Confirmed import should overwrite local records.");
+    assert(validImport.waterStep === 300, "Confirmed import should restore settings.");
+    assert(validImport.health.includes("1 条") && validImport.health.includes("1 次"), "Data health should update after import.");
+    assert(validImport.previewAfter.includes("导入前会先预览"), "Import preview should reset after confirmation.");
     await screenshot(cdp, "smoke-desktop.png");
 
     await cdp.send("Emulation.setDeviceMetricsOverride", {

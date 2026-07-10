@@ -79,6 +79,7 @@ const beginnerTemplates = [
 
 const state = loadState();
 let lastWorkoutSummary = null;
+let pendingImport = null;
 const onboardingTouched = {
   energy: false,
   soreness: false,
@@ -689,6 +690,9 @@ function renderLibrary() {
   $("templateSelect").innerHTML = allTemplates.length
     ? allTemplates.map(template => `<option value="${template.id}">${template.builtIn ? "新手 · " : ""}${escapeHtml(template.name)}</option>`).join("")
     : `<option value="">暂无模板</option>`;
+
+  renderDataHealth();
+  renderImportPreview();
 }
 
 function emptyState(title, text) {
@@ -696,6 +700,99 @@ function emptyState(title, text) {
     <div class="empty-state">
       <strong>${escapeHtml(title)}</strong>
       <p class="muted">${escapeHtml(text)}</p>
+    </div>
+  `;
+}
+
+function renderDataHealth() {
+  const panel = $("dataHealth");
+  if (!panel) return;
+  const health = buildDataHealth();
+  panel.innerHTML = `
+    <div class="data-health-heading">
+      <strong>${escapeHtml(health.title)}</strong>
+      <span class="confidence-pill ${escapeAttr(health.level)}">${escapeHtml(health.label)}</span>
+    </div>
+    <div class="data-health-grid">
+      ${health.metrics.map(metric => `
+        <article>
+          <span>${escapeHtml(metric.label)}</span>
+          <strong>${escapeHtml(metric.value)}</strong>
+        </article>
+      `).join("")}
+    </div>
+    <p class="muted">${escapeHtml(health.note)}</p>
+  `;
+}
+
+function buildDataHealth() {
+  const dailyCount = state.dailyLogs.length;
+  const workoutCount = state.workouts.length;
+  const latestDaily = state.dailyLogs.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
+  const latestWorkout = state.workouts.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
+  const totalSets = state.workouts.reduce((sum, workout) => sum + countSets(workout), 0);
+  const hasUsefulBackupData = dailyCount >= 3 || workoutCount >= 1;
+  const level = hasUsefulBackupData ? "high" : dailyCount || workoutCount ? "medium" : "low";
+  const label = level === "high" ? "可备份" : level === "medium" ? "刚开始" : "暂无数据";
+  const note = level === "high"
+    ? "当前数据已经值得定期导出备份。换设备前请先导出 JSON。"
+    : level === "medium"
+      ? "已经有少量记录，继续补齐训练和状态后，备份会更有价值。"
+      : "还没有本地记录。导入前会先预览，避免误覆盖。";
+
+  return {
+    level,
+    label,
+    title: "数据健康",
+    note,
+    metrics: [
+      { label: "日常", value: `${dailyCount} 条` },
+      { label: "训练", value: `${workoutCount} 次` },
+      { label: "组数", value: `${totalSets} 组` },
+      { label: "最新", value: latestWorkout?.date || latestDaily?.date || "暂无" }
+    ]
+  };
+}
+
+function renderImportPreview() {
+  const panel = $("importPreview");
+  if (!panel) return;
+  if (!pendingImport) {
+    panel.innerHTML = `
+      <div class="import-empty">
+        <strong>导入前会先预览</strong>
+        <p class="muted">选择 JSON 后，系统会检查记录数量、日期格式和训练组结构。</p>
+      </div>
+    `;
+    return;
+  }
+
+  const preview = pendingImport.preview;
+  const issueList = preview.issues.length
+    ? preview.issues.map(issue => `<li>${escapeHtml(issue)}</li>`).join("")
+    : `<li>未发现阻塞问题。</li>`;
+  panel.innerHTML = `
+    <div class="import-card ${preview.canImport ? "" : "blocked"}">
+      <div class="import-heading">
+        <div>
+          <strong>${escapeHtml(preview.fileName)}</strong>
+          <p class="muted">${escapeHtml(preview.summary)}</p>
+        </div>
+        <span class="confidence-pill ${preview.canImport ? "medium" : "low"}">${preview.canImport ? "可导入" : "需修复"}</span>
+      </div>
+      <div class="import-metrics">
+        ${preview.metrics.map(metric => `
+          <article>
+            <span>${escapeHtml(metric.label)}</span>
+            <strong>${escapeHtml(metric.value)}</strong>
+          </article>
+        `).join("")}
+      </div>
+      <ul class="import-issues">${issueList}</ul>
+      <div class="import-actions">
+        <button id="confirmImportBtn" type="button" ${preview.canImport ? "" : "disabled"}>确认覆盖本地数据</button>
+        <button id="cancelImportBtn" class="ghost-button" type="button">取消导入</button>
+      </div>
     </div>
   `;
 }
@@ -2005,21 +2102,110 @@ function importData(file) {
   reader.onload = () => {
     try {
       const imported = JSON.parse(reader.result);
-      state.dailyLogs = imported.dailyLogs || [];
-      state.workouts = imported.workouts || [];
-      state.exercises = mergeDefaultExercises(imported.exercises);
-      state.templates = imported.templates || [];
-      state.adviceHistory = imported.adviceHistory || [];
-      state.settings = {
-        waterStepMl: sanitizeWaterStep(imported.settings?.waterStepMl)
-      };
-      saveState();
-      showToast("数据已导入");
+      const preview = validateImportPayload(imported, file.name);
+      pendingImport = preview.canImport ? { imported, preview } : { imported: null, preview };
+      renderImportPreview();
+      showToast(preview.canImport ? "导入预览已生成" : "导入文件需要修复");
     } catch {
+      pendingImport = null;
+      renderImportPreview();
       showToast("导入失败：JSON 格式不正确");
     }
   };
   reader.readAsText(file);
+}
+
+function validateImportPayload(imported, fileName = "backup.json") {
+  const issues = [];
+  if (!imported || typeof imported !== "object" || Array.isArray(imported)) {
+    return {
+      fileName,
+      canImport: false,
+      summary: "文件不是有效的应用备份对象。",
+      metrics: [],
+      issues: ["JSON 顶层必须是对象。"]
+    };
+  }
+
+  const dailyLogs = Array.isArray(imported.dailyLogs) ? imported.dailyLogs : [];
+  const workouts = Array.isArray(imported.workouts) ? imported.workouts : [];
+  const exercises = Array.isArray(imported.exercises) ? imported.exercises : [];
+  const templates = Array.isArray(imported.templates) ? imported.templates : [];
+  const adviceHistory = Array.isArray(imported.adviceHistory) ? imported.adviceHistory : [];
+
+  if ("dailyLogs" in imported && !Array.isArray(imported.dailyLogs)) issues.push("dailyLogs 必须是数组。");
+  if ("workouts" in imported && !Array.isArray(imported.workouts)) issues.push("workouts 必须是数组。");
+  if ("exercises" in imported && !Array.isArray(imported.exercises)) issues.push("exercises 必须是数组。");
+  if ("templates" in imported && !Array.isArray(imported.templates)) issues.push("templates 必须是数组。");
+  if (!dailyLogs.length && !workouts.length && !exercises.length && !templates.length) {
+    issues.push("没有发现可导入的日常、训练、动作或模板数据。");
+  }
+
+  const invalidDaily = dailyLogs.filter(log => !isValidDateText(log?.date)).length;
+  const invalidWorkouts = workouts.filter(workout => !isValidDateText(workout?.date) || !Array.isArray(workout?.exercises)).length;
+  const invalidSets = workouts.reduce((sum, workout) => {
+    if (!Array.isArray(workout?.exercises)) return sum;
+    return sum + workout.exercises.reduce((inner, exercise) => (
+      inner + (Array.isArray(exercise?.sets) ? 0 : 1)
+    ), 0);
+  }, 0);
+  if (invalidDaily) issues.push(`${invalidDaily} 条日常记录缺少有效日期。`);
+  if (invalidWorkouts) issues.push(`${invalidWorkouts} 次训练缺少有效日期或动作列表。`);
+  if (invalidSets) issues.push(`${invalidSets} 个训练动作缺少组数据数组。`);
+
+  const blockingIssues = issues.filter(issue => !issue.includes("没有发现"));
+  const canImport = issues.length === 0;
+  return {
+    fileName,
+    canImport,
+    summary: canImport
+      ? "确认后会覆盖当前浏览器里的本地数据。"
+      : blockingIssues.length ? "文件结构存在问题，暂不覆盖本地数据。" : "文件里没有可恢复的数据。",
+    metrics: [
+      { label: "日常", value: `${dailyLogs.length} 条` },
+      { label: "训练", value: `${workouts.length} 次` },
+      { label: "动作", value: `${exercises.length} 个` },
+      { label: "模板", value: `${templates.length} 个` },
+      { label: "建议", value: `${adviceHistory.length} 条` }
+    ],
+    issues
+  };
+}
+
+function isValidDateText(value) {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function normalizeImportedState(imported) {
+  return {
+    dailyLogs: Array.isArray(imported.dailyLogs) ? imported.dailyLogs : [],
+    workouts: Array.isArray(imported.workouts) ? imported.workouts : [],
+    exercises: mergeDefaultExercises(imported.exercises),
+    templates: Array.isArray(imported.templates) ? imported.templates : [],
+    adviceHistory: Array.isArray(imported.adviceHistory) ? imported.adviceHistory : [],
+    settings: {
+      waterStepMl: sanitizeWaterStep(imported.settings?.waterStepMl)
+    }
+  };
+}
+
+function confirmImportData() {
+  if (!pendingImport?.imported || !pendingImport.preview.canImport) {
+    showToast("没有可导入的数据");
+    return;
+  }
+  Object.assign(state, normalizeImportedState(pendingImport.imported));
+  pendingImport = null;
+  saveState();
+  clearWorkoutForm();
+  renderAll();
+  showToast("数据已导入并覆盖本地记录");
+}
+
+function cancelImportData() {
+  pendingImport = null;
+  renderImportPreview();
+  showToast("已取消导入");
 }
 
 function escapeHtml(value) {
@@ -2072,6 +2258,7 @@ function bindActions() {
     if (window.confirm("确定清空所有本地记录吗？")) {
       localStorage.removeItem(STORAGE_KEY);
       Object.assign(state, loadState());
+      pendingImport = null;
       clearWorkoutForm();
       renderAll();
       showToast("数据已清空");
@@ -2099,6 +2286,13 @@ function bindActions() {
   });
   $("retentionInsights").addEventListener("click", event => {
     if (event.target.closest("#exportWeeklyReportBtn")) exportWeeklyReport();
+  });
+  $("importPreview").addEventListener("click", event => {
+    if (event.target.closest("#confirmImportBtn")) {
+      confirmImportData();
+      return;
+    }
+    if (event.target.closest("#cancelImportBtn")) cancelImportData();
   });
   $("dailyCoach").addEventListener("click", event => {
     if (event.target.closest("#startCoachWorkoutBtn")) {

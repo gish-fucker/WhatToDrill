@@ -267,15 +267,17 @@
             </div>
             <div class="data-actions">
               <label class="file-button">
-                导入 JSON
+                选择 JSON
                 <input id="importFile" type="file" accept="application/json">
               </label>
               <button id="exportMirrorBtn" class="ghost-button" type="button">导出备份</button>
               <button id="resetDemoBtn" class="danger-button" type="button">清空数据</button>
             </div>
+            <div id="importPreview" class="import-preview" aria-live="polite"></div>
+            <div id="dataHealth" class="data-health" aria-label="数据健康"></div>
             <div class="data-note">
               <strong>本地优先</strong>
-              <p class="muted">记录保存在当前浏览器。换电脑或清理浏览器数据前，请先导出 JSON 备份。</p>
+              <p class="muted">记录保存在当前浏览器。导入会先预览和校验，确认后才覆盖本地数据。</p>
             </div>
           </section>
         </div>
