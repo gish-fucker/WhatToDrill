@@ -1,9 +1,9 @@
-const CACHE_NAME = "habit-fitness-shell-v20260710";
+const CACHE_NAME = "habit-fitness-shell-v20260710-weekly-target";
 const APP_SHELL = [
   "/",
   "/index.html",
-  "/styles.css?v=20260710-pwa-v1",
-  "/app.js?v=20260710-pwa-v1",
+  "/styles.css?v=20260710-weekly-target-v1",
+  "/app.js?v=20260710-weekly-target-v1",
   "/app-icon.svg",
   "/manifest.webmanifest"
 ];

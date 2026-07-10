@@ -1108,6 +1108,7 @@ function renderAll() {
   renderWorkoutExecution();
   renderWorkoutDashboard();
   renderFocusStrip();
+  renderWeeklyTargetPanel();
   renderStarterGuide();
   renderReadiness();
   renderRetentionInsights();
@@ -1970,6 +1971,94 @@ function todayMetric(label, value, note, progress = null) {
   `;
 }
 
+function buildWeeklyTargetProgress() {
+  const days = getLastDays(7);
+  const target = Math.max(1, state.settings.weeklyWorkoutTarget || defaultSettings.weeklyWorkoutTarget);
+  const recentWorkouts = getRecent(state.workouts, 7).slice().sort((a, b) => b.date.localeCompare(a.date));
+  const completed = recentWorkouts.length;
+  const remaining = Math.max(0, target - completed);
+  const percent = clamp(Math.round(completed / target * 100), 0, 100);
+  const totalSets = recentWorkouts.reduce((sum, workout) => sum + countSets(workout), 0);
+  const latestWorkout = recentWorkouts[0] || null;
+  const daily = getDailyDraft();
+  const highPain = (daily.pain ?? 0) >= 4;
+  const elevatedPain = (daily.pain ?? 0) >= 2;
+  const status = completed >= target ? "已达标" : completed > 0 ? "推进中" : "待启动";
+  const summary = completed >= target
+    ? "本周训练目标已经达成，接下来把恢复、动作质量和记录完整度稳住。"
+    : completed === 0
+      ? "先完成一次低门槛训练，让本周目标进入执行状态。"
+      : `还差 ${remaining} 次达到本周目标，下一次训练可以选择今日建议模板。`;
+  const nextAction = highPain
+    ? "今天疼痛较高，先记录状态并以恢复为主"
+    : elevatedPain
+      ? "避开不适部位，做一次保守训练或恢复记录"
+      : remaining === 0
+        ? "保留 1 天恢复窗口，必要时只做轻量活动"
+        : "开始今日建议，完成后保存为本周进度";
+  const cadence = latestWorkout
+    ? `距离上次训练 ${daysBetween(latestWorkout.date, today())} 天`
+    : "本周还没有训练";
+
+  return {
+    days,
+    target,
+    completed,
+    remaining,
+    percent,
+    totalSets,
+    latestWorkout,
+    status,
+    summary,
+    nextAction,
+    cadence
+  };
+}
+
+function renderWeeklyTargetPanel() {
+  const panel = $("weeklyTargetPanel");
+  if (!panel) return;
+  const progress = buildWeeklyTargetProgress();
+  const rangeLabel = `${progress.days[0].slice(5)} - ${progress.days.at(-1).slice(5)}`;
+  const remainingLabel = progress.remaining === 0 ? "目标完成" : `还差 ${progress.remaining} 次`;
+  panel.innerHTML = `
+    <div class="weekly-target-main">
+      <div>
+        <p class="eyebrow">Weekly target</p>
+        <h3>本周已完成 ${progress.completed}/${progress.target} 次训练</h3>
+        <p class="muted">${escapeHtml(progress.summary)}</p>
+      </div>
+      <div class="weekly-target-score" style="--score:${progress.percent}%">
+        <strong>${progress.percent}%</strong>
+        <span>${escapeHtml(progress.status)}</span>
+      </div>
+    </div>
+    <div class="weekly-target-meter" aria-label="本周训练目标进度">
+      <span style="--progress:${progress.percent}%"></span>
+    </div>
+    <div class="weekly-target-grid">
+      ${weeklyTargetMetric("周期", rangeLabel, remainingLabel)}
+      ${weeklyTargetMetric("训练组数", `${progress.totalSets} 组`, progress.latestWorkout ? progress.latestWorkout.title : "保存训练后更新")}
+      ${weeklyTargetMetric("训练间隔", progress.cadence, progress.latestWorkout ? progress.latestWorkout.date : "等待第一次训练")}
+      ${weeklyTargetMetric("下一步", progress.nextAction, progress.remaining === 0 ? "恢复优先" : "可执行")}
+    </div>
+    <div class="weekly-target-actions">
+      <button class="btn primary" type="button" id="startWeeklyTargetWorkoutBtn">开始今日建议</button>
+      <button class="btn ghost" type="button" id="openWorkoutFromWeeklyBtn">去记录训练</button>
+    </div>
+  `;
+}
+
+function weeklyTargetMetric(label, value, note) {
+  return `
+    <article class="weekly-target-metric">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      <small>${escapeHtml(note)}</small>
+    </article>
+  `;
+}
+
 function getDailyDraft() {
   return {
     id: `daily_${$("dailyDate").value || today()}`,
@@ -2087,24 +2176,17 @@ function formatMetric(value) {
 function renderFocusStrip() {
   const daily = state.dailyLogs.find(item => item.date === today());
   const latestWorkout = state.workouts.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
-  const latestAdvice = state.adviceHistory.at(-1);
   const readiness = calculateReadiness();
+  const weeklyTarget = buildWeeklyTargetProgress();
   const water = daily?.waterMl ?? 0;
   const waterTarget = state.settings.waterTargetMl;
   const workoutText = latestWorkout ? `${latestWorkout.date} · ${latestWorkout.title}` : "暂无训练";
-  const nextAction = !daily
-    ? "记录今日状态"
-    : water < waterTarget * 0.75
-      ? "补一次饮水"
-      : latestAdvice
-        ? "查看最新建议"
-        : "生成智能建议";
 
   $("focusStrip").innerHTML = [
     focusCard("今日饮水", `${water} ml`, water >= waterTarget * 0.75 ? "接近目标" : "偏低", "today"),
     focusCard("最近训练", workoutText, latestWorkout ? `${countSets(latestWorkout)} 组` : "等待记录", "workout"),
     focusCard("状态评分", `${readiness.score}/100`, readiness.label, "insights"),
-    focusCard("下一步", nextAction, latestAdvice ? "建议已就绪" : "保持节奏", latestAdvice ? "insights" : "today")
+    focusCard("本周目标", `${weeklyTarget.completed}/${weeklyTarget.target} 次`, weeklyTarget.remaining ? `还差 ${weeklyTarget.remaining} 次` : "目标完成", "today")
   ].join("");
 }
 
@@ -2537,6 +2619,7 @@ function bindActions() {
     renderDailyCoach();
     renderSafetyStrip();
     renderTodayDashboard();
+    renderWeeklyTargetPanel();
   });
   $("workout").addEventListener("input", renderWorkoutSurfaces);
   $("workout").addEventListener("change", renderWorkoutSurfaces);
@@ -2573,6 +2656,13 @@ function bindActions() {
     const card = event.target.closest(".focus-card");
     if (!card) return;
     activateTab(card.dataset.targetTab);
+  });
+  $("weeklyTargetPanel").addEventListener("click", event => {
+    if (event.target.closest("#startWeeklyTargetWorkoutBtn")) {
+      startDailyCoachWorkout();
+      return;
+    }
+    if (event.target.closest("#openWorkoutFromWeeklyBtn")) activateTab("workout");
   });
   $("starterGuide").addEventListener("click", event => {
     if (event.target.closest("#startOnboardingRecordBtn")) {

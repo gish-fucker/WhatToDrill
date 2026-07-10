@@ -180,6 +180,7 @@ async function run() {
       retentionConfidence: document.querySelector("#retentionInsights .confidence-pill")?.textContent,
       retentionText: document.querySelector("#retentionInsights")?.innerText,
       safetyText: document.querySelector("#safetyStrip")?.innerText,
+      weeklyTargetText: document.querySelector("#weeklyTargetPanel")?.innerText,
       exerciseProgressText: document.querySelector("#exerciseProgress")?.innerText,
       overflow: document.documentElement.scrollWidth > innerWidth
     }))()`);
@@ -194,6 +195,8 @@ async function run() {
     assert(todayCheck.retentionConfidence === "数据偏少", "Empty review center should show low-data confidence.");
     assert(todayCheck.retentionText.includes("数据还不足"), "Empty review center should explain missing data.");
     assert(todayCheck.safetyText.includes("不是医疗诊断"), "Today tab should show a non-medical safety reminder.");
+    assert(todayCheck.weeklyTargetText.includes("本周已完成 0/2 次训练"), "Today tab should show weekly target progress.");
+    assert(todayCheck.weeklyTargetText.includes("本周还没有训练"), "Weekly target should explain the empty workout cadence.");
     assert(todayCheck.exerciseProgressText.includes("还没有可分析的动作"), "Empty exercise progress should explain missing workout data.");
     assert(!todayCheck.overflow, "Today desktop layout should not overflow.");
 
@@ -494,11 +497,13 @@ async function run() {
       const parsed = JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)}));
       document.querySelector('[data-tab="today"]').click();
       const todayText = document.querySelector("#todayDashboard")?.innerText;
+      const weeklyTargetText = document.querySelector("#weeklyTargetPanel")?.innerText;
       document.querySelector('[data-tab="insights"]').click();
       const insightText = document.querySelector("#retentionInsights")?.innerText;
       return {
         settings: parsed.settings,
         todayText,
+        weeklyTargetText,
         insightText
       };
     })()`);
@@ -508,6 +513,7 @@ async function run() {
     assert(preferences.settings.waterTargetMl === 2400, "Preferences should save water target.");
     assert(preferences.settings.conservativeMode, "Preferences should save conservative mode.");
     assert(preferences.todayText.includes("2400ml"), "Today dashboard should use preferred water target.");
+    assert(preferences.weeklyTargetText.includes("/3 次训练"), "Weekly target panel should use preferred weekly workout target.");
     assert(preferences.insightText.includes("每周 3 次训练目标"), "Retention actions should use weekly workout target.");
 
     await evaluate(cdp, `document.querySelector('[data-tab="library"]').click(); window.scrollTo(0, 0);`);

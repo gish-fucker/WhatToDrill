@@ -335,6 +335,97 @@ h3 {
   line-height: 1.25;
 }
 
+.weekly-target-panel {
+  margin-top: 14px;
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+}
+
+.weekly-target-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 112px;
+  align-items: center;
+  gap: 18px;
+}
+
+.weekly-target-main h3 {
+  margin-bottom: 6px;
+}
+
+.weekly-target-score {
+  width: 112px;
+  height: 112px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 2px;
+  background:
+    radial-gradient(circle at center, var(--surface) 0 59%, transparent 60%),
+    conic-gradient(var(--primary) var(--score), var(--surface-soft) 0);
+}
+
+.weekly-target-score strong {
+  font-size: 22px;
+}
+
+.weekly-target-score span,
+.weekly-target-metric span,
+.weekly-target-metric small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.weekly-target-meter {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  overflow: hidden;
+}
+
+.weekly-target-meter span {
+  display: block;
+  width: var(--progress);
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+}
+
+.weekly-target-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.weekly-target-metric {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  padding: 13px;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.weekly-target-metric strong {
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.weekly-target-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
 .starter-guide {
   display: grid;
   grid-template-columns: minmax(260px, 0.75fr) minmax(0, 1.25fr);
@@ -2299,6 +2390,10 @@ input[type="checkbox"] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .weekly-target-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .focus-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2385,6 +2480,7 @@ input[type="checkbox"] {
   .preference-form,
   .today-brief,
   .today-metrics,
+  .weekly-target-main,
   .workout-brief,
   .workout-metrics,
   .coach-hero,
@@ -2399,6 +2495,14 @@ input[type="checkbox"] {
 
   .trend-grid {
     grid-template-columns: 1fr;
+  }
+
+  .weekly-target-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .weekly-target-actions button {
+    width: 100%;
   }
 
   .set-header {
