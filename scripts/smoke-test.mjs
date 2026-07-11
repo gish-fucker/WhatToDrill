@@ -691,6 +691,51 @@ async function run() {
     assert(riskReview.report.includes("## 安全说明"), "Weekly report should include safety disclaimer.");
     assert(!riskReview.overflow, "Insights desktop layout should not overflow.");
 
+    const historyBrowsing = await evaluate(cdp, `(() => {
+      const snapshot = JSON.parse(JSON.stringify(state));
+      const days = getLastDays(12);
+      state.dailyLogs = days.slice(0, 10).map((date, index) => ({
+        id: "history-daily-" + index, date, sleepHours: 7, waterMl: 2000, mood: 3, energy: 3, soreness: 1, pain: 0, habits: {}, note: ""
+      }));
+      state.workouts = days.slice(10).map((date, index) => ({
+        id: "history-workout-" + index, date, title: "历史训练 " + index, duration: 30, sessionRpe: 6, note: "",
+        exercises: [{ name: "腿举", sets: [{ weight: 20, reps: 10, rpe: 6, note: "" }] }]
+      }));
+      historyFilter = "all";
+      historyExpanded = false;
+      renderHistory();
+      const initial = {
+        cards: document.querySelectorAll("#historyList .history-card").length,
+        firstDate: document.querySelector("#historyList .history-card strong")?.textContent,
+        firstIsWorkout: document.querySelector("#historyList .history-card")?.hasAttribute("data-workout-id"),
+        toggleText: document.querySelector("#toggleHistoryBtn").textContent
+      };
+      document.querySelector("#toggleHistoryBtn").click();
+      const expanded = {
+        cards: document.querySelectorAll("#historyList .history-card").length,
+        toggleText: document.querySelector("#toggleHistoryBtn").textContent
+      };
+      const filter = document.querySelector("#historyFilter");
+      filter.value = "workout";
+      filter.dispatchEvent(new Event("change", { bubbles: true }));
+      const filtered = {
+        cards: document.querySelectorAll("#historyList .history-card").length,
+        onlyWorkouts: !document.querySelector("#historyList .history-card[data-daily-date]"),
+        toggleHidden: document.querySelector("#toggleHistoryBtn").hidden
+      };
+      Object.assign(state, normalizeImportedState(snapshot));
+      historyFilter = "all";
+      historyExpanded = false;
+      localStorage.setItem(${JSON.stringify(storageKey)}, JSON.stringify(state));
+      renderAll();
+      return { initial, expanded, filtered, latestDate: days[11], overflow: document.documentElement.scrollWidth > innerWidth };
+    })()`);
+    assert(historyBrowsing.initial.cards === 8 && historyBrowsing.initial.toggleText.includes("12"), "History should initially show 8 of 12 records.");
+    assert(historyBrowsing.initial.firstIsWorkout && historyBrowsing.initial.firstDate.includes(historyBrowsing.latestDate), "Unified history should put the latest mixed record first.");
+    assert(historyBrowsing.expanded.cards === 12 && historyBrowsing.expanded.toggleText === "收起", "History expansion should reveal all records.");
+    assert(historyBrowsing.filtered.cards === 2 && historyBrowsing.filtered.onlyWorkouts && historyBrowsing.filtered.toggleHidden, "Workout filter should show only workout records and hide unnecessary expansion.");
+    assert(!historyBrowsing.overflow, "History controls and expanded records should not cause horizontal overflow.");
+
     await evaluate(cdp, `(() => {
       const days = getLastDays(7);
       const workouts = [days[1], days[3], days[6]].map((date, index) => ({

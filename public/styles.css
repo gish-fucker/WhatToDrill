@@ -2081,6 +2081,18 @@ input[type="checkbox"] {
   overflow: auto;
 }
 
+.history-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.history-controls select,
+.history-controls button {
+  min-height: 36px;
+}
+
 .status-dot {
   width: 10px;
   height: 10px;
@@ -2818,6 +2830,17 @@ input[type="checkbox"] {
   }
 
   .history-card-actions button {
+    width: 100%;
+  }
+
+  .history-panel .panel-heading,
+  .history-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .history-controls select,
+  .history-controls button {
     width: 100%;
   }
 }

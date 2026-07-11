@@ -1,9 +1,9 @@
-const CACHE_NAME = "habit-fitness-shell-v20260711-daily-edit";
+const CACHE_NAME = "habit-fitness-shell-v20260711-history-filter";
 const APP_SHELL = [
   "/",
   "/index.html",
-  "/styles.css?v=20260711-daily-edit-v1",
-  "/app.js?v=20260711-daily-edit-v1",
+  "/styles.css?v=20260711-history-filter-v1",
+  "/app.js?v=20260711-history-filter-v1",
   "/app-icon.svg",
   "/manifest.webmanifest"
 ];

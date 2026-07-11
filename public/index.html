@@ -8,7 +8,7 @@
     <title>日常与健身记录</title>
     <link rel="icon" href="./app-icon.svg" type="image/svg+xml">
     <link rel="manifest" href="./manifest.webmanifest">
-    <link rel="stylesheet" href="./styles.css?v=20260711-daily-edit-v1">
+    <link rel="stylesheet" href="./styles.css?v=20260711-history-filter-v1">
   </head>
   <body>
     <header class="app-header">
@@ -213,6 +213,14 @@
               <div>
                 <p class="eyebrow">Timeline</p>
                 <h3>最近记录</h3>
+              </div>
+              <div class="history-controls">
+                <select id="historyFilter" aria-label="筛选历史类型">
+                  <option value="all">全部</option>
+                  <option value="workout">训练</option>
+                  <option value="daily">日常</option>
+                </select>
+                <button id="toggleHistoryBtn" class="ghost-button" type="button" hidden>查看全部</button>
               </div>
             </div>
             <div id="historyList" class="history-list"></div>
@@ -518,6 +526,6 @@
     </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=20260711-daily-edit-v1"></script>
+    <script src="./app.js?v=20260711-history-filter-v1"></script>
   </body>
 </html>

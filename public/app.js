@@ -105,6 +105,8 @@ let workoutDraftTimer = null;
 let editingWorkoutId = null;
 let pendingWorkoutDeleteId = null;
 let pendingDailyDeleteDate = null;
+let historyFilter = "all";
+let historyExpanded = false;
 const onboardingTouched = {
   energy: false,
   soreness: false,
@@ -1186,42 +1188,52 @@ function buildExerciseProgressSuggestion(entry, level) {
 }
 
 function renderHistory() {
-  const dailyCards = state.dailyLogs
-    .slice()
-    .sort((a, b) => b.date.localeCompare(a.date))
-    .slice(0, 8)
-    .map(log => `
-      <article class="history-card" data-daily-date="${escapeAttr(log.date)}">
-        <header><strong>${escapeHtml(log.date)}</strong><span class="type-pill">日常</span></header>
-        <p class="muted">睡眠 ${log.sleepHours ?? "未填"}h · 精力 ${log.energy}/5 · 心情 ${log.mood}/5 · 疼痛 ${log.pain}/5</p>
-        ${log.note ? `<p>${escapeHtml(log.note)}</p>` : ""}
-        <div class="history-card-actions">
-          <button class="ghost-button edit-daily-record" type="button">修改</button>
-          <button class="danger-button delete-daily-record" type="button">删除</button>
-        </div>
-      </article>
-    `);
+  const records = [
+    ...state.dailyLogs.map(item => ({ type: "daily", date: item.date, timestamp: item.updatedAt || item.date, item })),
+    ...state.workouts.map(item => ({ type: "workout", date: item.date, timestamp: item.updatedAt || item.createdAt || item.date, item }))
+  ]
+    .filter(record => historyFilter === "all" || record.type === historyFilter)
+    .sort((a, b) => b.date.localeCompare(a.date) || b.timestamp.localeCompare(a.timestamp));
+  const visibleRecords = historyExpanded ? records : records.slice(0, 8);
 
-  const workoutCards = state.workouts
-    .slice()
-    .sort((a, b) => b.date.localeCompare(a.date))
-    .slice(0, 8)
-    .map(workout => `
-      <article class="history-card" data-workout-id="${escapeAttr(workout.id)}">
-        <header>
-          <strong>${escapeHtml(workout.date)} ${escapeHtml(workout.title)}</strong>
-          <span class="type-pill workout-pill">训练</span>
-        </header>
-        <p class="muted">${workout.exercises.length} 个动作 · ${countSets(workout)} 组 · RPE ${workout.sessionRpe}/10</p>
-        <p>${workout.exercises.map(item => escapeHtml(item.name)).join("、")}</p>
-        <div class="history-card-actions">
-          <button class="ghost-button edit-workout-record" type="button">修改</button>
-          <button class="danger-button delete-workout-record" type="button">删除</button>
-        </div>
-      </article>
-    `);
+  $("historyList").innerHTML = visibleRecords.map(record => (
+    record.type === "workout" ? workoutHistoryCard(record.item) : dailyHistoryCard(record.item)
+  )).join("") || `<p class="muted">当前筛选下还没有历史记录。</p>`;
 
-  $("historyList").innerHTML = [...workoutCards, ...dailyCards].join("") || `<p class="muted">还没有历史记录。</p>`;
+  $("historyFilter").value = historyFilter;
+  $("toggleHistoryBtn").hidden = records.length <= 8;
+  $("toggleHistoryBtn").textContent = historyExpanded ? "收起" : `查看全部（${records.length}）`;
+}
+
+function dailyHistoryCard(log) {
+  return `
+    <article class="history-card" data-daily-date="${escapeAttr(log.date)}">
+      <header><strong>${escapeHtml(log.date)}</strong><span class="type-pill">日常</span></header>
+      <p class="muted">睡眠 ${log.sleepHours ?? "未填"}h · 精力 ${log.energy}/5 · 心情 ${log.mood}/5 · 疼痛 ${log.pain}/5</p>
+      ${log.note ? `<p>${escapeHtml(log.note)}</p>` : ""}
+      <div class="history-card-actions">
+        <button class="ghost-button edit-daily-record" type="button">修改</button>
+        <button class="danger-button delete-daily-record" type="button">删除</button>
+      </div>
+    </article>
+  `;
+}
+
+function workoutHistoryCard(workout) {
+  return `
+    <article class="history-card" data-workout-id="${escapeAttr(workout.id)}">
+      <header>
+        <strong>${escapeHtml(workout.date)} ${escapeHtml(workout.title)}</strong>
+        <span class="type-pill workout-pill">训练</span>
+      </header>
+      <p class="muted">${workout.exercises.length} 个动作 · ${countSets(workout)} 组 · RPE ${workout.sessionRpe}/10</p>
+      <p>${workout.exercises.map(item => escapeHtml(item.name)).join("、")}</p>
+      <div class="history-card-actions">
+        <button class="ghost-button edit-workout-record" type="button">修改</button>
+        <button class="danger-button delete-workout-record" type="button">删除</button>
+      </div>
+    </article>
+  `;
 }
 
 function renderLibrary() {
@@ -3460,6 +3472,15 @@ function bindActions() {
   });
   $("retentionInsights").addEventListener("click", event => {
     if (event.target.closest("#exportWeeklyReportBtn")) exportWeeklyReport();
+  });
+  $("historyFilter").addEventListener("change", event => {
+    historyFilter = event.target.value;
+    historyExpanded = false;
+    renderHistory();
+  });
+  $("toggleHistoryBtn").addEventListener("click", () => {
+    historyExpanded = !historyExpanded;
+    renderHistory();
   });
   $("historyList").addEventListener("click", event => {
     const workoutCard = event.target.closest("[data-workout-id]");
