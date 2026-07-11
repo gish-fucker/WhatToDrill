@@ -122,13 +122,19 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function pngDimensions(buffer) {
+  const bytes = Buffer.from(buffer);
+  if (bytes.length < 24 || bytes.toString("ascii", 1, 4) !== "PNG") return null;
+  return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+}
+
 async function run() {
   await mkdir(outputDir, { recursive: true });
   await mkdir(profileDir, { recursive: true });
 
   const server = spawn(process.execPath, ["server.js"], {
     cwd: process.cwd(),
-    env: { ...process.env, HOST: "127.0.0.1", PORT: String(appPort), APP_VERSION: "1.4.0", OPENAI_API_KEY: "", ADVICE_RATE_LIMIT: "10" },
+    env: { ...process.env, HOST: "127.0.0.1", PORT: String(appPort), APP_VERSION: "1.4.1", OPENAI_API_KEY: "", ADVICE_RATE_LIMIT: "10" },
     stdio: "ignore",
     windowsHide: true
   });
@@ -155,6 +161,18 @@ async function run() {
     const termsResponse = await fetch(`${baseUrl}/terms.html`);
     const serviceWorkerResponse = await fetch(`${baseUrl}/sw.js`);
     const serviceWorkerSource = await serviceWorkerResponse.text();
+    const manifestResponse = await fetch(`${baseUrl}/manifest.webmanifest`);
+    const manifest = await manifestResponse.json();
+    const iconChecks = {};
+    for (const [name, size] of [["app-icon-180.png", 180], ["app-icon-192.png", 192], ["app-icon-512.png", 512], ["app-icon-maskable-512.png", 512]]) {
+      const response = await fetch(`${baseUrl}/${name}`);
+      iconChecks[name] = {
+        status: response.status,
+        type: response.headers.get("content-type"),
+        expectedSize: size,
+        dimensions: pngDimensions(await response.arrayBuffer())
+      };
+    }
     const healthResponse = await fetch(`${baseUrl}/api/health`);
     const healthPayload = await healthResponse.json();
     const versionedAssetResponse = await fetch(`${baseUrl}/app.js?v=smoke`);
@@ -218,6 +236,9 @@ async function run() {
       termsStatus: termsResponse.status,
       termsCsp: termsResponse.headers.get("content-security-policy"),
       updateMessageHandler: serviceWorkerSource.includes("SKIP_WAITING"),
+      iconCacheEntries: Object.keys(iconChecks).every(name => serviceWorkerSource.includes(`/${name}`)),
+      manifestIcons: manifest.icons,
+      iconChecks,
       assetCache: versionedAssetResponse.headers.get("cache-control"),
       headStatus: headResponse.status,
       invalidJsonStatus: invalidJsonResponse.status,
@@ -232,7 +253,7 @@ async function run() {
     assert(serverHttp.csp?.includes("frame-ancestors 'none'"), "Static responses should include a restrictive CSP.");
     assert(serverHttp.frameOptions === "DENY", "Static responses should prevent framing.");
     assert(/^[0-9a-f-]{36}$/i.test(serverHttp.requestId), "API responses should expose a generated request ID.");
-    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.4.0", "Health response should expose status and release version.");
+    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.4.1", "Health response should expose status and release version.");
     assert(Number.isInteger(serverHttp.health.uptimeSeconds) && serverHttp.health.uptimeSeconds >= 0, "Health response should expose a valid uptime.");
     assert(serverHttp.health.openaiConfigured === false && serverHttp.health.model === "gpt-5-mini", "Health response should expose non-secret AI configuration state.");
     assert(serverHttp.indexCache === "no-cache", "HTML should revalidate instead of using a stale shell.");
@@ -240,6 +261,11 @@ async function run() {
     assert(serverHttp.privacyCache === "no-cache", "Privacy policy should revalidate so users receive policy updates.");
     assert(serverHttp.termsCsp?.includes("frame-ancestors 'none'"), "Legal pages should receive the same security headers as the app.");
     assert(serverHttp.updateMessageHandler, "Service worker should support user-confirmed activation.");
+    assert(serverHttp.iconCacheEntries, "PWA app shell should cache every raster install icon.");
+    assert(serverHttp.manifestIcons.some(icon => icon.sizes === "192x192" && icon.purpose === "any"), "Manifest should declare a standard 192px icon.");
+    assert(serverHttp.manifestIcons.some(icon => icon.sizes === "512x512" && icon.purpose === "any"), "Manifest should declare a standard 512px icon.");
+    assert(serverHttp.manifestIcons.some(icon => icon.sizes === "512x512" && icon.purpose === "maskable"), "Manifest should declare a separate maskable icon.");
+    assert(Object.values(serverHttp.iconChecks).every(icon => icon.status === 200 && icon.type === "image/png" && icon.dimensions?.width === icon.expectedSize && icon.dimensions?.height === icon.expectedSize), "Raster install icons should be valid PNG files with their declared dimensions.");
     assert(serverHttp.assetCache.includes("immutable"), "Versioned assets should use immutable caching.");
     assert(serverHttp.headStatus === 200, "Static files should support HEAD requests.");
     assert(serverHttp.invalidJsonStatus === 400, "Malformed advice JSON should return 400.");
@@ -295,8 +321,12 @@ async function run() {
     assert(todayCheck.coachStatus === "先建立记录", "Empty daily coach should show starter status.");
     assert(todayCheck.coachTitle === "全身入门", "Empty daily coach should recommend full-body beginner template.");
     assert(todayCheck.installStatus.length > 0, "Header should expose PWA install status.");
-    assert(todayCheck.installButtonHidden, "Install button should stay hidden until install prompt is available.");
-    assert(todayCheck.installButtonDisplay === "none", "Hidden install button should not be visually displayed.");
+    if (todayCheck.installButtonHidden) {
+      assert(todayCheck.installButtonDisplay === "none", "Hidden install button should not be visually displayed.");
+    } else {
+      assert(todayCheck.installStatus.includes("可安装"), "Visible install button should be backed by an available browser install prompt.");
+      assert(todayCheck.installButtonDisplay !== "none", "Available install button should be visually displayed.");
+    }
     assert(todayCheck.onboardingVisible, "Empty first-run state should show onboarding.");
     assert(todayCheck.onboardingText.includes("开始 60 秒记录"), "Onboarding should expose the 60-second record action.");
     assert(todayCheck.retentionTitle === "复盘中心", "Insights review center should render on first run.");
@@ -1408,7 +1438,7 @@ async function run() {
         overflow: document.documentElement.scrollWidth > innerWidth
       };
     })()`);
-    assert(updateFlow.version.includes("v1.4.0"), "Help should display the current semantic app version.");
+    assert(updateFlow.version.includes("v1.4.1"), "Help should display the current semantic app version.");
     assert(updateFlow.shown && updateFlow.dismissed, "App update banner should be visible and dismissible.");
     assert(updateFlow.message?.type === "SKIP_WAITING" && updateFlow.buttonText === "更新中", "Confirmed update should activate the waiting service worker with clear feedback.");
     assert(!updateFlow.overflow, "Update banner should not cause desktop overflow.");

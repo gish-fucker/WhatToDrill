@@ -1,12 +1,16 @@
-const CACHE_NAME = "habit-fitness-shell-v20260711-accessible-tabs";
+const CACHE_NAME = "habit-fitness-shell-v20260711-pwa-icons";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/privacy.html",
   "/terms.html",
-  "/styles.css?v=20260711-accessible-tabs-v1",
-  "/app.js?v=20260711-accessible-tabs-v1",
+  "/styles.css?v=20260711-pwa-icons-v1",
+  "/app.js?v=20260711-pwa-icons-v1",
   "/app-icon.svg",
+  "/app-icon-180.png",
+  "/app-icon-192.png",
+  "/app-icon-512.png",
+  "/app-icon-maskable-512.png",
   "/manifest.webmanifest"
 ];
 
