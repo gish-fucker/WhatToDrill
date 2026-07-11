@@ -8,7 +8,7 @@
     <title>日常与健身记录</title>
     <link rel="icon" href="./app-icon.svg" type="image/svg+xml">
     <link rel="manifest" href="./manifest.webmanifest">
-    <link rel="stylesheet" href="./styles.css?v=20260710-help-v1">
+    <link rel="stylesheet" href="./styles.css?v=20260711-reset-v1">
   </head>
   <body>
     <header class="app-header">
@@ -478,7 +478,19 @@
       </section>
     </main>
 
+    <dialog id="resetDataDialog" class="confirm-dialog" aria-labelledby="resetDataTitle" aria-describedby="resetDataDescription">
+      <div class="confirm-dialog-body">
+        <p class="eyebrow">Data control</p>
+        <h2 id="resetDataTitle">清空所有本地数据？</h2>
+        <p id="resetDataDescription">每日记录、训练、模板、偏好和建议历史都会从当前浏览器删除。此操作无法撤销，建议先导出 JSON 备份。</p>
+        <div class="confirm-dialog-actions">
+          <button id="cancelResetDataBtn" class="ghost-button" type="button">取消</button>
+          <button id="confirmResetDataBtn" class="danger-button" type="button">确认清空</button>
+        </div>
+      </div>
+    </dialog>
+
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=20260710-help-v1"></script>
+    <script src="./app.js?v=20260711-reset-v1"></script>
   </body>
 </html>

@@ -780,6 +780,45 @@ async function run() {
     assert(storageFailure.toast.includes("本地空间不足"), "Storage quota failure should explain the local storage issue.");
     assert(storageFailure.health.includes("存储需处理") && storageFailure.health.includes("需处理"), "Data health should expose storage failure status.");
 
+    const dataReset = await evaluate(cdp, `(() => {
+      const before = {
+        dailyLogs: state.dailyLogs.length,
+        workouts: state.workouts.length
+      };
+      document.querySelector("#resetDemoBtn").click();
+      const opened = document.querySelector("#resetDataDialog").open;
+      const focused = document.activeElement?.id;
+      document.querySelector("#cancelResetDataBtn").click();
+      const afterCancel = {
+        open: document.querySelector("#resetDataDialog").open,
+        dailyLogs: state.dailyLogs.length,
+        workouts: state.workouts.length
+      };
+      document.querySelector("#resetDemoBtn").click();
+      document.querySelector("#confirmResetDataBtn").click();
+      return {
+        before,
+        opened,
+        focused,
+        afterCancel,
+        afterConfirm: {
+          open: document.querySelector("#resetDataDialog").open,
+          dailyLogs: state.dailyLogs.length,
+          workouts: state.workouts.length,
+          storageRemoved: localStorage.getItem(${JSON.stringify(storageKey)}) === null,
+          toast: document.querySelector("#toast")?.textContent
+        }
+      };
+    })()`);
+    assert(dataReset.opened, "Clear data should open an in-app confirmation dialog.");
+    assert(dataReset.focused === "cancelResetDataBtn", "Clear data dialog should focus the safe action.");
+    assert(!dataReset.afterCancel.open, "Cancel should close the clear data dialog.");
+    assert(dataReset.afterCancel.dailyLogs === dataReset.before.dailyLogs && dataReset.afterCancel.workouts === dataReset.before.workouts, "Cancel should preserve all local data.");
+    assert(!dataReset.afterConfirm.open, "Confirm should close the clear data dialog.");
+    assert(dataReset.afterConfirm.dailyLogs === 0 && dataReset.afterConfirm.workouts === 0, "Confirm should reset local records.");
+    assert(dataReset.afterConfirm.storageRemoved, "Confirm should remove the persisted local state.");
+    assert(dataReset.afterConfirm.toast.includes("所有本地数据已清空"), "Confirm should explain that local data was cleared.");
+
     await evaluate(cdp, `document.querySelector('[data-tab="help"]').click(); window.scrollTo(0, 0);`);
     await delay(150);
     const helpPage = await evaluate(cdp, `(() => ({
@@ -847,6 +886,7 @@ async function run() {
         oneSetProgress,
         savedWorkout,
         riskReview,
+        dataReset,
         mobile,
         mobileInsights
       },

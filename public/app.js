@@ -2958,6 +2958,41 @@ function registerServiceWorker() {
     .catch(() => updateOfflineStatus("离线缓存未启用"));
 }
 
+function openResetDataDialog() {
+  const dialog = $("resetDataDialog");
+  if (typeof dialog.showModal === "function") dialog.showModal();
+  else dialog.setAttribute("open", "");
+  $("cancelResetDataBtn").focus();
+}
+
+function closeResetDataDialog() {
+  const dialog = $("resetDataDialog");
+  if (typeof dialog.close === "function") dialog.close();
+  else dialog.removeAttribute("open");
+}
+
+function resetAllData() {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    lastStorageIssue = "浏览器拒绝删除本地数据";
+    renderDataHealth();
+    showToast("无法清空数据，请检查浏览器存储权限");
+    return;
+  }
+
+  const freshState = loadState();
+  Object.keys(state).forEach(key => delete state[key]);
+  Object.assign(state, freshState);
+  pendingImport = null;
+  lastWorkoutSummary = null;
+  lastStorageIssue = "";
+  clearWorkoutForm();
+  closeResetDataDialog();
+  renderAll();
+  showToast("所有本地数据已清空");
+}
+
 function bindActions() {
   $("saveDailyBtn").addEventListener("click", saveDaily);
   $("addWaterBtn").addEventListener("click", addWaterServing);
@@ -2989,15 +3024,11 @@ function bindActions() {
     if (file) importData(file);
     event.target.value = "";
   });
-  $("resetDemoBtn").addEventListener("click", () => {
-    if (window.confirm("确定清空所有本地记录吗？")) {
-      localStorage.removeItem(STORAGE_KEY);
-      Object.assign(state, loadState());
-      pendingImport = null;
-      clearWorkoutForm();
-      renderAll();
-      showToast("数据已清空");
-    }
+  $("resetDemoBtn").addEventListener("click", openResetDataDialog);
+  $("cancelResetDataBtn").addEventListener("click", closeResetDataDialog);
+  $("confirmResetDataBtn").addEventListener("click", resetAllData);
+  $("resetDataDialog").addEventListener("click", event => {
+    if (event.target === $("resetDataDialog")) closeResetDataDialog();
   });
   $("templateList").addEventListener("click", event => {
     if (!event.target.classList.contains("delete-template")) return;
