@@ -49,6 +49,8 @@ npm start
 
 应用内“帮助”页也包含使用流程、安装、提醒、迁移和隐私说明。
 
+公开交付时可直接访问 `/privacy.html` 和 `/terms.html` 查看隐私政策与使用条款；两页也已加入离线应用外壳。
+
 ## 安装与离线
 
 在支持 PWA 的浏览器中，可通过页头的安装按钮或浏览器菜单安装应用。首次成功加载后，应用外壳可离线打开；记录仍保存在当前浏览器的本地存储中。
@@ -93,5 +95,6 @@ npm run test:smoke
 ## 重要文档
 
 - `docs/product/2026-07-08-commercialization-research.md`
+- `docs/superpowers/specs/2026-07-11-legal-pages-design.md`
 - `docs/superpowers/specs/2026-07-09-beginner-daily-coach-design.md`
 - `docs/superpowers/specs/2026-07-09-beginner-workout-execution-design.md`

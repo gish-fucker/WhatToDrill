@@ -151,6 +151,8 @@ async function run() {
   try {
     await waitForHttp(baseUrl);
     const indexResponse = await fetch(baseUrl);
+    const privacyResponse = await fetch(`${baseUrl}/privacy.html`);
+    const termsResponse = await fetch(`${baseUrl}/terms.html`);
     const versionedAssetResponse = await fetch(`${baseUrl}/app.js?v=smoke`);
     const headResponse = await fetch(`${baseUrl}/styles.css`, { method: "HEAD" });
     const invalidJsonResponse = await fetch(`${baseUrl}/api/advice`, {
@@ -181,6 +183,10 @@ async function run() {
       csp: indexResponse.headers.get("content-security-policy"),
       frameOptions: indexResponse.headers.get("x-frame-options"),
       indexCache: indexResponse.headers.get("cache-control"),
+      privacyStatus: privacyResponse.status,
+      privacyCache: privacyResponse.headers.get("cache-control"),
+      termsStatus: termsResponse.status,
+      termsCsp: termsResponse.headers.get("content-security-policy"),
       assetCache: versionedAssetResponse.headers.get("cache-control"),
       headStatus: headResponse.status,
       invalidJsonStatus: invalidJsonResponse.status,
@@ -193,6 +199,9 @@ async function run() {
     assert(serverHttp.csp?.includes("frame-ancestors 'none'"), "Static responses should include a restrictive CSP.");
     assert(serverHttp.frameOptions === "DENY", "Static responses should prevent framing.");
     assert(serverHttp.indexCache === "no-cache", "HTML should revalidate instead of using a stale shell.");
+    assert(serverHttp.privacyStatus === 200 && serverHttp.termsStatus === 200, "Legal pages should be served as public product pages.");
+    assert(serverHttp.privacyCache === "no-cache", "Privacy policy should revalidate so users receive policy updates.");
+    assert(serverHttp.termsCsp?.includes("frame-ancestors 'none'"), "Legal pages should receive the same security headers as the app.");
     assert(serverHttp.assetCache.includes("immutable"), "Versioned assets should use immutable caching.");
     assert(serverHttp.headStatus === 200, "Static files should support HEAD requests.");
     assert(serverHttp.invalidJsonStatus === 400, "Malformed advice JSON should return 400.");
@@ -1132,8 +1141,32 @@ async function run() {
     assert(helpPage.text.includes("完整备份") && helpPage.text.includes("导出 CSV"), "Help page should explain backup and CSV export.");
     assert(helpPage.text.includes("PWA 安装") && helpPage.text.includes("离线可用"), "Help page should explain install and offline behavior.");
     assert(helpPage.text.includes("不是医疗诊断") && helpPage.text.includes("云端建议可控"), "Help page should explain safety and privacy boundaries.");
+    assert(helpPage.text.includes("查看隐私政策") && helpPage.text.includes("查看使用条款"), "Help page should link to standalone legal pages.");
     assert(!helpPage.overflow, "Help desktop layout should not overflow.");
     await screenshot(cdp, "smoke-desktop.png");
+
+    await navigate(cdp, `${baseUrl}/privacy.html`);
+    const privacyPage = await evaluate(cdp, `(() => ({
+      title: document.title,
+      heading: document.querySelector("h1")?.textContent,
+      text: document.querySelector("main")?.innerText,
+      overflow: document.documentElement.scrollWidth > innerWidth
+    }))()`);
+    assert(privacyPage.title.includes("隐私政策") && privacyPage.heading === "隐私政策", "Privacy policy should have a clear document title.");
+    assert(privacyPage.text.includes("本地优先") && privacyPage.text.includes("云端建议") && privacyPage.text.includes("清空全部本地数据"), "Privacy policy should explain local, cloud, and deletion data paths.");
+    assert(!privacyPage.overflow, "Privacy policy desktop layout should not overflow.");
+
+    await navigate(cdp, `${baseUrl}/terms.html`);
+    const termsPage = await evaluate(cdp, `(() => ({
+      heading: document.querySelector("h1")?.textContent,
+      text: document.querySelector("main")?.innerText,
+      overflow: document.documentElement.scrollWidth > innerWidth
+    }))()`);
+    assert(termsPage.heading === "使用条款", "Terms page should have a clear document title.");
+    assert(termsPage.text.includes("不是医疗器械") && termsPage.text.includes("合理使用") && termsPage.text.includes("数据风险"), "Terms should cover health, acceptable use, and local data risks.");
+    assert(!termsPage.overflow, "Terms desktop layout should not overflow.");
+
+    await navigate(cdp, baseUrl);
 
     await cdp.send("Emulation.setDeviceMetricsOverride", {
       width: 390,
@@ -1162,6 +1195,15 @@ async function run() {
     assert(mobileHelp.title === "帮助与版本说明", "Mobile help page should render.");
     assert(!mobileHelp.overflow, "Mobile help layout should not overflow.");
 
+    await navigate(cdp, `${baseUrl}/privacy.html`);
+    const mobilePrivacy = await evaluate(cdp, `(() => ({
+      heading: document.querySelector("h1")?.textContent,
+      overflow: document.documentElement.scrollWidth > innerWidth
+    }))()`);
+    assert(mobilePrivacy.heading === "隐私政策", "Mobile privacy policy should render.");
+    assert(!mobilePrivacy.overflow, "Mobile privacy policy should not overflow.");
+
+    await navigate(cdp, baseUrl);
     await evaluate(cdp, `document.querySelector('[data-tab="insights"]').click(); window.scrollTo(0, 0);`);
     await delay(250);
     const mobileInsights = await evaluate(cdp, `(() => ({
