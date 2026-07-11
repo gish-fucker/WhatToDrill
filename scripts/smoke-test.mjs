@@ -153,6 +153,8 @@ async function run() {
     const indexResponse = await fetch(baseUrl);
     const privacyResponse = await fetch(`${baseUrl}/privacy.html`);
     const termsResponse = await fetch(`${baseUrl}/terms.html`);
+    const serviceWorkerResponse = await fetch(`${baseUrl}/sw.js`);
+    const serviceWorkerSource = await serviceWorkerResponse.text();
     const versionedAssetResponse = await fetch(`${baseUrl}/app.js?v=smoke`);
     const headResponse = await fetch(`${baseUrl}/styles.css`, { method: "HEAD" });
     const invalidJsonResponse = await fetch(`${baseUrl}/api/advice`, {
@@ -187,6 +189,7 @@ async function run() {
       privacyCache: privacyResponse.headers.get("cache-control"),
       termsStatus: termsResponse.status,
       termsCsp: termsResponse.headers.get("content-security-policy"),
+      updateMessageHandler: serviceWorkerSource.includes("SKIP_WAITING"),
       assetCache: versionedAssetResponse.headers.get("cache-control"),
       headStatus: headResponse.status,
       invalidJsonStatus: invalidJsonResponse.status,
@@ -202,6 +205,7 @@ async function run() {
     assert(serverHttp.privacyStatus === 200 && serverHttp.termsStatus === 200, "Legal pages should be served as public product pages.");
     assert(serverHttp.privacyCache === "no-cache", "Privacy policy should revalidate so users receive policy updates.");
     assert(serverHttp.termsCsp?.includes("frame-ancestors 'none'"), "Legal pages should receive the same security headers as the app.");
+    assert(serverHttp.updateMessageHandler, "Service worker should support user-confirmed activation.");
     assert(serverHttp.assetCache.includes("immutable"), "Versioned assets should use immutable caching.");
     assert(serverHttp.headStatus === 200, "Static files should support HEAD requests.");
     assert(serverHttp.invalidJsonStatus === 400, "Malformed advice JSON should return 400.");
@@ -1143,6 +1147,28 @@ async function run() {
     assert(helpPage.text.includes("不是医疗诊断") && helpPage.text.includes("云端建议可控"), "Help page should explain safety and privacy boundaries.");
     assert(helpPage.text.includes("查看隐私政策") && helpPage.text.includes("查看使用条款"), "Help page should link to standalone legal pages.");
     assert(!helpPage.overflow, "Help desktop layout should not overflow.");
+    const updateFlow = await evaluate(cdp, `(() => {
+      window.__updateMessage = null;
+      const registration = { waiting: { postMessage: message => { window.__updateMessage = message; } } };
+      showAppUpdate(registration);
+      const shown = !document.querySelector("#appUpdateBanner").hidden;
+      document.querySelector("#dismissAppUpdateBtn").click();
+      const dismissed = document.querySelector("#appUpdateBanner").hidden;
+      showAppUpdate(registration);
+      document.querySelector("#applyAppUpdateBtn").click();
+      return {
+        version: document.querySelector("#appVersion").textContent,
+        shown,
+        dismissed,
+        message: window.__updateMessage,
+        buttonText: document.querySelector("#applyAppUpdateBtn").textContent,
+        overflow: document.documentElement.scrollWidth > innerWidth
+      };
+    })()`);
+    assert(updateFlow.version.includes("v1.1.0"), "Help should display the current semantic app version.");
+    assert(updateFlow.shown && updateFlow.dismissed, "App update banner should be visible and dismissible.");
+    assert(updateFlow.message?.type === "SKIP_WAITING" && updateFlow.buttonText === "更新中", "Confirmed update should activate the waiting service worker with clear feedback.");
+    assert(!updateFlow.overflow, "Update banner should not cause desktop overflow.");
     await screenshot(cdp, "smoke-desktop.png");
 
     await navigate(cdp, `${baseUrl}/privacy.html`);

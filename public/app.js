@@ -1,5 +1,6 @@
 const STORAGE_KEY = "habit_fitness_app_v1";
 const WORKOUT_DRAFT_KEY = "habit_fitness_workout_draft_v1";
+const APP_VERSION = "1.1.0";
 const BACKUP_SCHEMA_VERSION = 1;
 
 const defaultSettings = {
@@ -108,6 +109,8 @@ let pendingDailyDeleteDate = null;
 let historyFilter = "all";
 let historySearch = "";
 let historyExpanded = false;
+let pendingAppUpdate = null;
+let updateReloadRequested = false;
 const onboardingTouched = {
   energy: false,
   soreness: false,
@@ -3259,6 +3262,28 @@ function updateOfflineStatus(message = "") {
   status.classList.toggle("offline", !isOnline);
 }
 
+function showAppUpdate(registration) {
+  if (!registration?.waiting) return;
+  pendingAppUpdate = registration;
+  $("appUpdateBanner").hidden = false;
+  updateOfflineStatus("新版本可用");
+}
+
+function dismissAppUpdate() {
+  $("appUpdateBanner").hidden = true;
+}
+
+function applyAppUpdate() {
+  if (!pendingAppUpdate?.waiting) {
+    showToast("更新正在准备，请稍后再试");
+    return;
+  }
+  updateReloadRequested = true;
+  $("applyAppUpdateBtn").disabled = true;
+  $("applyAppUpdateBtn").textContent = "更新中";
+  pendingAppUpdate.waiting.postMessage({ type: "SKIP_WAITING" });
+}
+
 function isStandaloneApp() {
   return window.matchMedia?.("(display-mode: standalone)")?.matches || window.navigator.standalone === true;
 }
@@ -3346,17 +3371,24 @@ function registerServiceWorker() {
   navigator.serviceWorker.register("/sw.js")
     .then(registration => {
       updateOfflineStatus(registration.active ? "离线缓存已就绪" : "正在准备离线缓存");
+      if (registration.waiting) showAppUpdate(registration);
       registration.addEventListener("updatefound", () => {
         const worker = registration.installing;
         if (!worker) return;
         worker.addEventListener("statechange", () => {
           if (worker.state === "installed" && navigator.serviceWorker.controller) {
-            updateOfflineStatus("新版本已缓存，刷新生效");
+            showAppUpdate(registration);
           }
         });
       });
     })
     .catch(() => updateOfflineStatus("离线缓存未启用"));
+
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!updateReloadRequested) return;
+    updateReloadRequested = false;
+    window.location.reload();
+  });
 }
 
 function openResetDataDialog() {
@@ -3396,6 +3428,8 @@ function resetAllData() {
 }
 
 function bindActions() {
+  $("applyAppUpdateBtn").addEventListener("click", applyAppUpdate);
+  $("dismissAppUpdateBtn").addEventListener("click", dismissAppUpdate);
   $("saveDailyBtn").addEventListener("click", saveDaily);
   $("addWaterBtn").addEventListener("click", addWaterServing);
   $("waterStepBtn").addEventListener("click", changeWaterStep);
@@ -3563,6 +3597,7 @@ function init() {
   const restoredWorkoutDraft = restoreWorkoutDraft();
   if (!$("exerciseRows").children.length) addExerciseCard();
   renderAll();
+  $("appVersion").textContent = `本地优先 · PWA · v${APP_VERSION}`;
   if (restoredWorkoutDraft) showToast("已恢复未完成的训练草稿");
   checkAiStatus();
   bindInstallPrompt();

@@ -8,7 +8,7 @@
     <title>日常与健身记录</title>
     <link rel="icon" href="./app-icon.svg" type="image/svg+xml">
     <link rel="manifest" href="./manifest.webmanifest">
-    <link rel="stylesheet" href="./styles.css?v=20260711-legal-pages-v1">
+    <link rel="stylesheet" href="./styles.css?v=20260711-update-flow-v1">
   </head>
   <body>
     <header class="app-header">
@@ -28,6 +28,17 @@
         <button id="exportBtn" class="ghost-button" type="button">导出</button>
       </div>
     </header>
+
+    <aside id="appUpdateBanner" class="app-update-banner" role="status" aria-live="polite" hidden>
+      <div>
+        <strong>新版本已准备好</strong>
+        <p>更新后会自动回到当前应用，未完成的训练草稿会继续保留。</p>
+      </div>
+      <div class="app-update-actions">
+        <button id="applyAppUpdateBtn" type="button">立即更新</button>
+        <button id="dismissAppUpdateBtn" class="ghost-button" type="button">稍后</button>
+      </div>
+    </aside>
 
     <main class="app-shell">
       <nav class="tabs" aria-label="主导航">
@@ -389,7 +400,7 @@
             <p class="eyebrow">Help</p>
             <h2>帮助与版本说明</h2>
           </div>
-          <span class="type-pill">本地优先 · PWA · v1</span>
+          <span id="appVersion" class="type-pill">本地优先 · PWA</span>
         </div>
 
         <div class="help-layout">
@@ -548,6 +559,6 @@
     </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=20260711-legal-pages-v1"></script>
+    <script src="./app.js?v=20260711-update-flow-v1"></script>
   </body>
 </html>

@@ -1,21 +1,23 @@
-const CACHE_NAME = "habit-fitness-shell-v20260711-legal-pages";
+const CACHE_NAME = "habit-fitness-shell-v20260711-update-flow";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/privacy.html",
   "/terms.html",
-  "/styles.css?v=20260711-legal-pages-v1",
-  "/app.js?v=20260711-legal-pages-v1",
+  "/styles.css?v=20260711-update-flow-v1",
+  "/app.js?v=20260711-update-flow-v1",
   "/app-icon.svg",
   "/manifest.webmanifest"
 ];
 
 self.addEventListener("install", event => {
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(APP_SHELL))
-      .then(() => self.skipWaiting())
+    caches.open(CACHE_NAME).then(cache => cache.addAll(APP_SHELL))
   );
+});
+
+self.addEventListener("message", event => {
+  if (event.data?.type === "SKIP_WAITING") self.skipWaiting();
 });
 
 self.addEventListener("activate", event => {
