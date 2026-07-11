@@ -8,7 +8,7 @@
     <title>日常与健身记录</title>
     <link rel="icon" href="./app-icon.svg" type="image/svg+xml">
     <link rel="manifest" href="./manifest.webmanifest">
-    <link rel="stylesheet" href="./styles.css?v=20260711-history-edit-v1">
+    <link rel="stylesheet" href="./styles.css?v=20260711-daily-edit-v1">
   </head>
   <body>
     <header class="app-header">
@@ -504,7 +504,20 @@
       </div>
     </dialog>
 
+    <dialog id="deleteDailyDialog" class="confirm-dialog" aria-labelledby="deleteDailyTitle" aria-describedby="deleteDailyDescription">
+      <div class="confirm-dialog-body">
+        <p class="eyebrow">Daily history</p>
+        <h2 id="deleteDailyTitle">删除这天的状态记录？</h2>
+        <p id="deleteDailyDescription">删除后，教练建议、状态趋势和周报会立即更新。此操作无法撤销。</p>
+        <p id="deleteDailySummary" class="delete-workout-summary"></p>
+        <div class="confirm-dialog-actions">
+          <button id="cancelDeleteDailyBtn" class="ghost-button" type="button">取消</button>
+          <button id="confirmDeleteDailyBtn" class="danger-button" type="button">确认删除</button>
+        </div>
+      </div>
+    </dialog>
+
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=20260711-history-edit-v1"></script>
+    <script src="./app.js?v=20260711-daily-edit-v1"></script>
   </body>
 </html>

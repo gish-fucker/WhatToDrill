@@ -393,6 +393,61 @@ async function run() {
     assert(afterDailySave.dailyLogs === 1, "Saving daily state should create the first daily log.");
     assert(afterDailySave.hidden, "Saving a daily log should hide onboarding.");
 
+    await evaluate(cdp, `document.querySelector('[data-tab="insights"]').click()`);
+    await delay(150);
+    const dailyEditLoaded = await evaluate(cdp, `(() => {
+      const original = state.dailyLogs[0];
+      document.querySelector(".edit-daily-record").click();
+      return {
+        originalDate: original.date,
+        activeTab: document.querySelector(".tab.active")?.dataset.tab,
+        date: document.querySelector("#dailyDate").value,
+        focused: document.activeElement?.id
+      };
+    })()`);
+    assert(dailyEditLoaded.activeTab === "today" && dailyEditLoaded.date === dailyEditLoaded.originalDate, "Editing daily history should load the original date on the today tab.");
+    assert(dailyEditLoaded.focused === "sleepHours", "Editing daily history should focus the first editable field.");
+    await evaluate(cdp, `(() => {
+      document.querySelector("#sleepHours").value = "8";
+      document.querySelector("#dailyNote").value = "修正后的状态";
+      document.querySelector("#saveDailyBtn").click();
+    })()`);
+    await delay(450);
+    const dailyEdited = await evaluate(cdp, `(() => {
+      const parsed = JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)}));
+      return {
+        count: parsed.dailyLogs.length,
+        sleep: parsed.dailyLogs[0].sleepHours,
+        note: parsed.dailyLogs[0].note
+      };
+    })()`);
+    assert(dailyEdited.count === 1 && dailyEdited.sleep === 8 && dailyEdited.note === "修正后的状态", "Saving daily edits should replace the same date without duplication.");
+
+    await evaluate(cdp, `document.querySelector('[data-tab="insights"]').click()`);
+    await delay(150);
+    const dailyDeleteCancel = await evaluate(cdp, `(() => {
+      document.querySelector(".delete-daily-record").click();
+      const opened = document.querySelector("#deleteDailyDialog").open;
+      const focused = document.activeElement?.id;
+      document.querySelector("#cancelDeleteDailyBtn").click();
+      return { opened, focused, closed: !document.querySelector("#deleteDailyDialog").open, count: state.dailyLogs.length };
+    })()`);
+    assert(dailyDeleteCancel.opened && dailyDeleteCancel.focused === "cancelDeleteDailyBtn", "Daily delete confirmation should default to cancel.");
+    assert(dailyDeleteCancel.closed && dailyDeleteCancel.count === 1, "Canceling daily deletion should preserve the record.");
+    const dailyDeleted = await evaluate(cdp, `(() => {
+      document.querySelector(".delete-daily-record").click();
+      document.querySelector("#confirmDeleteDailyBtn").click();
+      const parsed = JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)}));
+      return {
+        count: parsed.dailyLogs.length,
+        cardRemoved: !document.querySelector(".history-card[data-daily-date]"),
+        dialogClosed: !document.querySelector("#deleteDailyDialog").open,
+        toast: document.querySelector("#toast").textContent
+      };
+    })()`);
+    assert(dailyDeleted.count === 0 && dailyDeleted.cardRemoved, "Confirmed daily deletion should remove the record from storage and history.");
+    assert(dailyDeleted.dialogClosed && dailyDeleted.toast.includes("日常状态记录已删除"), "Confirmed daily deletion should close the dialog and explain success.");
+
     await evaluate(cdp, `(() => {
       document.querySelector('[data-tab="workout"]').click();
       document.querySelector("#workoutTitle").value = "草稿恢复测试";

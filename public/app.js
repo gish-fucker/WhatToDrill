@@ -104,6 +104,7 @@ let lastStorageIssue = "";
 let workoutDraftTimer = null;
 let editingWorkoutId = null;
 let pendingWorkoutDeleteId = null;
+let pendingDailyDeleteDate = null;
 const onboardingTouched = {
   energy: false,
   soreness: false,
@@ -858,6 +859,57 @@ function confirmDeleteWorkout() {
   showToast("训练记录已删除");
 }
 
+function editDailyRecord(date) {
+  const log = state.dailyLogs.find(item => item.date === date);
+  if (!log) {
+    showToast("这天的状态记录已不存在");
+    renderHistory();
+    return;
+  }
+  $("dailyDate").value = log.date;
+  loadDailyIntoForm(log.date);
+  activateTab("today");
+  $("sleepHours").focus();
+  showToast("已载入这天的状态，修改后保存即可");
+}
+
+function openDeleteDailyDialog(date) {
+  const log = state.dailyLogs.find(item => item.date === date);
+  if (!log) {
+    showToast("这天的状态记录已不存在");
+    renderHistory();
+    return;
+  }
+  pendingDailyDeleteDate = log.date;
+  $("deleteDailySummary").textContent = `${log.date} · 睡眠 ${log.sleepHours ?? "未填"}h · 疼痛 ${log.pain}/5`;
+  const dialog = $("deleteDailyDialog");
+  if (typeof dialog.showModal === "function") dialog.showModal();
+  else dialog.setAttribute("open", "");
+  $("cancelDeleteDailyBtn").focus();
+}
+
+function closeDeleteDailyDialog() {
+  pendingDailyDeleteDate = null;
+  const dialog = $("deleteDailyDialog");
+  if (typeof dialog.close === "function") dialog.close();
+  else dialog.removeAttribute("open");
+}
+
+function confirmDeleteDaily() {
+  if (!pendingDailyDeleteDate) return;
+  const date = pendingDailyDeleteDate;
+  const before = state.dailyLogs.length;
+  state.dailyLogs = state.dailyLogs.filter(item => item.date !== date);
+  closeDeleteDailyDialog();
+  if (state.dailyLogs.length === before) {
+    showToast("这天的状态记录已不存在");
+    return;
+  }
+  if ($("dailyDate").value === date) loadDailyIntoForm(date);
+  saveState();
+  showToast("日常状态记录已删除");
+}
+
 function buildSavedWorkoutSummary(workout) {
   const sets = countSets(workout);
   const suggestion = workout.sessionRpe >= 8
@@ -1139,10 +1191,14 @@ function renderHistory() {
     .sort((a, b) => b.date.localeCompare(a.date))
     .slice(0, 8)
     .map(log => `
-      <article class="history-card">
+      <article class="history-card" data-daily-date="${escapeAttr(log.date)}">
         <header><strong>${escapeHtml(log.date)}</strong><span class="type-pill">日常</span></header>
         <p class="muted">睡眠 ${log.sleepHours ?? "未填"}h · 精力 ${log.energy}/5 · 心情 ${log.mood}/5 · 疼痛 ${log.pain}/5</p>
         ${log.note ? `<p>${escapeHtml(log.note)}</p>` : ""}
+        <div class="history-card-actions">
+          <button class="ghost-button edit-daily-record" type="button">修改</button>
+          <button class="danger-button delete-daily-record" type="button">删除</button>
+        </div>
       </article>
     `);
 
@@ -3367,6 +3423,14 @@ function bindActions() {
   $("deleteWorkoutDialog").addEventListener("close", () => {
     pendingWorkoutDeleteId = null;
   });
+  $("cancelDeleteDailyBtn").addEventListener("click", closeDeleteDailyDialog);
+  $("confirmDeleteDailyBtn").addEventListener("click", confirmDeleteDaily);
+  $("deleteDailyDialog").addEventListener("click", event => {
+    if (event.target === $("deleteDailyDialog")) closeDeleteDailyDialog();
+  });
+  $("deleteDailyDialog").addEventListener("close", () => {
+    pendingDailyDeleteDate = null;
+  });
   $("templateList").addEventListener("click", event => {
     if (!event.target.classList.contains("delete-template")) return;
     state.templates = state.templates.filter(item => item.id !== event.target.dataset.id);
@@ -3398,13 +3462,21 @@ function bindActions() {
     if (event.target.closest("#exportWeeklyReportBtn")) exportWeeklyReport();
   });
   $("historyList").addEventListener("click", event => {
-    const card = event.target.closest("[data-workout-id]");
-    if (!card) return;
-    if (event.target.closest(".edit-workout-record")) {
-      editWorkoutRecord(card.dataset.workoutId);
+    const workoutCard = event.target.closest("[data-workout-id]");
+    if (workoutCard && event.target.closest(".edit-workout-record")) {
+      editWorkoutRecord(workoutCard.dataset.workoutId);
       return;
     }
-    if (event.target.closest(".delete-workout-record")) openDeleteWorkoutDialog(card.dataset.workoutId);
+    if (workoutCard && event.target.closest(".delete-workout-record")) {
+      openDeleteWorkoutDialog(workoutCard.dataset.workoutId);
+      return;
+    }
+    const dailyCard = event.target.closest("[data-daily-date]");
+    if (dailyCard && event.target.closest(".edit-daily-record")) {
+      editDailyRecord(dailyCard.dataset.dailyDate);
+      return;
+    }
+    if (dailyCard && event.target.closest(".delete-daily-record")) openDeleteDailyDialog(dailyCard.dataset.dailyDate);
   });
   $("importPreview").addEventListener("click", event => {
     if (event.target.closest("#confirmImportBtn")) {
