@@ -1,6 +1,6 @@
 const STORAGE_KEY = "habit_fitness_app_v1";
 const WORKOUT_DRAFT_KEY = "habit_fitness_workout_draft_v1";
-const APP_VERSION = "1.3.0";
+const APP_VERSION = "1.4.0";
 const CLOUD_ADVICE_CONSENT_VERSION = 1;
 const BACKUP_SCHEMA_VERSION = 1;
 
@@ -216,20 +216,42 @@ function setDateDefaults() {
 }
 
 function bindTabs() {
-  document.querySelectorAll(".tab").forEach(tab => {
+  const tabs = Array.from(document.querySelectorAll(".tab"));
+  tabs.forEach((tab, index) => {
     tab.addEventListener("click", () => activateTab(tab.dataset.tab));
+    tab.addEventListener("keydown", event => {
+      let nextIndex = null;
+      if (event.key === "ArrowRight") nextIndex = (index + 1) % tabs.length;
+      if (event.key === "ArrowLeft") nextIndex = (index - 1 + tabs.length) % tabs.length;
+      if (event.key === "Home") nextIndex = 0;
+      if (event.key === "End") nextIndex = tabs.length - 1;
+      if (nextIndex === null) return;
+      event.preventDefault();
+      const nextTab = tabs[nextIndex];
+      activateTab(nextTab.dataset.tab, { scroll: false });
+      nextTab.focus();
+    });
   });
+  const activeTab = tabs.find(tab => tab.classList.contains("active")) || tabs[0];
+  if (activeTab) activateTab(activeTab.dataset.tab, { scroll: false });
 }
 
-function activateTab(tabId) {
+function activateTab(tabId, options = {}) {
   const tab = document.querySelector(`.tab[data-tab="${tabId}"]`);
   const panel = $(tabId);
   if (!tab || !panel) return;
-  document.querySelectorAll(".tab").forEach(item => item.classList.remove("active"));
-  document.querySelectorAll(".tab-panel").forEach(item => item.classList.remove("active"));
-  tab.classList.add("active");
-  panel.classList.add("active");
-  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  document.querySelectorAll(".tab").forEach(item => {
+    const active = item === tab;
+    item.classList.toggle("active", active);
+    item.setAttribute("aria-selected", String(active));
+    item.tabIndex = active ? 0 : -1;
+  });
+  document.querySelectorAll(".tab-panel").forEach(item => {
+    const active = item === panel;
+    item.classList.toggle("active", active);
+    item.hidden = !active;
+  });
+  if (options.scroll !== false) panel.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function bindRanges() {

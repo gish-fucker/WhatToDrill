@@ -24,6 +24,37 @@
   box-sizing: border-box;
 }
 
+.skip-link {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  z-index: 100;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: var(--text);
+  color: #fff;
+  font-weight: 700;
+  transform: translateY(-160%);
+  transition: transform 0.16s ease;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.app-shell:focus {
+  outline: none;
+}
+
 [hidden] {
   display: none !important;
 }

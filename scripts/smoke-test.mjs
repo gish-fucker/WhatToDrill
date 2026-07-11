@@ -128,7 +128,7 @@ async function run() {
 
   const server = spawn(process.execPath, ["server.js"], {
     cwd: process.cwd(),
-    env: { ...process.env, HOST: "127.0.0.1", PORT: String(appPort), APP_VERSION: "1.3.0", OPENAI_API_KEY: "", ADVICE_RATE_LIMIT: "10" },
+    env: { ...process.env, HOST: "127.0.0.1", PORT: String(appPort), APP_VERSION: "1.4.0", OPENAI_API_KEY: "", ADVICE_RATE_LIMIT: "10" },
     stdio: "ignore",
     windowsHide: true
   });
@@ -232,7 +232,7 @@ async function run() {
     assert(serverHttp.csp?.includes("frame-ancestors 'none'"), "Static responses should include a restrictive CSP.");
     assert(serverHttp.frameOptions === "DENY", "Static responses should prevent framing.");
     assert(/^[0-9a-f-]{36}$/i.test(serverHttp.requestId), "API responses should expose a generated request ID.");
-    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.3.0", "Health response should expose status and release version.");
+    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.4.0", "Health response should expose status and release version.");
     assert(Number.isInteger(serverHttp.health.uptimeSeconds) && serverHttp.health.uptimeSeconds >= 0, "Health response should expose a valid uptime.");
     assert(serverHttp.health.openaiConfigured === false && serverHttp.health.model === "gpt-5-mini", "Health response should expose non-secret AI configuration state.");
     assert(serverHttp.indexCache === "no-cache", "HTML should revalidate instead of using a stale shell.");
@@ -307,6 +307,55 @@ async function run() {
     assert(todayCheck.weeklyTargetText.includes("本周还没有训练"), "Weekly target should explain the empty workout cadence.");
     assert(todayCheck.exerciseProgressText.includes("还没有可分析的动作"), "Empty exercise progress should explain missing workout data.");
     assert(!todayCheck.overflow, "Today desktop layout should not overflow.");
+
+    const accessibleTabs = await evaluate(cdp, `(() => {
+      const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
+      const relationsValid = tabs.every(tab => {
+        const panel = document.getElementById(tab.getAttribute("aria-controls"));
+        return panel?.getAttribute("role") === "tabpanel" && panel.getAttribute("aria-labelledby") === tab.id;
+      });
+      const initial = {
+        selected: tabs.filter(tab => tab.getAttribute("aria-selected") === "true").map(tab => tab.dataset.tab),
+        tabbable: tabs.filter(tab => tab.tabIndex === 0).map(tab => tab.dataset.tab),
+        hiddenPanels: document.querySelectorAll('[role="tabpanel"][hidden]').length
+      };
+      tabs[0].focus();
+      tabs[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+      const afterRight = {
+        active: document.querySelector('[role="tab"][aria-selected="true"]')?.dataset.tab,
+        focused: document.activeElement?.dataset.tab,
+        panelVisible: !document.querySelector("#workout").hidden
+      };
+      tabs[1].dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+      const afterEnd = {
+        active: document.querySelector('[role="tab"][aria-selected="true"]')?.dataset.tab,
+        focused: document.activeElement?.dataset.tab
+      };
+      tabs.at(-1).dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
+      const afterHome = {
+        active: document.querySelector('[role="tab"][aria-selected="true"]')?.dataset.tab,
+        focused: document.activeElement?.dataset.tab,
+        panelVisible: !document.querySelector("#today").hidden
+      };
+      const skipLink = document.querySelector(".skip-link");
+      return {
+        tablistRole: document.querySelector(".tabs")?.getAttribute("role"),
+        tabCount: tabs.length,
+        relationsValid,
+        initial,
+        afterRight,
+        afterEnd,
+        afterHome,
+        skipTarget: skipLink?.getAttribute("href"),
+        mainTabIndex: document.querySelector("#mainContent")?.tabIndex
+      };
+    })()`);
+    assert(accessibleTabs.tablistRole === "tablist" && accessibleTabs.tabCount === 5 && accessibleTabs.relationsValid, "Main navigation should expose complete tab and tabpanel relationships.");
+    assert(accessibleTabs.initial.selected.join() === "today" && accessibleTabs.initial.tabbable.join() === "today" && accessibleTabs.initial.hiddenPanels === 4, "Exactly one initial tab should be selected and tabbable while inactive panels stay hidden.");
+    assert(accessibleTabs.afterRight.active === "workout" && accessibleTabs.afterRight.focused === "workout" && accessibleTabs.afterRight.panelVisible, "ArrowRight should activate and focus the next tab.");
+    assert(accessibleTabs.afterEnd.active === "help" && accessibleTabs.afterEnd.focused === "help", "End should activate and focus the last tab.");
+    assert(accessibleTabs.afterHome.active === "today" && accessibleTabs.afterHome.focused === "today" && accessibleTabs.afterHome.panelVisible, "Home should return to the first tab and panel.");
+    assert(accessibleTabs.skipTarget === "#mainContent" && accessibleTabs.mainTabIndex === -1, "Skip link should target programmatically focusable main content.");
 
     const waterStepDialog = await evaluate(cdp, `(() => {
       document.querySelector("#waterStepBtn").click();
@@ -1359,7 +1408,7 @@ async function run() {
         overflow: document.documentElement.scrollWidth > innerWidth
       };
     })()`);
-    assert(updateFlow.version.includes("v1.3.0"), "Help should display the current semantic app version.");
+    assert(updateFlow.version.includes("v1.4.0"), "Help should display the current semantic app version.");
     assert(updateFlow.shown && updateFlow.dismissed, "App update banner should be visible and dismissible.");
     assert(updateFlow.message?.type === "SKIP_WAITING" && updateFlow.buttonText === "更新中", "Confirmed update should activate the waiting service worker with clear feedback.");
     assert(!updateFlow.overflow, "Update banner should not cause desktop overflow.");

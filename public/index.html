@@ -8,9 +8,10 @@
     <title>日常与健身记录</title>
     <link rel="icon" href="./app-icon.svg" type="image/svg+xml">
     <link rel="manifest" href="./manifest.webmanifest">
-    <link rel="stylesheet" href="./styles.css?v=20260711-cloud-consent-v1">
+    <link rel="stylesheet" href="./styles.css?v=20260711-accessible-tabs-v1">
   </head>
   <body>
+    <a class="skip-link" href="#mainContent">跳到主要内容</a>
     <header class="app-header">
       <div class="brand-block">
         <img class="brand-mark" src="./app-icon.svg" alt="" aria-hidden="true">
@@ -40,16 +41,16 @@
       </div>
     </aside>
 
-    <main class="app-shell">
-      <nav class="tabs" aria-label="主导航">
-        <button class="tab active" data-tab="today" type="button">今天</button>
-        <button class="tab" data-tab="workout" type="button">训练</button>
-        <button class="tab" data-tab="insights" type="button">洞察</button>
-        <button class="tab" data-tab="library" type="button">动作与模板</button>
-        <button class="tab" data-tab="help" type="button">帮助</button>
+    <main id="mainContent" class="app-shell" tabindex="-1">
+      <nav class="tabs" role="tablist" aria-label="主导航">
+        <button id="tab-today" class="tab active" data-tab="today" type="button" role="tab" aria-controls="today" aria-selected="true" tabindex="0">今天</button>
+        <button id="tab-workout" class="tab" data-tab="workout" type="button" role="tab" aria-controls="workout" aria-selected="false" tabindex="-1">训练</button>
+        <button id="tab-insights" class="tab" data-tab="insights" type="button" role="tab" aria-controls="insights" aria-selected="false" tabindex="-1">洞察</button>
+        <button id="tab-library" class="tab" data-tab="library" type="button" role="tab" aria-controls="library" aria-selected="false" tabindex="-1">动作与模板</button>
+        <button id="tab-help" class="tab" data-tab="help" type="button" role="tab" aria-controls="help" aria-selected="false" tabindex="-1">帮助</button>
       </nav>
 
-      <section id="today" class="tab-panel active">
+      <section id="today" class="tab-panel active" role="tabpanel" aria-labelledby="tab-today">
         <section id="dailyCoach" class="daily-coach" aria-label="今日建议"></section>
         <section id="safetyStrip" class="safety-strip" aria-label="安全提示"></section>
         <section id="focusStrip" class="focus-strip" aria-label="今日状态"></section>
@@ -123,7 +124,7 @@
         </form>
       </section>
 
-      <section id="workout" class="tab-panel">
+      <section id="workout" class="tab-panel" role="tabpanel" aria-labelledby="tab-workout" hidden>
         <div class="section-heading">
           <div>
             <p class="eyebrow">Workout</p>
@@ -184,7 +185,7 @@
         </div>
       </section>
 
-      <section id="insights" class="tab-panel">
+      <section id="insights" class="tab-panel" role="tabpanel" aria-labelledby="tab-insights" hidden>
         <div class="section-heading">
           <div>
             <p class="eyebrow">Insight</p>
@@ -240,7 +241,7 @@
         </div>
       </section>
 
-      <section id="library" class="tab-panel">
+      <section id="library" class="tab-panel" role="tabpanel" aria-labelledby="tab-library" hidden>
         <div class="section-heading">
           <div>
             <p class="eyebrow">Library</p>
@@ -394,7 +395,7 @@
         </div>
       </section>
 
-      <section id="help" class="tab-panel">
+      <section id="help" class="tab-panel" role="tabpanel" aria-labelledby="tab-help" hidden>
         <div class="section-heading">
           <div>
             <p class="eyebrow">Help</p>
@@ -607,6 +608,6 @@
     </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=20260711-cloud-consent-v1"></script>
+    <script src="./app.js?v=20260711-accessible-tabs-v1"></script>
   </body>
 </html>
