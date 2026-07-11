@@ -509,6 +509,76 @@ async function run() {
     assert(previousSetHistory.toast.includes("上次训练数据"), "Reuse should confirm what was filled.");
     assert(!previousSetHistory.overflow, "Exercise history should not overflow the workout layout.");
 
+    await evaluate(cdp, `document.querySelector('[data-tab="insights"]').click()`);
+    await delay(200);
+    const workoutEditLoaded = await evaluate(cdp, `(() => {
+      document.querySelector(".edit-workout-record").click();
+      return {
+        activeTab: document.querySelector(".tab.active")?.dataset.tab,
+        title: document.querySelector("#workoutTitle").value,
+        weight: document.querySelector(".set-weight").value,
+        saveText: document.querySelector("#saveWorkoutBtn").textContent,
+        finishText: document.querySelector("#finishWorkoutBtn").textContent,
+        cancelHidden: document.querySelector("#cancelWorkoutEditBtn").hidden
+      };
+    })()`);
+    assert(workoutEditLoaded.activeTab === "workout", "Editing history should open the workout tab.");
+    assert(workoutEditLoaded.weight === "20", "Editing history should load the original set values.");
+    assert(workoutEditLoaded.saveText === "保存修改" && workoutEditLoaded.finishText === "保存修改", "Edit mode should clearly label both save actions.");
+    assert(!workoutEditLoaded.cancelHidden, "Edit mode should expose a cancel action.");
+
+    await evaluate(cdp, `(() => {
+      document.querySelector("#workoutTitle").value = "修正后的训练";
+      document.querySelector("#workoutTitle").dispatchEvent(new Event("input", { bubbles: true }));
+      document.querySelector("#saveWorkoutBtn").click();
+    })()`);
+    await delay(650);
+    const workoutEdited = await evaluate(cdp, `(() => {
+      const parsed = JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)}));
+      return {
+        workouts: parsed.workouts.length,
+        title: parsed.workouts[0].title,
+        saveText: document.querySelector("#saveWorkoutBtn").textContent,
+        cancelHidden: document.querySelector("#cancelWorkoutEditBtn").hidden,
+        draftRemoved: localStorage.getItem(${JSON.stringify(workoutDraftKey)}) === null,
+        toast: document.querySelector("#toast").textContent
+      };
+    })()`);
+    assert(workoutEdited.workouts === 1 && workoutEdited.title === "修正后的训练", "Saving edits should replace the original workout without duplication.");
+    assert(workoutEdited.saveText === "保存训练" && workoutEdited.cancelHidden, "Saving edits should leave edit mode.");
+    assert(workoutEdited.draftRemoved && workoutEdited.toast.includes("修改已保存"), "Saving edits should clear the draft and confirm success.");
+
+    await evaluate(cdp, `document.querySelector('[data-tab="insights"]').click()`);
+    await delay(200);
+    const workoutDeleteCancel = await evaluate(cdp, `(() => {
+      document.querySelector(".delete-workout-record").click();
+      const opened = document.querySelector("#deleteWorkoutDialog").open;
+      const focused = document.activeElement?.id;
+      document.querySelector("#cancelDeleteWorkoutBtn").click();
+      return {
+        opened,
+        focused,
+        closed: !document.querySelector("#deleteWorkoutDialog").open,
+        workouts: state.workouts.length
+      };
+    })()`);
+    assert(workoutDeleteCancel.opened && workoutDeleteCancel.focused === "cancelDeleteWorkoutBtn", "Delete confirmation should open with focus on cancel.");
+    assert(workoutDeleteCancel.closed && workoutDeleteCancel.workouts === 1, "Canceling deletion should preserve the workout.");
+
+    const workoutDeleted = await evaluate(cdp, `(() => {
+      document.querySelector(".delete-workout-record").click();
+      document.querySelector("#confirmDeleteWorkoutBtn").click();
+      const parsed = JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)}));
+      return {
+        workouts: parsed.workouts.length,
+        cardRemoved: !document.querySelector(".history-card[data-workout-id]"),
+        dialogClosed: !document.querySelector("#deleteWorkoutDialog").open,
+        toast: document.querySelector("#toast").textContent
+      };
+    })()`);
+    assert(workoutDeleted.workouts === 0 && workoutDeleted.cardRemoved, "Confirmed deletion should remove the workout from storage and history.");
+    assert(workoutDeleted.dialogClosed && workoutDeleted.toast.includes("训练记录已删除"), "Confirmed deletion should close the dialog and explain success.");
+
     await evaluate(cdp, `(() => {
       const days = getLastDays(7);
       const dailyLogs = days.slice(1).map((date, index) => ({

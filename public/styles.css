@@ -2099,6 +2099,30 @@ input[type="checkbox"] {
   margin-bottom: 0;
 }
 
+.history-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.history-card-actions button {
+  min-height: 36px;
+  padding: 8px 12px;
+}
+
+.delete-workout-summary {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+  padding: 12px;
+  color: var(--text);
+  font-weight: 800;
+}
+
 .type-pill {
   min-height: 26px;
   display: inline-flex;
@@ -2785,6 +2809,15 @@ input[type="checkbox"] {
   }
 
   .exercise-history button {
+    width: 100%;
+  }
+
+  .history-card-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .history-card-actions button {
     width: 100%;
   }
 }

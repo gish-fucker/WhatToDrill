@@ -8,7 +8,7 @@
     <title>日常与健身记录</title>
     <link rel="icon" href="./app-icon.svg" type="image/svg+xml">
     <link rel="manifest" href="./manifest.webmanifest">
-    <link rel="stylesheet" href="./styles.css?v=20260711-draft-v1">
+    <link rel="stylesheet" href="./styles.css?v=20260711-history-edit-v1">
   </head>
   <body>
     <header class="app-header">
@@ -120,6 +120,7 @@
           </div>
           <div class="button-row">
             <button id="addExerciseRowBtn" class="ghost-button" type="button">添加动作</button>
+            <button id="cancelWorkoutEditBtn" class="ghost-button" type="button" hidden>取消修改</button>
             <button id="saveWorkoutBtn" type="button">保存训练</button>
           </div>
         </div>
@@ -490,7 +491,20 @@
       </div>
     </dialog>
 
+    <dialog id="deleteWorkoutDialog" class="confirm-dialog" aria-labelledby="deleteWorkoutTitle" aria-describedby="deleteWorkoutDescription">
+      <div class="confirm-dialog-body">
+        <p class="eyebrow">Workout history</p>
+        <h2 id="deleteWorkoutTitle">删除这次训练？</h2>
+        <p id="deleteWorkoutDescription">删除后，本周进度、趋势和动作分析会立即更新。此操作无法撤销。</p>
+        <p id="deleteWorkoutSummary" class="delete-workout-summary"></p>
+        <div class="confirm-dialog-actions">
+          <button id="cancelDeleteWorkoutBtn" class="ghost-button" type="button">取消</button>
+          <button id="confirmDeleteWorkoutBtn" class="danger-button" type="button">确认删除</button>
+        </div>
+      </div>
+    </dialog>
+
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=20260711-draft-v1"></script>
+    <script src="./app.js?v=20260711-history-edit-v1"></script>
   </body>
 </html>

@@ -102,6 +102,8 @@ let reminderTimer = null;
 let installPromptEvent = null;
 let lastStorageIssue = "";
 let workoutDraftTimer = null;
+let editingWorkoutId = null;
+let pendingWorkoutDeleteId = null;
 const onboardingTouched = {
   energy: false,
   soreness: false,
@@ -310,6 +312,7 @@ async function withButtonBusy(buttonId, busyText, action) {
       button.disabled = false;
       button.removeAttribute("aria-busy");
       button.textContent = previous;
+      if (buttonId === "saveWorkoutBtn") updateWorkoutEditMode();
     }, 260);
   }
 }
@@ -624,41 +627,51 @@ function saveWorkout() {
     return;
   }
 
+  const existingIndex = editingWorkoutId
+    ? state.workouts.findIndex(item => item.id === editingWorkoutId)
+    : -1;
+  const existingWorkout = existingIndex >= 0 ? state.workouts[existingIndex] : null;
+  const wasEditing = Boolean(existingWorkout);
   const workout = {
-    id: uid("workout"),
+    id: existingWorkout?.id || uid("workout"),
     date: $("workoutDate").value || today(),
     title: $("workoutTitle").value.trim() || "未命名训练",
     duration: numberOrNull($("duration").value),
     sessionRpe: Number($("sessionRpe").value),
     note: $("workoutNote").value.trim(),
     exercises,
-    createdAt: new Date().toISOString()
+    createdAt: existingWorkout?.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString()
   };
 
-  state.workouts.push(workout);
-  markExercisesUsed(exercises, workout.date);
+  if (wasEditing) state.workouts.splice(existingIndex, 1, workout);
+  else state.workouts.push(workout);
+  refreshExerciseLastUsed();
   lastWorkoutSummary = buildSavedWorkoutSummary(workout);
+  editingWorkoutId = null;
   clearWorkoutDraft();
   saveState();
   clearWorkoutForm();
   renderWorkoutExecution();
-  showToast("训练已保存");
+  showToast(wasEditing ? "训练修改已保存" : "训练已保存");
 }
 
 function saveWorkoutWithFeedback() {
   return withButtonBusy("saveWorkoutBtn", "保存中", () => saveWorkout());
 }
 
-function markExercisesUsed(exercises, date) {
-  exercises.forEach(item => {
-    const exercise = state.exercises.find(existing => existing.name === item.name);
-    if (exercise) {
-      exercise.lastUsed = date;
-    }
+function refreshExerciseLastUsed() {
+  state.exercises.forEach(exercise => {
+    exercise.lastUsed = state.workouts
+      .filter(workout => workout.exercises?.some(item => item.name === exercise.name))
+      .map(workout => workout.date)
+      .sort((a, b) => b.localeCompare(a))[0] || "";
   });
 }
 
 function clearWorkoutForm() {
+  editingWorkoutId = null;
+  updateWorkoutEditMode();
   $("workoutDate").value = today();
   $("workoutTitle").value = "";
   $("duration").value = "";
@@ -763,6 +776,88 @@ function restoreWorkoutDraft() {
   }
 }
 
+function updateWorkoutEditMode() {
+  const isEditing = Boolean(editingWorkoutId);
+  $("saveWorkoutBtn").textContent = isEditing ? "保存修改" : "保存训练";
+  $("cancelWorkoutEditBtn").hidden = !isEditing;
+}
+
+function editWorkoutRecord(workoutId) {
+  const workout = state.workouts.find(item => item.id === workoutId);
+  if (!workout) {
+    showToast("这条训练记录已不存在");
+    renderHistory();
+    return;
+  }
+
+  editingWorkoutId = workout.id;
+  updateWorkoutEditMode();
+  $("workoutDate").value = workout.date || today();
+  $("workoutTitle").value = workout.title || "";
+  $("duration").value = workout.duration ?? "";
+  $("sessionRpe").value = workout.sessionRpe ?? 6;
+  $("sessionRpeValue").textContent = $("sessionRpe").value;
+  $("workoutNote").value = workout.note || "";
+  $("exerciseRows").innerHTML = "";
+  workout.exercises.forEach(exercise => addExerciseCard(cloneExercise(exercise)));
+  lastWorkoutSummary = null;
+  persistWorkoutDraft();
+  renderWorkoutExecution();
+  renderWorkoutDashboard();
+  activateTab("workout");
+  showToast("已载入训练记录，可以修改后保存");
+}
+
+function cancelWorkoutEdit() {
+  if (!editingWorkoutId) return;
+  clearWorkoutDraft();
+  clearWorkoutForm();
+  renderAll();
+  showToast("已取消修改，原记录保持不变");
+}
+
+function openDeleteWorkoutDialog(workoutId) {
+  const workout = state.workouts.find(item => item.id === workoutId);
+  if (!workout) {
+    showToast("这条训练记录已不存在");
+    renderHistory();
+    return;
+  }
+  pendingWorkoutDeleteId = workout.id;
+  $("deleteWorkoutSummary").textContent = `${workout.date} · ${workout.title} · ${countSets(workout)} 组`;
+  const dialog = $("deleteWorkoutDialog");
+  if (typeof dialog.showModal === "function") dialog.showModal();
+  else dialog.setAttribute("open", "");
+  $("cancelDeleteWorkoutBtn").focus();
+}
+
+function closeDeleteWorkoutDialog() {
+  pendingWorkoutDeleteId = null;
+  const dialog = $("deleteWorkoutDialog");
+  if (typeof dialog.close === "function") dialog.close();
+  else dialog.removeAttribute("open");
+}
+
+function confirmDeleteWorkout() {
+  if (!pendingWorkoutDeleteId) return;
+  const workoutId = pendingWorkoutDeleteId;
+  const before = state.workouts.length;
+  state.workouts = state.workouts.filter(item => item.id !== workoutId);
+  if (state.workouts.length === before) {
+    closeDeleteWorkoutDialog();
+    showToast("这条训练记录已不存在");
+    return;
+  }
+  if (editingWorkoutId === workoutId) {
+    clearWorkoutDraft();
+    clearWorkoutForm();
+  }
+  refreshExerciseLastUsed();
+  closeDeleteWorkoutDialog();
+  saveState();
+  showToast("训练记录已删除");
+}
+
 function buildSavedWorkoutSummary(workout) {
   const sets = countSets(workout);
   const suggestion = workout.sessionRpe >= 8
@@ -809,6 +904,8 @@ function loadTemplate() {
 }
 
 function fillWorkoutFromTemplate(template, title) {
+  editingWorkoutId = null;
+  updateWorkoutEditMode();
   $("workoutDate").value = today();
   $("workoutTitle").value = title || template.name;
   $("duration").value = template.duration ?? "";
@@ -1054,10 +1151,17 @@ function renderHistory() {
     .sort((a, b) => b.date.localeCompare(a.date))
     .slice(0, 8)
     .map(workout => `
-      <article class="history-card">
-        <header><strong>${escapeHtml(workout.date)} ${escapeHtml(workout.title)}</strong><span class="type-pill workout-pill">训练</span></header>
+      <article class="history-card" data-workout-id="${escapeAttr(workout.id)}">
+        <header>
+          <strong>${escapeHtml(workout.date)} ${escapeHtml(workout.title)}</strong>
+          <span class="type-pill workout-pill">训练</span>
+        </header>
         <p class="muted">${workout.exercises.length} 个动作 · ${countSets(workout)} 组 · RPE ${workout.sessionRpe}/10</p>
         <p>${workout.exercises.map(item => escapeHtml(item.name)).join("、")}</p>
+        <div class="history-card-actions">
+          <button class="ghost-button edit-workout-record" type="button">修改</button>
+          <button class="danger-button delete-workout-record" type="button">删除</button>
+        </div>
       </article>
     `);
 
@@ -1531,7 +1635,7 @@ function renderWorkoutExecution() {
       </div>
     </div>
     <div class="execution-actions">
-      <button id="finishWorkoutBtn" type="button">完成并保存</button>
+      <button id="finishWorkoutBtn" type="button">${editingWorkoutId ? "保存修改" : "完成并保存"}</button>
       <button id="loadCoachWorkoutBtn" class="ghost-button" type="button">载入今日建议</button>
       <button id="executionAddExerciseBtn" class="ghost-button" type="button">添加动作</button>
     </div>
@@ -3231,6 +3335,7 @@ function bindActions() {
     scheduleWorkoutDraftSave();
   });
   $("saveWorkoutBtn").addEventListener("click", saveWorkoutWithFeedback);
+  $("cancelWorkoutEditBtn").addEventListener("click", cancelWorkoutEdit);
   $("saveTemplateBtn").addEventListener("click", saveTemplate);
   $("loadTemplateBtn").addEventListener("click", loadTemplate);
   $("addLibraryExerciseBtn").addEventListener("click", addLibraryExercise);
@@ -3253,6 +3358,14 @@ function bindActions() {
   $("confirmResetDataBtn").addEventListener("click", resetAllData);
   $("resetDataDialog").addEventListener("click", event => {
     if (event.target === $("resetDataDialog")) closeResetDataDialog();
+  });
+  $("cancelDeleteWorkoutBtn").addEventListener("click", closeDeleteWorkoutDialog);
+  $("confirmDeleteWorkoutBtn").addEventListener("click", confirmDeleteWorkout);
+  $("deleteWorkoutDialog").addEventListener("click", event => {
+    if (event.target === $("deleteWorkoutDialog")) closeDeleteWorkoutDialog();
+  });
+  $("deleteWorkoutDialog").addEventListener("close", () => {
+    pendingWorkoutDeleteId = null;
   });
   $("templateList").addEventListener("click", event => {
     if (!event.target.classList.contains("delete-template")) return;
@@ -3283,6 +3396,15 @@ function bindActions() {
   });
   $("retentionInsights").addEventListener("click", event => {
     if (event.target.closest("#exportWeeklyReportBtn")) exportWeeklyReport();
+  });
+  $("historyList").addEventListener("click", event => {
+    const card = event.target.closest("[data-workout-id]");
+    if (!card) return;
+    if (event.target.closest(".edit-workout-record")) {
+      editWorkoutRecord(card.dataset.workoutId);
+      return;
+    }
+    if (event.target.closest(".delete-workout-record")) openDeleteWorkoutDialog(card.dataset.workoutId);
   });
   $("importPreview").addEventListener("click", event => {
     if (event.target.closest("#confirmImportBtn")) {
