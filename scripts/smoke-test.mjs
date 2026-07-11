@@ -149,6 +149,46 @@ async function run() {
   let cdp;
   try {
     await waitForHttp(baseUrl);
+    const indexResponse = await fetch(baseUrl);
+    const versionedAssetResponse = await fetch(`${baseUrl}/app.js?v=smoke`);
+    const headResponse = await fetch(`${baseUrl}/styles.css`, { method: "HEAD" });
+    const invalidJsonResponse = await fetch(`${baseUrl}/api/advice`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{"
+    });
+    const missingKeyResponse = await fetch(`${baseUrl}/api/advice`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}"
+    });
+    const oversizedResponse = await fetch(`${baseUrl}/api/advice`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ value: "x".repeat(1_000_001) })
+    });
+    const methodResponse = await fetch(`${baseUrl}/api/health`, { method: "POST" });
+    const serverHttp = {
+      csp: indexResponse.headers.get("content-security-policy"),
+      frameOptions: indexResponse.headers.get("x-frame-options"),
+      indexCache: indexResponse.headers.get("cache-control"),
+      assetCache: versionedAssetResponse.headers.get("cache-control"),
+      headStatus: headResponse.status,
+      invalidJsonStatus: invalidJsonResponse.status,
+      missingKeyStatus: missingKeyResponse.status,
+      oversizedStatus: oversizedResponse.status,
+      methodStatus: methodResponse.status
+    };
+    assert(serverHttp.csp?.includes("frame-ancestors 'none'"), "Static responses should include a restrictive CSP.");
+    assert(serverHttp.frameOptions === "DENY", "Static responses should prevent framing.");
+    assert(serverHttp.indexCache === "no-cache", "HTML should revalidate instead of using a stale shell.");
+    assert(serverHttp.assetCache.includes("immutable"), "Versioned assets should use immutable caching.");
+    assert(serverHttp.headStatus === 200, "Static files should support HEAD requests.");
+    assert(serverHttp.invalidJsonStatus === 400, "Malformed advice JSON should return 400.");
+    assert(serverHttp.missingKeyStatus === 501, "Advice should explain when the API key is unavailable.");
+    assert(serverHttp.oversizedStatus === 413, "Oversized advice payloads should return 413.");
+    assert(serverHttp.methodStatus === 405, "Unsupported API methods should return 405.");
+
     await waitForHttp(`http://localhost:${chromePort}/json/version`);
     const pages = await getJson(`http://localhost:${chromePort}/json/list`);
     const page = pages.find(item => item.type === "page") || pages[0];
@@ -788,6 +828,7 @@ async function run() {
     console.log(JSON.stringify({
       ok: true,
       checks: {
+        serverHttp,
         today: todayCheck,
         loadedWorkout,
         blockedSave,
