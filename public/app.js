@@ -12,7 +12,8 @@ const defaultSettings = {
   workoutReminderEnabled: false,
   workoutReminderTime: "18:30",
   lastDailyReminderDate: "",
-  lastWorkoutReminderDate: ""
+  lastWorkoutReminderDate: "",
+  lastBackupAt: ""
 };
 
 const defaultExercises = [
@@ -270,7 +271,8 @@ function normalizeSettings(settings = {}) {
     workoutReminderEnabled: Boolean(settings.workoutReminderEnabled),
     workoutReminderTime: sanitizeReminderTime(settings.workoutReminderTime ?? defaultSettings.workoutReminderTime, defaultSettings.workoutReminderTime),
     lastDailyReminderDate: isValidDateText(settings.lastDailyReminderDate) ? settings.lastDailyReminderDate : "",
-    lastWorkoutReminderDate: isValidDateText(settings.lastWorkoutReminderDate) ? settings.lastWorkoutReminderDate : ""
+    lastWorkoutReminderDate: isValidDateText(settings.lastWorkoutReminderDate) ? settings.lastWorkoutReminderDate : "",
+    lastBackupAt: Number.isFinite(Date.parse(settings.lastBackupAt)) ? new Date(settings.lastBackupAt).toISOString() : ""
   };
 }
 
@@ -1094,13 +1096,27 @@ function buildDataHealth() {
   const latestWorkout = state.workouts.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
   const totalSets = state.workouts.reduce((sum, workout) => sum + countSets(workout), 0);
   const hasUsefulBackupData = dailyCount >= 3 || workoutCount >= 1;
-  const level = lastStorageIssue ? "medium" : hasUsefulBackupData ? "high" : dailyCount || workoutCount ? "medium" : "low";
-  const label = lastStorageIssue ? "存储需处理" : level === "high" ? "可备份" : level === "medium" ? "刚开始" : "暂无数据";
-  const note = lastStorageIssue || (level === "high"
-    ? "当前数据已经值得定期导出备份。换设备前请先导出 JSON。"
-    : level === "medium"
-      ? "已经有少量记录，继续补齐训练和状态后，备份会更有价值。"
-      : "还没有本地记录。导入前会先预览，避免误覆盖。");
+  const backup = getBackupStatus(state.settings.lastBackupAt);
+  const level = lastStorageIssue
+    ? "medium"
+    : hasUsefulBackupData && backup.ageDays !== null && backup.ageDays <= 7
+      ? "high"
+      : dailyCount || workoutCount ? "medium" : "low";
+  const label = lastStorageIssue
+    ? "存储需处理"
+    : !dailyCount && !workoutCount ? "暂无数据"
+      : hasUsefulBackupData && backup.ageDays === null ? "待备份"
+        : backup.ageDays !== null && backup.ageDays <= 7 ? "备份正常"
+          : backup.ageDays !== null && backup.ageDays > 30 ? "备份过期" : "建议备份";
+  const note = lastStorageIssue || (!dailyCount && !workoutCount
+    ? "还没有本地记录。导入前会先预览，避免误覆盖。"
+    : hasUsefulBackupData && backup.ageDays === null
+      ? "当前数据尚未做过完整 JSON 备份。清理浏览器或更换设备前请先导出。"
+      : backup.ageDays !== null && backup.ageDays > 30
+        ? "上次完整备份已超过 30 天，建议现在导出新的 JSON。"
+        : backup.ageDays !== null && backup.ageDays <= 7
+          ? "完整 JSON 备份较新。仍建议在重要训练周期结束后再次导出。"
+          : "已有本地记录，建议定期导出 JSON 完整备份。");
 
   return {
     level,
@@ -1112,9 +1128,19 @@ function buildDataHealth() {
       { label: "训练", value: `${workoutCount} 次` },
       { label: "组数", value: `${totalSets} 组` },
       { label: "最新", value: latestWorkout?.date || latestDaily?.date || "暂无" },
+      { label: "完整备份", value: backup.label },
       { label: "存储", value: lastStorageIssue ? "需处理" : "正常" }
     ]
   };
+}
+
+function getBackupStatus(timestamp) {
+  const parsed = Date.parse(timestamp);
+  if (!Number.isFinite(parsed)) return { ageDays: null, label: "从未备份" };
+  const ageDays = Math.max(0, Math.floor((Date.now() - parsed) / 86400000));
+  if (ageDays === 0) return { ageDays, label: "今天" };
+  if (ageDays === 1) return { ageDays, label: "昨天" };
+  return { ageDays, label: `${ageDays} 天前` };
 }
 
 function renderImportPreview() {
@@ -2637,6 +2663,8 @@ function generateLocalAdvice(payload, reason) {
 }
 
 function exportData() {
+  state.settings.lastBackupAt = new Date().toISOString();
+  persistState();
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -2644,6 +2672,8 @@ function exportData() {
   link.download = `habit-fitness-backup-${today()}.json`;
   link.click();
   URL.revokeObjectURL(url);
+  renderDataHealth();
+  showToast("JSON 完整备份已导出");
 }
 
 function exportCsvSummary() {

@@ -653,6 +653,29 @@ async function run() {
     assert(reminderEngine.notifications.length === 2, "Reminder scheduler should deliver two local notifications in the test hook.");
     assert(reminderEngine.lastDaily && reminderEngine.lastWorkout, "Reminder scheduler should persist last sent dates.");
 
+    const jsonBackup = await evaluate(cdp, `(() => {
+      const originalClick = HTMLAnchorElement.prototype.click;
+      let downloadName = "";
+      HTMLAnchorElement.prototype.click = function captureDownload() {
+        downloadName = this.download;
+      };
+      exportData();
+      HTMLAnchorElement.prototype.click = originalClick;
+      const parsed = JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)}));
+      return {
+        downloadName,
+        stateTimestamp: state.settings.lastBackupAt,
+        storedTimestamp: parsed.settings.lastBackupAt,
+        health: document.querySelector("#dataHealth")?.innerText,
+        toast: document.querySelector("#toast")?.textContent
+      };
+    })()`);
+    assert(jsonBackup.downloadName.endsWith(".json"), "Full backup should initiate a JSON download.");
+    assert(Number.isFinite(Date.parse(jsonBackup.stateTimestamp)), "Full backup should record a valid timestamp in memory.");
+    assert(jsonBackup.storedTimestamp === jsonBackup.stateTimestamp, "Full backup timestamp should persist locally.");
+    assert(jsonBackup.health.includes("完整备份") && jsonBackup.health.includes("今天"), "Data health should show a current full backup.");
+    assert(jsonBackup.toast.includes("JSON 完整备份已导出"), "Full backup should confirm export to the user.");
+
     const csvExport = await evaluate(cdp, `(() => {
       const snapshot = JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)}));
       state.dailyLogs = [{
