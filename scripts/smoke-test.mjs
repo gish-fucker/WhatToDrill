@@ -662,10 +662,13 @@ async function run() {
       exportData();
       HTMLAnchorElement.prototype.click = originalClick;
       const parsed = JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)}));
+      const payload = buildBackupPayload();
       return {
         downloadName,
         stateTimestamp: state.settings.lastBackupAt,
         storedTimestamp: parsed.settings.lastBackupAt,
+        schemaVersion: payload.schemaVersion,
+        exportedAt: payload.exportedAt,
         health: document.querySelector("#dataHealth")?.innerText,
         toast: document.querySelector("#toast")?.textContent
       };
@@ -673,8 +676,28 @@ async function run() {
     assert(jsonBackup.downloadName.endsWith(".json"), "Full backup should initiate a JSON download.");
     assert(Number.isFinite(Date.parse(jsonBackup.stateTimestamp)), "Full backup should record a valid timestamp in memory.");
     assert(jsonBackup.storedTimestamp === jsonBackup.stateTimestamp, "Full backup timestamp should persist locally.");
+    assert(jsonBackup.schemaVersion === 1, "Full backup should declare schema version 1.");
+    assert(jsonBackup.exportedAt === jsonBackup.stateTimestamp, "Full backup metadata should match the recorded backup time.");
     assert(jsonBackup.health.includes("完整备份") && jsonBackup.health.includes("今天"), "Data health should show a current full backup.");
     assert(jsonBackup.toast.includes("JSON 完整备份已导出"), "Full backup should confirm export to the user.");
+
+    const futureBackup = await evaluate(cdp, `(() => {
+      const preview = validateImportPayload({
+        schemaVersion: 2,
+        dailyLogs: [{ id: "future", date: today() }],
+        workouts: [],
+        exercises: [],
+        templates: []
+      }, "future-backup.json");
+      return {
+        canImport: preview.canImport,
+        issues: preview.issues,
+        metric: preview.metrics[0]
+      };
+    })()`);
+    assert(!futureBackup.canImport, "A backup from a newer schema must be blocked.");
+    assert(futureBackup.issues.some(issue => issue.includes("v2") && issue.includes("升级应用")), "A newer backup should explain the required upgrade.");
+    assert(futureBackup.metric.value === "v2", "Import preview should expose the backup schema version.");
 
     const csvExport = await evaluate(cdp, `(() => {
       const snapshot = JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)}));

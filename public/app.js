@@ -1,4 +1,5 @@
 const STORAGE_KEY = "habit_fitness_app_v1";
+const BACKUP_SCHEMA_VERSION = 1;
 
 const defaultSettings = {
   waterStepMl: 500,
@@ -2665,7 +2666,7 @@ function generateLocalAdvice(payload, reason) {
 function exportData() {
   state.settings.lastBackupAt = new Date().toISOString();
   persistState();
-  const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+  const blob = new Blob([JSON.stringify(buildBackupPayload(), null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -2674,6 +2675,14 @@ function exportData() {
   URL.revokeObjectURL(url);
   renderDataHealth();
   showToast("JSON 完整备份已导出");
+}
+
+function buildBackupPayload() {
+  return {
+    ...state,
+    schemaVersion: BACKUP_SCHEMA_VERSION,
+    exportedAt: state.settings.lastBackupAt || new Date().toISOString()
+  };
 }
 
 function exportCsvSummary() {
@@ -2778,6 +2787,13 @@ function validateImportPayload(imported, fileName = "backup.json") {
     };
   }
 
+  const schemaVersion = imported.schemaVersion ?? 1;
+  if (!Number.isInteger(schemaVersion) || schemaVersion < 1) {
+    issues.push("备份格式版本无效。");
+  } else if (schemaVersion > BACKUP_SCHEMA_VERSION) {
+    issues.push(`此备份使用 v${schemaVersion} 格式，当前应用仅支持到 v${BACKUP_SCHEMA_VERSION}。请先升级应用。`);
+  }
+
   const dailyLogs = Array.isArray(imported.dailyLogs) ? imported.dailyLogs : [];
   const workouts = Array.isArray(imported.workouts) ? imported.workouts : [];
   const exercises = Array.isArray(imported.exercises) ? imported.exercises : [];
@@ -2813,6 +2829,7 @@ function validateImportPayload(imported, fileName = "backup.json") {
       ? "确认后会覆盖当前浏览器里的本地数据。"
       : blockingIssues.length ? "文件结构存在问题，暂不覆盖本地数据。" : "文件里没有可恢复的数据。",
     metrics: [
+      { label: "格式", value: `v${Number.isInteger(schemaVersion) ? schemaVersion : "?"}` },
       { label: "日常", value: `${dailyLogs.length} 条` },
       { label: "训练", value: `${workouts.length} 次` },
       { label: "动作", value: `${exercises.length} 个` },
