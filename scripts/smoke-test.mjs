@@ -128,7 +128,7 @@ async function run() {
 
   const server = spawn(process.execPath, ["server.js"], {
     cwd: process.cwd(),
-    env: { ...process.env, HOST: "127.0.0.1", PORT: String(appPort), APP_VERSION: "1.2.1", OPENAI_API_KEY: "", ADVICE_RATE_LIMIT: "10" },
+    env: { ...process.env, HOST: "127.0.0.1", PORT: String(appPort), APP_VERSION: "1.3.0", OPENAI_API_KEY: "", ADVICE_RATE_LIMIT: "10" },
     stdio: "ignore",
     windowsHide: true
   });
@@ -232,7 +232,7 @@ async function run() {
     assert(serverHttp.csp?.includes("frame-ancestors 'none'"), "Static responses should include a restrictive CSP.");
     assert(serverHttp.frameOptions === "DENY", "Static responses should prevent framing.");
     assert(/^[0-9a-f-]{36}$/i.test(serverHttp.requestId), "API responses should expose a generated request ID.");
-    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.2.1", "Health response should expose status and release version.");
+    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.3.0", "Health response should expose status and release version.");
     assert(Number.isInteger(serverHttp.health.uptimeSeconds) && serverHttp.health.uptimeSeconds >= 0, "Health response should expose a valid uptime.");
     assert(serverHttp.health.openaiConfigured === false && serverHttp.health.model === "gpt-5-mini", "Health response should expose non-secret AI configuration state.");
     assert(serverHttp.indexCache === "no-cache", "HTML should revalidate instead of using a stale shell.");
@@ -365,6 +365,75 @@ async function run() {
     assert(advicePayloadShape.schemaVersion === 1 && !advicePayloadShape.topLevelExercises, "Cloud advice payload should be versioned and omit the full exercise library.");
     assert(!advicePayloadShape.dailyKeys.includes("id") && !advicePayloadShape.dailyKeys.includes("habits") && !advicePayloadShape.dailyKeys.includes("updatedAt"), "Cloud advice should omit daily record identifiers, timestamps, and habit objects.");
     assert(!advicePayloadShape.workoutKeys.includes("id") && !advicePayloadShape.workoutKeys.includes("createdAt") && advicePayloadShape.exerciseName === "腿举", "Cloud advice should keep useful workout facts without local identifiers.");
+
+    const cloudConsentFlow = await evaluate(cdp, `(async () => {
+      const snapshot = JSON.parse(JSON.stringify(state));
+      const originalFetch = window.fetch;
+      let adviceRequests = 0;
+      window.fetch = async (url, options) => {
+        if (url === "/api/advice") {
+          adviceRequests += 1;
+          return { ok: true, json: async () => ({ advice: "云端测试建议", model: "test-model" }) };
+        }
+        return originalFetch(url, options);
+      };
+      state.adviceHistory = [];
+      state.settings.cloudAdviceConsentVersion = 0;
+
+      cloudAdviceConfigured = false;
+      await generateAdvice();
+      const localOnly = {
+        requests: adviceRequests,
+        source: state.adviceHistory.at(-1)?.source
+      };
+
+      state.adviceHistory = [];
+      cloudAdviceConfigured = true;
+      await generateAdvice();
+      const firstPrompt = {
+        open: document.querySelector("#cloudConsentDialog").open,
+        focused: document.activeElement?.id,
+        requests: adviceRequests,
+        consent: state.settings.cloudAdviceConsentVersion
+      };
+      await chooseLocalAdvice();
+      const localChoice = {
+        closed: !document.querySelector("#cloudConsentDialog").open,
+        source: state.adviceHistory.at(-1)?.source,
+        requests: adviceRequests,
+        consent: state.settings.cloudAdviceConsentVersion
+      };
+
+      state.adviceHistory = [];
+      await generateAdvice();
+      await confirmCloudAdviceConsent();
+      const cloudChoice = {
+        closed: !document.querySelector("#cloudConsentDialog").open,
+        source: state.adviceHistory.at(-1)?.source,
+        requests: adviceRequests,
+        consent: state.settings.cloudAdviceConsentVersion,
+        revokeVisible: !document.querySelector("#revokeCloudConsentBtn").hidden
+      };
+      revokeCloudAdviceConsent();
+      const revoked = {
+        consent: state.settings.cloudAdviceConsentVersion,
+        revokeHidden: document.querySelector("#revokeCloudConsentBtn").hidden,
+        status: document.querySelector("#cloudConsentStatus").textContent
+      };
+
+      window.fetch = originalFetch;
+      Object.assign(state, normalizeImportedState(snapshot));
+      cloudAdviceConfigured = false;
+      persistState();
+      renderAdvice();
+      renderCloudConsentStatus();
+      return { localOnly, firstPrompt, localChoice, cloudChoice, revoked };
+    })()`);
+    assert(cloudConsentFlow.localOnly.requests === 0 && cloudConsentFlow.localOnly.source === "本地规则", "Local advice mode should not call the cloud endpoint.");
+    assert(cloudConsentFlow.firstPrompt.open && cloudConsentFlow.firstPrompt.focused === "useLocalAdviceBtn" && cloudConsentFlow.firstPrompt.requests === 0 && cloudConsentFlow.firstPrompt.consent === 0, "First cloud use should ask before sending and focus the local option.");
+    assert(cloudConsentFlow.localChoice.closed && cloudConsentFlow.localChoice.source === "本地规则" && cloudConsentFlow.localChoice.requests === 0 && cloudConsentFlow.localChoice.consent === 0, "Choosing local advice should not save consent or send data.");
+    assert(cloudConsentFlow.cloudChoice.closed && cloudConsentFlow.cloudChoice.source === "OpenAI test-model" && cloudConsentFlow.cloudChoice.requests === 1 && cloudConsentFlow.cloudChoice.consent === 1 && cloudConsentFlow.cloudChoice.revokeVisible, "Explicit consent should persist, send once, and expose revocation.");
+    assert(cloudConsentFlow.revoked.consent === 0 && cloudConsentFlow.revoked.revokeHidden && cloudConsentFlow.revoked.status.includes("首次使用"), "Revoking cloud consent should immediately require consent again.");
 
     await evaluate(cdp, `document.querySelector("#pain").value = "4";
       document.querySelector("#pain").dispatchEvent(new Event("input", { bubbles: true }));`);
@@ -1290,7 +1359,7 @@ async function run() {
         overflow: document.documentElement.scrollWidth > innerWidth
       };
     })()`);
-    assert(updateFlow.version.includes("v1.2.1"), "Help should display the current semantic app version.");
+    assert(updateFlow.version.includes("v1.3.0"), "Help should display the current semantic app version.");
     assert(updateFlow.shown && updateFlow.dismissed, "App update banner should be visible and dismissible.");
     assert(updateFlow.message?.type === "SKIP_WAITING" && updateFlow.buttonText === "更新中", "Confirmed update should activate the waiting service worker with clear feedback.");
     assert(!updateFlow.overflow, "Update banner should not cause desktop overflow.");

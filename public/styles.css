@@ -2544,6 +2544,19 @@ input[type="checkbox"] {
   margin-top: 10px;
 }
 
+.cloud-consent-control {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cloud-consent-control button {
+  min-height: 34px;
+  flex: 0 0 auto;
+}
+
 .legal-page {
   min-height: 100vh;
 }
@@ -2805,6 +2818,14 @@ input[type="checkbox"] {
 }
 
 @media (max-width: 720px) {
+  .cloud-consent-control {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .cloud-consent-control button {
+    width: 100%;
+  }
   .app-update-banner {
     width: calc(100% - 28px);
     align-items: stretch;

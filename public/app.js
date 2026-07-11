@@ -1,6 +1,7 @@
 const STORAGE_KEY = "habit_fitness_app_v1";
 const WORKOUT_DRAFT_KEY = "habit_fitness_workout_draft_v1";
-const APP_VERSION = "1.2.1";
+const APP_VERSION = "1.3.0";
+const CLOUD_ADVICE_CONSENT_VERSION = 1;
 const BACKUP_SCHEMA_VERSION = 1;
 
 const defaultSettings = {
@@ -16,7 +17,8 @@ const defaultSettings = {
   workoutReminderTime: "18:30",
   lastDailyReminderDate: "",
   lastWorkoutReminderDate: "",
-  lastBackupAt: ""
+  lastBackupAt: "",
+  cloudAdviceConsentVersion: 0
 };
 
 const defaultExercises = [
@@ -111,6 +113,7 @@ let historySearch = "";
 let historyExpanded = false;
 let pendingAppUpdate = null;
 let updateReloadRequested = false;
+let cloudAdviceConfigured = false;
 const onboardingTouched = {
   energy: false,
   soreness: false,
@@ -284,7 +287,10 @@ function normalizeSettings(settings = {}) {
     workoutReminderTime: sanitizeReminderTime(settings.workoutReminderTime ?? defaultSettings.workoutReminderTime, defaultSettings.workoutReminderTime),
     lastDailyReminderDate: isValidDateText(settings.lastDailyReminderDate) ? settings.lastDailyReminderDate : "",
     lastWorkoutReminderDate: isValidDateText(settings.lastWorkoutReminderDate) ? settings.lastWorkoutReminderDate : "",
-    lastBackupAt: Number.isFinite(Date.parse(settings.lastBackupAt)) ? new Date(settings.lastBackupAt).toISOString() : ""
+    lastBackupAt: Number.isFinite(Date.parse(settings.lastBackupAt)) ? new Date(settings.lastBackupAt).toISOString() : "",
+    cloudAdviceConsentVersion: settings.cloudAdviceConsentVersion === CLOUD_ADVICE_CONSENT_VERSION
+      ? CLOUD_ADVICE_CONSENT_VERSION
+      : 0
   };
 }
 
@@ -3011,6 +3017,14 @@ function buildAdvicePayload() {
 }
 
 async function generateAdvice() {
+  if (cloudAdviceConfigured && state.settings.cloudAdviceConsentVersion !== CLOUD_ADVICE_CONSENT_VERSION) {
+    openCloudConsentDialog();
+    return;
+  }
+  return generateAdviceWithMode(cloudAdviceConfigured);
+}
+
+async function generateAdviceWithMode(useCloud) {
   return withButtonBusy("generateAdviceBtn", "生成中", async () => {
     $("adviceOutput").innerHTML = `
       <div class="coach-empty">
@@ -3019,6 +3033,10 @@ async function generateAdvice() {
       </div>
     `;
     const payload = buildAdvicePayload();
+    if (!useCloud) {
+      saveAdvice(generateLocalAdvice(payload, "用户选择本地建议"), "本地规则");
+      return;
+    }
     try {
       const response = await fetch("/api/advice", {
         method: "POST",
@@ -3033,6 +3051,52 @@ async function generateAdvice() {
       saveAdvice(localAdvice, "本地规则");
     }
   });
+}
+
+function openCloudConsentDialog() {
+  const dialog = $("cloudConsentDialog");
+  if (typeof dialog.showModal === "function") dialog.showModal();
+  else dialog.setAttribute("open", "");
+  $("useLocalAdviceBtn").focus();
+}
+
+function closeCloudConsentDialog() {
+  const dialog = $("cloudConsentDialog");
+  if (typeof dialog.close === "function") dialog.close();
+  else dialog.removeAttribute("open");
+}
+
+function chooseLocalAdvice() {
+  closeCloudConsentDialog();
+  return generateAdviceWithMode(false);
+}
+
+function confirmCloudAdviceConsent() {
+  state.settings.cloudAdviceConsentVersion = CLOUD_ADVICE_CONSENT_VERSION;
+  saveState();
+  renderCloudConsentStatus();
+  closeCloudConsentDialog();
+  return generateAdviceWithMode(true);
+}
+
+function revokeCloudAdviceConsent() {
+  state.settings.cloudAdviceConsentVersion = 0;
+  saveState();
+  renderCloudConsentStatus();
+  showToast("云端建议授权已撤回");
+}
+
+function renderCloudConsentStatus() {
+  const status = $("cloudConsentStatus");
+  const revokeButton = $("revokeCloudConsentBtn");
+  if (!status || !revokeButton) return;
+  const consented = state.settings.cloudAdviceConsentVersion === CLOUD_ADVICE_CONSENT_VERSION;
+  status.textContent = !cloudAdviceConfigured
+    ? "当前为本地建议模式，不会发送记录"
+    : consented
+      ? "已允许云端建议，可随时撤回"
+      : "首次使用云端建议前会询问你的同意";
+  revokeButton.hidden = !consented;
 }
 
 function saveAdvice(text, source) {
@@ -3319,10 +3383,13 @@ async function checkAiStatus() {
   try {
     const response = await fetch("/api/health");
     const data = await response.json();
-    $("aiStatus").textContent = data.openaiConfigured ? `云端教练已连接 · ${data.model}` : "本地建议模式";
+    cloudAdviceConfigured = Boolean(data.openaiConfigured);
+    $("aiStatus").textContent = cloudAdviceConfigured ? `云端教练已连接 · ${data.model}` : "本地建议模式";
   } catch {
+    cloudAdviceConfigured = false;
     $("aiStatus").textContent = "离线可用 · 本地建议";
   }
+  renderCloudConsentStatus();
 }
 
 function updateOfflineStatus(message = "") {
@@ -3540,6 +3607,12 @@ function bindActions() {
     if (event.target.closest("#requestNotificationBtn")) requestNotificationPermission();
   });
   $("generateAdviceBtn").addEventListener("click", generateAdvice);
+  $("useLocalAdviceBtn").addEventListener("click", chooseLocalAdvice);
+  $("confirmCloudConsentBtn").addEventListener("click", confirmCloudAdviceConsent);
+  $("revokeCloudConsentBtn").addEventListener("click", revokeCloudAdviceConsent);
+  $("cloudConsentDialog").addEventListener("click", event => {
+    if (event.target === $("cloudConsentDialog")) chooseLocalAdvice();
+  });
   $("exportBtn").addEventListener("click", exportData);
   $("exportMirrorBtn").addEventListener("click", exportData);
   $("exportCsvBtn").addEventListener("click", exportCsvSummary);

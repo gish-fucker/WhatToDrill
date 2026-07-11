@@ -8,7 +8,7 @@
     <title>日常与健身记录</title>
     <link rel="icon" href="./app-icon.svg" type="image/svg+xml">
     <link rel="manifest" href="./manifest.webmanifest">
-    <link rel="stylesheet" href="./styles.css?v=20260711-advice-payload-v1">
+    <link rel="stylesheet" href="./styles.css?v=20260711-cloud-consent-v1">
   </head>
   <body>
     <header class="app-header">
@@ -491,7 +491,11 @@
               </article>
               <article>
                 <strong>云端建议可控</strong>
-                <p class="muted">只有服务器配置 OpenAI key 且你点击生成建议时，近期记录才会发送给云端。</p>
+                <p class="muted">只有服务器配置 OpenAI key、你主动点击并明确同意后，最小化的近期记录才会发送给云端。</p>
+                <div id="cloudConsentControl" class="cloud-consent-control">
+                  <span id="cloudConsentStatus" class="muted">正在检测云端状态</span>
+                  <button id="revokeCloudConsentBtn" class="ghost-button" type="button" hidden>撤回云端授权</button>
+                </div>
               </article>
             </div>
           </section>
@@ -519,6 +523,20 @@
         </div>
       </section>
     </main>
+
+    <dialog id="cloudConsentDialog" class="confirm-dialog" aria-labelledby="cloudConsentTitle" aria-describedby="cloudConsentDescription">
+      <div class="confirm-dialog-body">
+        <p class="eyebrow">Cloud advice</p>
+        <h2 id="cloudConsentTitle">是否允许生成云端建议？</h2>
+        <p id="cloudConsentDescription">云端建议会发送最近的状态、训练、动作组数据和有限长度备注。不会发送本地记录 ID、更新时间、习惯对象或完整动作库。</p>
+        <p class="muted">AI 建议仅用于训练与恢复参考，不是医疗诊断。你可以继续使用本地建议，也可以稍后在帮助页撤回授权。</p>
+        <a class="text-link" href="./privacy.html">查看隐私政策</a>
+        <div class="confirm-dialog-actions">
+          <button id="useLocalAdviceBtn" class="ghost-button" type="button">仅使用本地建议</button>
+          <button id="confirmCloudConsentBtn" type="button">同意并继续</button>
+        </div>
+      </div>
+    </dialog>
 
     <dialog id="waterStepDialog" class="confirm-dialog input-dialog" aria-labelledby="waterStepDialogTitle" aria-describedby="waterStepDialogDescription">
       <form id="waterStepForm" class="confirm-dialog-body" novalidate>
@@ -589,6 +607,6 @@
     </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=20260711-advice-payload-v1"></script>
+    <script src="./app.js?v=20260711-cloud-consent-v1"></script>
   </body>
 </html>
