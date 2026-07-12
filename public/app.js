@@ -1,6 +1,6 @@
 const STORAGE_KEY = "habit_fitness_app_v1";
 const WORKOUT_DRAFT_KEY = "habit_fitness_workout_draft_v1";
-const APP_VERSION = "1.5.0";
+const APP_VERSION = "1.6.0";
 const CLOUD_ADVICE_CONSENT_VERSION = 1;
 const BACKUP_SCHEMA_VERSION = 1;
 
@@ -18,7 +18,13 @@ const defaultSettings = {
   lastDailyReminderDate: "",
   lastWorkoutReminderDate: "",
   lastBackupAt: "",
-  cloudAdviceConsentVersion: 0
+  cloudAdviceConsentVersion: 0,
+  supportEnabled: false,
+  supportRole: "family",
+  supportCadence: "weekly",
+  supportStyle: "check_in",
+  supportBoundary: "ask_first",
+  supportNextDate: ""
 };
 
 const defaultExercises = [
@@ -296,6 +302,10 @@ function sanitizeReminderTime(value, fallback) {
 function normalizeSettings(settings = {}) {
   const goalIds = ["general", "fat_loss", "muscle_gain", "strength", "recovery"];
   const environmentIds = ["gym", "home", "mixed"];
+  const supportRoles = ["family", "friend", "coach"];
+  const supportCadences = ["twice_weekly", "weekly", "biweekly"];
+  const supportStyles = ["check_in", "activity", "accountability"];
+  const supportBoundaries = ["no_pressure", "no_advice", "ask_first"];
   return {
     waterStepMl: sanitizeWaterStep(settings.waterStepMl ?? defaultSettings.waterStepMl),
     waterTargetMl: sanitizeWaterTarget(settings.waterTargetMl ?? defaultSettings.waterTargetMl),
@@ -312,7 +322,13 @@ function normalizeSettings(settings = {}) {
     lastBackupAt: Number.isFinite(Date.parse(settings.lastBackupAt)) ? new Date(settings.lastBackupAt).toISOString() : "",
     cloudAdviceConsentVersion: settings.cloudAdviceConsentVersion === CLOUD_ADVICE_CONSENT_VERSION
       ? CLOUD_ADVICE_CONSENT_VERSION
-      : 0
+      : 0,
+    supportEnabled: Boolean(settings.supportEnabled),
+    supportRole: supportRoles.includes(settings.supportRole) ? settings.supportRole : defaultSettings.supportRole,
+    supportCadence: supportCadences.includes(settings.supportCadence) ? settings.supportCadence : defaultSettings.supportCadence,
+    supportStyle: supportStyles.includes(settings.supportStyle) ? settings.supportStyle : defaultSettings.supportStyle,
+    supportBoundary: supportBoundaries.includes(settings.supportBoundary) ? settings.supportBoundary : defaultSettings.supportBoundary,
+    supportNextDate: isValidDateText(settings.supportNextDate) ? settings.supportNextDate : ""
   };
 }
 
@@ -1712,6 +1728,7 @@ function renderAll() {
   renderWorkoutDashboard();
   renderFocusStrip();
   renderWeeklyTargetPanel();
+  renderSupportAgreement();
   renderStarterGuide();
   renderReadiness();
   renderRetentionInsights();
@@ -2135,6 +2152,159 @@ function buildWeeklyReportText(review = buildRetentionReview()) {
     "## 安全说明",
     "本应用建议只用于训练和恢复记录参考，不构成医疗诊断。疼痛持续、加重或影响日常活动时，请咨询专业人士。"
   ].join("\n");
+}
+
+function supportRoleLabel(value = state.settings.supportRole) {
+  return { family: "家人", friend: "朋友", coach: "教练" }[value] || "支持伙伴";
+}
+
+function supportCadenceDetails(value = state.settings.supportCadence) {
+  return {
+    twice_weekly: { label: "每周两次", days: 3 },
+    weekly: { label: "每周一次", days: 7 },
+    biweekly: { label: "每两周一次", days: 14 }
+  }[value] || { label: "每周一次", days: 7 };
+}
+
+function supportStyleLabel(value = state.settings.supportStyle) {
+  return {
+    check_in: "问问我最近感觉怎么样",
+    activity: "陪我完成一次轻松活动",
+    accountability: "提醒我完成自己定下的计划"
+  }[value] || "问问我最近感觉怎么样";
+}
+
+function supportBoundaryLabel(value = state.settings.supportBoundary) {
+  return {
+    ask_first: "给建议前先问问我是否需要",
+    no_pressure: "不要催促、比较或用结果评价我",
+    no_advice: "先听我说，不急着给解决方案"
+  }[value] || "给建议前先问问我是否需要";
+}
+
+function addLocalDays(dateText, days) {
+  const date = new Date(`${dateText}T12:00:00`);
+  date.setDate(date.getDate() + days);
+  return formatLocalDate(date);
+}
+
+function supportDueStatus(nextDate = state.settings.supportNextDate) {
+  if (!isValidDateText(nextDate)) return { label: "等待安排", key: "upcoming" };
+  if (nextDate < today()) return { label: "已到期", key: "due" };
+  if (nextDate === today()) return { label: "今天关怀", key: "due" };
+  return { label: "下一次关怀", key: "upcoming" };
+}
+
+function renderSupportAgreement() {
+  const panel = $("supportAgreementPanel");
+  if (!panel) return;
+  panel.classList.toggle("active", state.settings.supportEnabled);
+  if (!state.settings.supportEnabled) {
+    panel.innerHTML = `
+      <div>
+        <p class="eyebrow">Support agreement</p>
+        <h3>让关心你的人知道怎么帮</h3>
+        <p class="muted">设定关怀频率、希望得到的支持和边界，邀请内容不包含健康记录。</p>
+      </div>
+      <button id="openSupportAgreementBtn" type="button">建立支持约定</button>
+    `;
+    return;
+  }
+  const due = supportDueStatus();
+  panel.innerHTML = `
+    <div class="support-agreement-main">
+      <div>
+        <p class="eyebrow">Support agreement</p>
+        <h3>与${escapeHtml(supportRoleLabel())}的支持约定</h3>
+        <p class="muted">${escapeHtml(supportStyleLabel())}；${escapeHtml(supportBoundaryLabel())}。</p>
+      </div>
+      <span class="support-due ${escapeAttr(due.key)}">${escapeHtml(due.label)}</span>
+    </div>
+    <div class="support-agreement-meta">
+      <div><span>频率</span><strong>${escapeHtml(supportCadenceDetails().label)}</strong></div>
+      <div><span>日期</span><strong>${escapeHtml(state.settings.supportNextDate)}</strong></div>
+    </div>
+    <div class="support-agreement-actions">
+      <button id="completeSupportCheckinBtn" type="button">已完成关怀</button>
+      <button id="shareSupportInviteBtn" class="ghost-button" type="button">分享邀请</button>
+      <button id="openSupportAgreementBtn" class="ghost-button" type="button">编辑</button>
+    </div>
+  `;
+}
+
+function openSupportAgreementDialog() {
+  $("supportRole").value = state.settings.supportRole;
+  $("supportCadence").value = state.settings.supportCadence;
+  $("supportStyle").value = state.settings.supportStyle;
+  $("supportBoundary").value = state.settings.supportBoundary;
+  $("supportAgreementDialog").showModal();
+  $("supportRole").focus();
+}
+
+function closeSupportAgreementDialog() {
+  $("supportAgreementDialog").close();
+}
+
+function saveSupportAgreement(event) {
+  event.preventDefault();
+  const cadence = $("supportCadence").value;
+  state.settings = normalizeSettings({
+    ...state.settings,
+    supportEnabled: true,
+    supportRole: $("supportRole").value,
+    supportCadence: cadence,
+    supportStyle: $("supportStyle").value,
+    supportBoundary: $("supportBoundary").value,
+    supportNextDate: addLocalDays(today(), supportCadenceDetails(cadence).days)
+  });
+  persistState();
+  renderSupportAgreement();
+  closeSupportAgreementDialog();
+  showToast("支持约定已保存");
+}
+
+function completeSupportCheckin() {
+  const baseline = state.settings.supportNextDate > today() ? state.settings.supportNextDate : today();
+  state.settings.supportNextDate = addLocalDays(baseline, supportCadenceDetails().days);
+  persistState();
+  renderSupportAgreement();
+  showToast(`已记录关怀，下次是 ${state.settings.supportNextDate}`);
+}
+
+function buildSupportInvitation() {
+  return [
+    "支持约定邀请",
+    "",
+    `我想邀请你作为我的${supportRoleLabel()}支持伙伴。`,
+    `频率：${supportCadenceDetails().label}`,
+    `我希望你：${supportStyleLabel()}。`,
+    `也请你：${supportBoundaryLabel()}。`,
+    "",
+    "这不是监督任务，也不需要你解决所有问题。稳定、尊重边界的关心本身就很有帮助。",
+    "",
+    "隐私说明：这份邀请不包含我的健康状态、训练记录、备注或历史数据。"
+  ].join("\n");
+}
+
+async function shareSupportInvitation() {
+  const text = buildSupportInvitation();
+  try {
+    if (navigator.share) {
+      await navigator.share({ title: "支持约定邀请", text });
+      showToast("邀请已交给系统分享");
+    } else {
+      await navigator.clipboard.writeText(text);
+      showToast("支持约定邀请已复制");
+    }
+  } catch (error) {
+    if (error?.name === "AbortError") return;
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast("系统分享不可用，邀请已复制");
+    } catch {
+      showToast("邀请分享失败，请稍后再试");
+    }
+  }
 }
 
 function careSummaryOptions() {
@@ -3777,6 +3947,16 @@ function bindActions() {
       return;
     }
     if (event.target.closest("#openWorkoutFromWeeklyBtn")) activateTab("workout");
+  });
+  $("supportAgreementPanel").addEventListener("click", event => {
+    if (event.target.closest("#openSupportAgreementBtn")) openSupportAgreementDialog();
+    if (event.target.closest("#completeSupportCheckinBtn")) completeSupportCheckin();
+    if (event.target.closest("#shareSupportInviteBtn")) shareSupportInvitation();
+  });
+  $("supportAgreementForm").addEventListener("submit", saveSupportAgreement);
+  $("cancelSupportAgreementBtn").addEventListener("click", closeSupportAgreementDialog);
+  $("supportAgreementDialog").addEventListener("click", event => {
+    if (event.target === $("supportAgreementDialog")) closeSupportAgreementDialog();
   });
   $("starterGuide").addEventListener("click", event => {
     if (event.target.closest("#startOnboardingRecordBtn")) {

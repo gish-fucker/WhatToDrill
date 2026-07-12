@@ -134,7 +134,7 @@ async function run() {
 
   const server = spawn(process.execPath, ["server.js"], {
     cwd: process.cwd(),
-    env: { ...process.env, HOST: "127.0.0.1", PORT: String(appPort), APP_VERSION: "1.5.0", OPENAI_API_KEY: "", ADVICE_RATE_LIMIT: "10" },
+    env: { ...process.env, HOST: "127.0.0.1", PORT: String(appPort), APP_VERSION: "1.6.0", OPENAI_API_KEY: "", ADVICE_RATE_LIMIT: "10" },
     stdio: "ignore",
     windowsHide: true
   });
@@ -253,7 +253,7 @@ async function run() {
     assert(serverHttp.csp?.includes("frame-ancestors 'none'"), "Static responses should include a restrictive CSP.");
     assert(serverHttp.frameOptions === "DENY", "Static responses should prevent framing.");
     assert(/^[0-9a-f-]{36}$/i.test(serverHttp.requestId), "API responses should expose a generated request ID.");
-    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.5.0", "Health response should expose status and release version.");
+    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.6.0", "Health response should expose status and release version.");
     assert(Number.isInteger(serverHttp.health.uptimeSeconds) && serverHttp.health.uptimeSeconds >= 0, "Health response should expose a valid uptime.");
     assert(serverHttp.health.openaiConfigured === false && serverHttp.health.model === "gpt-5-mini", "Health response should expose non-secret AI configuration state.");
     assert(serverHttp.indexCache === "no-cache", "HTML should revalidate instead of using a stale shell.");
@@ -337,6 +337,54 @@ async function run() {
     assert(todayCheck.weeklyTargetText.includes("本周还没有训练"), "Weekly target should explain the empty workout cadence.");
     assert(todayCheck.exerciseProgressText.includes("还没有可分析的动作"), "Empty exercise progress should explain missing workout data.");
     assert(!todayCheck.overflow, "Today desktop layout should not overflow.");
+
+    const supportAgreement = await evaluate(cdp, `(() => {
+      const emptyText = document.querySelector("#supportAgreementPanel").innerText;
+      document.querySelector("#openSupportAgreementBtn").click();
+      const opened = document.querySelector("#supportAgreementDialog").open;
+      const focused = document.activeElement?.id;
+      document.querySelector("#supportRole").value = "friend";
+      document.querySelector("#supportCadence").value = "twice_weekly";
+      document.querySelector("#supportStyle").value = "activity";
+      document.querySelector("#supportBoundary").value = "no_pressure";
+      document.querySelector("#supportAgreementForm").requestSubmit();
+      const firstDate = state.settings.supportNextDate;
+      const invitation = buildSupportInvitation();
+      const savedText = document.querySelector("#supportAgreementPanel").innerText;
+      document.querySelector("#completeSupportCheckinBtn").click();
+      const persisted = JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)})).settings;
+      const normalizedInvalid = normalizeSettings({
+        supportEnabled: true,
+        supportRole: "attacker",
+        supportCadence: "hourly",
+        supportStyle: "PRIVATE_HEALTH_DATA",
+        supportBoundary: "unknown",
+        supportNextDate: "not-a-date"
+      });
+      return {
+        emptyText,
+        opened,
+        focused,
+        firstDate,
+        secondDate: state.settings.supportNextDate,
+        expectedFirst: addLocalDays(today(), 3),
+        expectedSecond: addLocalDays(today(), 6),
+        invitation,
+        savedText,
+        persisted,
+        normalizedInvalid,
+        overflow: document.documentElement.scrollWidth > innerWidth
+      };
+    })()`);
+    assert(supportAgreement.emptyText.includes("建立支持约定"), "First run should explain how to create a support agreement.");
+    assert(supportAgreement.opened && supportAgreement.focused === "supportRole", "Support agreement should open and focus its first field.");
+    assert(supportAgreement.firstDate === supportAgreement.expectedFirst && supportAgreement.secondDate === supportAgreement.expectedSecond, "Support check-ins should advance by the selected cadence.");
+    assert(supportAgreement.savedText.includes("与朋友的支持约定") && supportAgreement.savedText.includes("每周两次"), "Saved support agreement should summarize the partner and cadence.");
+    assert(supportAgreement.invitation.includes("陪我完成一次轻松活动") && supportAgreement.invitation.includes("不要催促、比较"), "Support invitation should reflect the selected support and boundary.");
+    assert(!supportAgreement.invitation.includes("疼痛：") && !supportAgreement.invitation.includes("睡眠：") && !supportAgreement.invitation.includes("PRIVATE_HEALTH_DATA"), "Support invitation must not include health or training record values.");
+    assert(supportAgreement.persisted.supportEnabled && supportAgreement.persisted.supportRole === "friend" && supportAgreement.persisted.supportNextDate === supportAgreement.secondDate, "Support agreement should persist locally.");
+    assert(supportAgreement.normalizedInvalid.supportRole === "family" && supportAgreement.normalizedInvalid.supportCadence === "weekly" && supportAgreement.normalizedInvalid.supportNextDate === "", "Imported support settings should be normalized through allowlists.");
+    assert(!supportAgreement.overflow, "Support agreement should not overflow on desktop.");
 
     const accessibleTabs = await evaluate(cdp, `(() => {
       const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
@@ -1194,6 +1242,17 @@ async function run() {
     assert(reminderEngine.lastDaily && reminderEngine.lastWorkout, "Reminder scheduler should persist last sent dates.");
 
     const jsonBackup = await evaluate(cdp, `(() => {
+      state.settings = normalizeSettings({
+        ...state.settings,
+        supportEnabled: true,
+        supportRole: "friend",
+        supportCadence: "twice_weekly",
+        supportStyle: "activity",
+        supportBoundary: "no_pressure",
+        supportNextDate: addLocalDays(today(), 3)
+      });
+      persistState();
+      renderAll();
       const originalClick = HTMLAnchorElement.prototype.click;
       let downloadName = "";
       HTMLAnchorElement.prototype.click = function captureDownload() {
@@ -1209,6 +1268,11 @@ async function run() {
         storedTimestamp: parsed.settings.lastBackupAt,
         schemaVersion: payload.schemaVersion,
         exportedAt: payload.exportedAt,
+        supportAgreement: payload.settings.supportEnabled ? {
+          role: payload.settings.supportRole,
+          cadence: payload.settings.supportCadence,
+          nextDate: payload.settings.supportNextDate
+        } : null,
         health: document.querySelector("#dataHealth")?.innerText,
         toast: document.querySelector("#toast")?.textContent
       };
@@ -1218,6 +1282,7 @@ async function run() {
     assert(jsonBackup.storedTimestamp === jsonBackup.stateTimestamp, "Full backup timestamp should persist locally.");
     assert(jsonBackup.schemaVersion === 1, "Full backup should declare schema version 1.");
     assert(jsonBackup.exportedAt === jsonBackup.stateTimestamp, "Full backup metadata should match the recorded backup time.");
+    assert(jsonBackup.supportAgreement?.role === "friend" && jsonBackup.supportAgreement?.cadence === "twice_weekly", "Full backup should preserve the support agreement.");
     assert(jsonBackup.health.includes("完整备份") && jsonBackup.health.includes("今天"), "Data health should show a current full backup.");
     assert(jsonBackup.toast.includes("JSON 完整备份已导出"), "Full backup should confirm export to the user.");
 
@@ -1475,7 +1540,7 @@ async function run() {
         overflow: document.documentElement.scrollWidth > innerWidth
       };
     })()`);
-    assert(updateFlow.version.includes("v1.5.0"), "Help should display the current semantic app version.");
+    assert(updateFlow.version.includes("v1.6.0"), "Help should display the current semantic app version.");
     assert(updateFlow.shown && updateFlow.dismissed, "App update banner should be visible and dismissible.");
     assert(updateFlow.message?.type === "SKIP_WAITING" && updateFlow.buttonText === "更新中", "Confirmed update should activate the waiting service worker with clear feedback.");
     assert(!updateFlow.overflow, "Update banner should not cause desktop overflow.");
@@ -1571,6 +1636,24 @@ async function run() {
     assert(mobileCareSummary.previewHeight >= 200 && !mobileCareSummary.overflow, "Mobile care summary preview should remain readable without horizontal overflow.");
     await screenshot(cdp, "smoke-mobile-care-summary.png");
 
+    const mobileSupportAgreement = await evaluate(cdp, `(() => {
+      document.querySelector("#cancelCareSummaryBtn").click();
+      document.querySelector('[data-tab="today"]').click();
+      document.querySelector("#openSupportAgreementBtn").click();
+      const dialog = document.querySelector("#supportAgreementDialog");
+      const bounds = dialog.getBoundingClientRect();
+      return {
+        open: dialog.open,
+        width: bounds.width,
+        viewportWidth: innerWidth,
+        focused: document.activeElement?.id,
+        overflow: document.documentElement.scrollWidth > innerWidth
+      };
+    })()`);
+    assert(mobileSupportAgreement.open && mobileSupportAgreement.focused === "supportRole", "Mobile support agreement should open with usable focus.");
+    assert(mobileSupportAgreement.width <= mobileSupportAgreement.viewportWidth - 24 && !mobileSupportAgreement.overflow, "Mobile support agreement should fit without horizontal overflow.");
+    await screenshot(cdp, "smoke-mobile-support-agreement.png");
+
     const gracefulExit = new Promise(resolveExit => server.once("exit", (code, signal) => resolveExit({ code, signal })));
     server.kill("SIGTERM");
     const shutdownResult = await Promise.race([
@@ -1588,6 +1671,7 @@ async function run() {
         serverHttp,
         shutdownResult,
         today: todayCheck,
+        supportAgreement,
         loadedWorkout,
         blockedSave,
         oneSetProgress,
@@ -1597,13 +1681,15 @@ async function run() {
         dataReset,
         mobile,
         mobileInsights,
-        mobileCareSummary
+        mobileCareSummary,
+        mobileSupportAgreement
       },
       screenshots: [
         "output/playwright/smoke-desktop.png",
         "output/playwright/smoke-mobile.png",
         "output/playwright/smoke-mobile-insights.png",
-        "output/playwright/smoke-mobile-care-summary.png"
+        "output/playwright/smoke-mobile-care-summary.png",
+        "output/playwright/smoke-mobile-support-agreement.png"
       ]
     }, null, 2));
   } finally {

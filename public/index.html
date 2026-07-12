@@ -9,7 +9,7 @@
     <link rel="icon" href="./app-icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="./app-icon-180.png" sizes="180x180">
     <link rel="manifest" href="./manifest.webmanifest">
-    <link rel="stylesheet" href="./styles.css?v=20260712-care-summary-v1">
+    <link rel="stylesheet" href="./styles.css?v=20260712-support-agreement-v1">
   </head>
   <body>
     <a class="skip-link" href="#mainContent">跳到主要内容</a>
@@ -56,6 +56,7 @@
         <section id="safetyStrip" class="safety-strip" aria-label="安全提示"></section>
         <section id="focusStrip" class="focus-strip" aria-label="今日状态"></section>
         <section id="weeklyTargetPanel" class="weekly-target-panel" aria-label="本周目标"></section>
+        <section id="supportAgreementPanel" class="support-agreement-panel" aria-label="支持约定"></section>
         <section id="starterGuide" class="starter-guide" aria-label="开始记录"></section>
 
         <div class="section-heading">
@@ -570,6 +571,49 @@
       </form>
     </dialog>
 
+    <dialog id="supportAgreementDialog" class="confirm-dialog support-agreement-dialog" aria-labelledby="supportAgreementTitle" aria-describedby="supportAgreementDescription">
+      <form id="supportAgreementForm" class="confirm-dialog-body">
+        <p class="eyebrow">Support agreement</p>
+        <h2 id="supportAgreementTitle">建立支持约定</h2>
+        <p id="supportAgreementDescription">让对方知道怎样帮助你最合适。约定只保存在本机，不记录姓名或联系方式。</p>
+        <div class="support-form-grid">
+          <label>支持对象
+            <select id="supportRole">
+              <option value="family">家人</option>
+              <option value="friend">朋友</option>
+              <option value="coach">教练</option>
+            </select>
+          </label>
+          <label>关怀频率
+            <select id="supportCadence">
+              <option value="twice_weekly">每周两次</option>
+              <option value="weekly">每周一次</option>
+              <option value="biweekly">每两周一次</option>
+            </select>
+          </label>
+          <label>希望得到
+            <select id="supportStyle">
+              <option value="check_in">问问近况</option>
+              <option value="activity">陪我轻松活动</option>
+              <option value="accountability">提醒我完成计划</option>
+            </select>
+          </label>
+          <label>请对方避免
+            <select id="supportBoundary">
+              <option value="ask_first">给建议前先问我</option>
+              <option value="no_pressure">不要催促或比较</option>
+              <option value="no_advice">只倾听，不急着建议</option>
+            </select>
+          </label>
+        </div>
+        <p class="privacy-note">邀请只包含这份约定，不会附带疼痛、训练、备注或历史记录。</p>
+        <div class="confirm-dialog-actions">
+          <button id="cancelSupportAgreementBtn" class="ghost-button" type="button">取消</button>
+          <button type="submit">保存约定</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog id="careSummaryDialog" class="confirm-dialog care-summary-dialog" aria-labelledby="careSummaryTitle" aria-describedby="careSummaryDescription">
       <form id="careSummaryForm" class="confirm-dialog-body">
         <p class="eyebrow">Care summary</p>
@@ -636,6 +680,6 @@
     </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=20260712-care-summary-v1"></script>
+    <script src="./app.js?v=20260712-support-agreement-v1"></script>
   </body>
 </html>
