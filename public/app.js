@@ -1,6 +1,6 @@
 const STORAGE_KEY = "habit_fitness_app_v1";
 const WORKOUT_DRAFT_KEY = "habit_fitness_workout_draft_v1";
-const APP_VERSION = "1.8.0";
+const APP_VERSION = "1.8.1";
 const CLOUD_ADVICE_CONSENT_VERSION = 1;
 const BACKUP_SCHEMA_VERSION = 1;
 
@@ -2363,6 +2363,10 @@ function completeSupportCheckin(event) {
 }
 
 function buildSupportInvitation() {
+  const rhythm = buildWeeklyRhythm();
+  const planLine = state.settings.supportStyle === "accountability" && rhythm.hasPlan
+    ? `我的计划训练日：${rhythm.dayLabels}。如果方便，你可以在这些日子问问我是否需要支持。`
+    : "";
   return [
     "支持约定邀请",
     "",
@@ -2370,10 +2374,11 @@ function buildSupportInvitation() {
     `频率：${supportCadenceDetails().label}`,
     `我希望你：${supportStyleLabel()}。`,
     `也请你：${supportBoundaryLabel()}。`,
+    ...(planLine ? [planLine] : []),
     "",
     "这不是监督任务，也不需要你解决所有问题。稳定、尊重边界的关心本身就很有帮助。",
     "",
-    "隐私说明：这份邀请不包含我的健康状态、训练记录、备注或历史数据。"
+    "隐私说明：这份邀请不包含健康状态、训练记录、备注、具体日期或历史数据。"
   ].join("\n");
 }
 
