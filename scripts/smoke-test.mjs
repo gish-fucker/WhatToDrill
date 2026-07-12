@@ -134,7 +134,7 @@ async function run() {
 
   const server = spawn(process.execPath, ["server.js"], {
     cwd: process.cwd(),
-    env: { ...process.env, HOST: "127.0.0.1", PORT: String(appPort), APP_VERSION: "1.8.1", OPENAI_API_KEY: "", ADVICE_RATE_LIMIT: "10" },
+    env: { ...process.env, HOST: "127.0.0.1", PORT: String(appPort), APP_VERSION: "1.9.0", OPENAI_API_KEY: "", ADVICE_RATE_LIMIT: "10" },
     stdio: "ignore",
     windowsHide: true
   });
@@ -253,7 +253,7 @@ async function run() {
     assert(serverHttp.csp?.includes("frame-ancestors 'none'"), "Static responses should include a restrictive CSP.");
     assert(serverHttp.frameOptions === "DENY", "Static responses should prevent framing.");
     assert(/^[0-9a-f-]{36}$/i.test(serverHttp.requestId), "API responses should expose a generated request ID.");
-    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.8.1", "Health response should expose status and release version.");
+    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.9.0", "Health response should expose status and release version.");
     assert(Number.isInteger(serverHttp.health.uptimeSeconds) && serverHttp.health.uptimeSeconds >= 0, "Health response should expose a valid uptime.");
     assert(serverHttp.health.openaiConfigured === false && serverHttp.health.model === "gpt-5-mini", "Health response should expose non-secret AI configuration state.");
     assert(serverHttp.indexCache === "no-cache", "HTML should revalidate instead of using a stale shell.");
@@ -1210,12 +1210,22 @@ async function run() {
       const weeklyTargetText = document.querySelector("#weeklyTargetPanel")?.innerText;
       document.querySelector('[data-tab="insights"]').click();
       const insightText = document.querySelector("#retentionInsights")?.innerText;
+      const rhythm = buildRhythmReview();
+      const normalizedHistory = normalizeSettings({
+        weeklyRhythmHistory: [
+          { effectiveDate: "not-a-date", days: [1, 4] },
+          { effectiveDate: today(), days: [1, 9, 1] },
+          { effectiveDate: today(), days: [4, 1] }
+        ]
+      }).weeklyRhythmHistory;
       return {
         settings: parsed.settings,
         reminderText,
         todayText,
         weeklyTargetText,
-        insightText
+        insightText,
+        rhythm,
+        normalizedHistory
       };
     })()`);
     assert(preferences.settings.trainingGoal === "fat_loss", "Preferences should save training goal.");
@@ -1228,11 +1238,13 @@ async function run() {
     assert(preferences.settings.workoutReminderEnabled, "Preferences should save workout reminder opt-in.");
     assert(preferences.settings.workoutReminderTime === "18:15", "Preferences should save workout reminder time.");
     assert(preferences.settings.plannedWorkoutDays.join(",") === "1,4", "Preferences should save weekly planned workout days.");
+    assert(preferences.settings.weeklyRhythmHistory?.length === 1 && /^\d{4}-\d{2}-\d{2}$/.test(preferences.settings.weeklyRhythmHistory[0].effectiveDate) && preferences.settings.weeklyRhythmHistory[0].days.join(",") === "1,4", "Changing the weekly rhythm should start a dated local history.");
     assert(preferences.reminderText.includes("提醒已配置") || preferences.reminderText.includes("本地提醒已就绪"), "Reminder status should reflect saved reminder settings.");
     assert(preferences.todayText.includes("2400ml"), "Today dashboard should use preferred water target.");
     assert(preferences.weeklyTargetText.includes("/3 次训练"), "Weekly target panel should use preferred weekly workout target.");
     assert(preferences.weeklyTargetText.includes("周一、周四"), "Weekly target panel should show the selected training rhythm.");
     assert(preferences.insightText.includes("每周 3 次训练目标"), "Retention actions should use weekly workout target.");
+    assert(preferences.rhythm.value === "--" && preferences.rhythm.label.includes("尚未进入计划日") && preferences.normalizedHistory.length === 1 && preferences.normalizedHistory[0].days.join(",") === "1,4", "Rhythm review and imported history should use dated, normalized plan data without inventing prior adherence.");
 
     const reminderEngine = await evaluate(cdp, `(() => {
       window.__testNotificationPermission = "granted";
@@ -1328,6 +1340,7 @@ async function run() {
           nextDate: payload.settings.supportNextDate,
           reflectionScore: payload.settings.supportCheckins?.[0]?.score
         } : null,
+        rhythmHistoryCount: payload.settings.weeklyRhythmHistory?.length || 0,
         health: document.querySelector("#dataHealth")?.innerText,
         toast: document.querySelector("#toast")?.textContent
       };
@@ -1337,7 +1350,7 @@ async function run() {
     assert(jsonBackup.storedTimestamp === jsonBackup.stateTimestamp, "Full backup timestamp should persist locally.");
     assert(jsonBackup.schemaVersion === 1, "Full backup should declare schema version 1.");
     assert(jsonBackup.exportedAt === jsonBackup.stateTimestamp, "Full backup metadata should match the recorded backup time.");
-    assert(jsonBackup.supportAgreement?.role === "friend" && jsonBackup.supportAgreement?.cadence === "twice_weekly" && jsonBackup.supportAgreement?.reflectionScore === 4, "Full backup should preserve the support agreement and local reflection.");
+    assert(jsonBackup.supportAgreement?.role === "friend" && jsonBackup.supportAgreement?.cadence === "twice_weekly" && jsonBackup.supportAgreement?.reflectionScore === 4 && jsonBackup.rhythmHistoryCount > 0, "Full backup should preserve support, reflection, and weekly rhythm history.");
     assert(jsonBackup.health.includes("完整备份") && jsonBackup.health.includes("今天"), "Data health should show a current full backup.");
     assert(jsonBackup.toast.includes("JSON 完整备份已导出"), "Full backup should confirm export to the user.");
 
@@ -1595,7 +1608,7 @@ async function run() {
         overflow: document.documentElement.scrollWidth > innerWidth
       };
     })()`);
-    assert(updateFlow.version.includes("v1.8.1"), "Help should display the current semantic app version.");
+    assert(updateFlow.version.includes("v1.9.0"), "Help should display the current semantic app version.");
     assert(updateFlow.shown && updateFlow.dismissed, "App update banner should be visible and dismissible.");
     assert(updateFlow.message?.type === "SKIP_WAITING" && updateFlow.buttonText === "更新中", "Confirmed update should activate the waiting service worker with clear feedback.");
     assert(!updateFlow.overflow, "Update banner should not cause desktop overflow.");
@@ -1673,6 +1686,21 @@ async function run() {
     assert(mobileInsights.exportButtonWidth <= mobileInsights.width, "Mobile report export button should fit.");
     assert(!mobileInsights.overflow, "Mobile insights layout should not overflow.");
     await screenshot(cdp, "smoke-mobile-insights.png");
+
+    const mobileRhythmReview = await evaluate(cdp, `(() => {
+      const panel = document.querySelector(".weekly-rhythm-insight");
+      panel.scrollIntoView({ block: "center" });
+      const bounds = panel.getBoundingClientRect();
+      return {
+        width: bounds.width,
+        viewportWidth: innerWidth,
+        label: panel.querySelector("h4")?.textContent,
+        overflow: document.documentElement.scrollWidth > innerWidth
+      };
+    })()`);
+    await delay(120);
+    assert(mobileRhythmReview.label?.length > 0 && mobileRhythmReview.width <= mobileRhythmReview.viewportWidth && !mobileRhythmReview.overflow, "Mobile rhythm review should render as a readable, non-overflowing insight.");
+    await screenshot(cdp, "smoke-mobile-rhythm-review.png");
 
     await evaluate(cdp, `document.querySelector('[data-tab="library"]').click(); window.scrollTo(0, 0);`);
     await delay(150);
@@ -1774,6 +1802,7 @@ async function run() {
         dataReset,
         mobile,
         mobileInsights,
+        mobileRhythmReview,
         mobileWeeklyRhythm,
         mobileCareSummary,
         mobileSupportAgreement,
@@ -1783,6 +1812,7 @@ async function run() {
         "output/playwright/smoke-desktop.png",
         "output/playwright/smoke-mobile.png",
         "output/playwright/smoke-mobile-insights.png",
+        "output/playwright/smoke-mobile-rhythm-review.png",
         "output/playwright/smoke-mobile-weekly-rhythm.png",
         "output/playwright/smoke-mobile-care-summary.png",
         "output/playwright/smoke-mobile-support-agreement.png",

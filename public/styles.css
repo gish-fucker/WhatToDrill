@@ -1785,6 +1785,47 @@ input[type="checkbox"] {
   gap: 10px;
 }
 
+.weekly-rhythm-insight {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid #cbded7;
+  border-left: 4px solid var(--primary);
+  border-radius: var(--radius);
+  background: var(--primary-soft);
+}
+
+.weekly-rhythm-insight h4 {
+  margin: 2px 0 5px;
+  color: var(--text);
+  font-size: 16px;
+}
+
+.weekly-rhythm-insight p {
+  margin-bottom: 0;
+}
+
+.weekly-rhythm-score {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 3px;
+  text-align: right;
+}
+
+.weekly-rhythm-score strong {
+  color: var(--primary-strong);
+  font-size: 26px;
+  line-height: 1;
+}
+
+.weekly-rhythm-score span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .weekly-metric {
   min-height: 112px;
   border: 1px solid var(--line);
@@ -3036,6 +3077,15 @@ input[type="checkbox"] {
   .exercise-progress-grid,
   .weekly-actions {
     grid-template-columns: 1fr;
+  }
+
+  .weekly-rhythm-insight {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .weekly-rhythm-score {
+    text-align: left;
   }
 
   .starter-steps {

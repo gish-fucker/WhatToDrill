@@ -1,6 +1,6 @@
 const STORAGE_KEY = "habit_fitness_app_v1";
 const WORKOUT_DRAFT_KEY = "habit_fitness_workout_draft_v1";
-const APP_VERSION = "1.8.1";
+const APP_VERSION = "1.9.0";
 const CLOUD_ADVICE_CONSENT_VERSION = 1;
 const BACKUP_SCHEMA_VERSION = 1;
 
@@ -9,6 +9,7 @@ const defaultSettings = {
   waterTargetMl: 2000,
   weeklyWorkoutTarget: 2,
   plannedWorkoutDays: [],
+  weeklyRhythmHistory: [],
   trainingGoal: "general",
   preferredEnvironment: "gym",
   conservativeMode: false,
@@ -300,6 +301,21 @@ function normalizePlannedWorkoutDays(days) {
     .sort((a, b) => a - b);
 }
 
+function normalizeWeeklyRhythmHistory(history) {
+  if (!Array.isArray(history)) return [];
+  const byDate = new Map();
+  history.forEach(entry => {
+    if (!isValidDateText(entry?.effectiveDate)) return;
+    byDate.set(entry.effectiveDate, {
+      effectiveDate: entry.effectiveDate,
+      days: normalizePlannedWorkoutDays(entry.days)
+    });
+  });
+  return [...byDate.values()]
+    .sort((a, b) => a.effectiveDate.localeCompare(b.effectiveDate))
+    .slice(-24);
+}
+
 function sanitizeReminderTime(value, fallback) {
   if (typeof value !== "string" || !/^\d{2}:\d{2}$/.test(value)) return fallback;
   const [hour, minute] = value.split(":").map(Number);
@@ -319,6 +335,7 @@ function normalizeSettings(settings = {}) {
     waterTargetMl: sanitizeWaterTarget(settings.waterTargetMl ?? defaultSettings.waterTargetMl),
     weeklyWorkoutTarget: sanitizeWeeklyWorkoutTarget(settings.weeklyWorkoutTarget ?? defaultSettings.weeklyWorkoutTarget),
     plannedWorkoutDays: normalizePlannedWorkoutDays(settings.plannedWorkoutDays),
+    weeklyRhythmHistory: normalizeWeeklyRhythmHistory(settings.weeklyRhythmHistory),
     trainingGoal: goalIds.includes(settings.trainingGoal) ? settings.trainingGoal : defaultSettings.trainingGoal,
     preferredEnvironment: environmentIds.includes(settings.preferredEnvironment) ? settings.preferredEnvironment : defaultSettings.preferredEnvironment,
     conservativeMode: Boolean(settings.conservativeMode),
@@ -1432,12 +1449,18 @@ function renderPreferences() {
 }
 
 function savePreferences() {
+  const plannedWorkoutDays = Array.from(document.querySelectorAll('input[name="plannedWorkoutDays"]:checked')).map(input => Number(input.value));
+  const normalizedPlanDays = normalizePlannedWorkoutDays(plannedWorkoutDays);
+  const changedRhythm = normalizedPlanDays.join(",") !== state.settings.plannedWorkoutDays.join(",");
   state.settings = normalizeSettings({
     ...state.settings,
     trainingGoal: $("trainingGoal").value,
     preferredEnvironment: $("preferredEnvironment").value,
     weeklyWorkoutTarget: $("weeklyWorkoutTarget").value,
-    plannedWorkoutDays: Array.from(document.querySelectorAll('input[name="plannedWorkoutDays"]:checked')).map(input => Number(input.value)),
+    plannedWorkoutDays: normalizedPlanDays,
+    weeklyRhythmHistory: changedRhythm
+      ? [...state.settings.weeklyRhythmHistory, { effectiveDate: today(), days: normalizedPlanDays }]
+      : state.settings.weeklyRhythmHistory,
     waterTargetMl: $("waterTargetMl").value,
     conservativeMode: $("conservativeMode").checked,
     dailyReminderEnabled: $("dailyReminderEnabled").checked,
@@ -2514,6 +2537,17 @@ function renderWeeklyReview() {
       ${weeklyMetric("睡眠", review.metrics.sleep, "平均值")}
       ${weeklyMetric("饮水", review.metrics.water, "达标天数")}
     </div>
+    <section class="weekly-rhythm-insight" aria-label="计划兑现复盘">
+      <div>
+        <p class="eyebrow">Rhythm follow-through</p>
+        <h4>${escapeHtml(review.rhythm.label)}</h4>
+        <p class="muted">${escapeHtml(review.rhythm.detail)}</p>
+      </div>
+      <div class="weekly-rhythm-score">
+        <strong>${escapeHtml(review.rhythm.value)}</strong>
+        <span>计划兑现率</span>
+      </div>
+    </section>
     <div class="weekly-actions">
       ${review.actions.map((action, index) => `
         <article class="weekly-action">
@@ -2544,6 +2578,7 @@ function buildWeeklyReview() {
   const avgPain = average(recentDaily.map(item => item.pain));
   const waterDays = recentDaily.filter(item => (item.waterMl || 0) >= 1800).length;
   const highRpeCount = recentWorkouts.filter(item => item.sessionRpe >= 8).length;
+  const rhythm = buildRhythmReview();
   const coverage = recentDaily.length || recentWorkouts.length
     ? `${recentDaily.length} 天状态 · ${recentWorkouts.length} 次训练`
     : "等待记录";
@@ -2558,7 +2593,48 @@ function buildWeeklyReview() {
       sleep: avgSleep === null ? "暂无" : `${avgSleep.toFixed(1)}h`,
       water: `${waterDays}/${recentDaily.length || 7} 天`
     },
-    actions: buildWeeklyActions(recentDaily, recentWorkouts, avgSleep, avgEnergy, avgPain, highRpeCount)
+    actions: buildWeeklyActions(recentDaily, recentWorkouts, avgSleep, avgEnergy, avgPain, highRpeCount),
+    rhythm
+  };
+}
+
+function plannedDaysForDate(dateText) {
+  const effective = state.settings.weeklyRhythmHistory
+    .filter(entry => entry.effectiveDate <= dateText)
+    .at(-1);
+  return effective?.days || [];
+}
+
+function buildRhythmReview() {
+  const period = getLastDays(28);
+  const scheduledDates = period.filter(date => plannedDaysForDate(date).includes(weekdayIndex(date)));
+  const completedDates = new Set(state.workouts.map(workout => workout.date));
+  const completed = scheduledDates.filter(date => completedDates.has(date)).length;
+  const lastChange = state.settings.weeklyRhythmHistory.at(-1);
+  if (!lastChange) {
+    return {
+      label: "等待建立节奏",
+      value: "--",
+      detail: "选择计划训练日后，会从设置当天开始统计兑现情况。"
+    };
+  }
+  if (!scheduledDates.length) {
+    return {
+      label: "尚未进入计划日",
+      value: "--",
+      detail: `当前节奏从 ${lastChange.effectiveDate} 生效，后续会按计划日统计。`
+    };
+  }
+  const rate = Math.round(completed / scheduledDates.length * 100);
+  const detail = rate >= 75
+    ? "计划兑现很稳定，可以继续保持当前节奏。"
+    : rate >= 40
+      ? "节奏正在形成。下周先优先守住一个最容易完成的计划日。"
+      : "兑现率偏低，建议减少计划日或把其中一天改成轻量恢复。";
+  return {
+    label: `近 4 周 ${completed}/${scheduledDates.length} 个计划日`,
+    value: `${rate}%`,
+    detail
   };
 }
 
