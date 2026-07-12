@@ -9,7 +9,7 @@
     <link rel="icon" href="./app-icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="./app-icon-180.png" sizes="180x180">
     <link rel="manifest" href="./manifest.webmanifest">
-    <link rel="stylesheet" href="./styles.css?v=20260712-rhythm-review-v1">
+    <link rel="stylesheet" href="./styles.css?v=20260712-coach-brief-v1">
   </head>
   <body>
     <a class="skip-link" href="#mainContent">跳到主要内容</a>
@@ -675,6 +675,27 @@
       </form>
     </dialog>
 
+    <dialog id="coachBriefDialog" class="confirm-dialog care-summary-dialog" aria-labelledby="coachBriefTitle" aria-describedby="coachBriefDescription">
+      <form id="coachBriefForm" class="confirm-dialog-body">
+        <p class="eyebrow">Coach collaboration</p>
+        <h2 id="coachBriefTitle">生成训练协作简报</h2>
+        <p id="coachBriefDescription">用于和教练确认计划与执行节奏。只分享你选择的汇总信息，不包含健康原始记录、备注或动作明细。</p>
+        <fieldset class="care-disclosure">
+          <legend>包含内容</legend>
+          <label><input id="coachBriefIncludePlan" type="checkbox" checked> 计划节奏</label>
+          <label><input id="coachBriefIncludeAdherence" type="checkbox" checked> 计划兑现</label>
+          <label><input id="coachBriefIncludeExecution" type="checkbox" checked> 执行概览</label>
+        </fieldset>
+        <label class="dialog-field" for="coachBriefPreview">发送前预览</label>
+        <textarea id="coachBriefPreview" rows="13" readonly></textarea>
+        <p class="privacy-note">简报在当前设备生成；只有你主动分享或复制后才会离开应用。</p>
+        <div class="confirm-dialog-actions">
+          <button id="cancelCoachBriefBtn" class="ghost-button" type="button">取消</button>
+          <button id="shareCoachBriefBtn" type="submit">分享简报</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog id="resetDataDialog" class="confirm-dialog" aria-labelledby="resetDataTitle" aria-describedby="resetDataDescription">
       <div class="confirm-dialog-body">
         <p class="eyebrow">Data control</p>
@@ -714,6 +735,6 @@
     </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=20260712-rhythm-review-v1"></script>
+    <script src="./app.js?v=20260712-coach-brief-v1"></script>
   </body>
 </html>

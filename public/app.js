@@ -1,6 +1,6 @@
 const STORAGE_KEY = "habit_fitness_app_v1";
 const WORKOUT_DRAFT_KEY = "habit_fitness_workout_draft_v1";
-const APP_VERSION = "1.9.0";
+const APP_VERSION = "1.10.0";
 const CLOUD_ADVICE_CONSENT_VERSION = 1;
 const BACKUP_SCHEMA_VERSION = 1;
 
@@ -1950,6 +1950,7 @@ function renderRetentionInsights() {
         <span class="type-pill">${escapeHtml(review.rangeLabel)}</span>
         <span class="confidence-pill ${escapeAttr(review.confidenceKey)}">${escapeHtml(review.confidenceLabel)}</span>
         <button id="exportWeeklyReportBtn" class="ghost-button" type="button">导出周报</button>
+        <button id="openCoachBriefBtn" class="ghost-button" type="button">生成训练协作简报</button>
         <button id="openCareSummaryBtn" type="button">分享关怀摘要</button>
       </div>
     </div>
@@ -2433,6 +2434,91 @@ function careSummaryOptions() {
     includeRisks: $("careIncludeRisks").checked,
     includeActions: $("careIncludeActions").checked
   };
+}
+
+function coachBriefOptions() {
+  return {
+    includePlan: $("coachBriefIncludePlan").checked,
+    includeAdherence: $("coachBriefIncludeAdherence").checked,
+    includeExecution: $("coachBriefIncludeExecution").checked
+  };
+}
+
+function buildCoachBrief(options = {}, review = buildRetentionReview()) {
+  const rhythm = buildWeeklyRhythm();
+  const rhythmReview = buildRhythmReview();
+  const weekly = buildWeeklyTargetProgress();
+  const recentWorkouts = getRecent(state.workouts, 7);
+  const totalSets = recentWorkouts.reduce((sum, workout) => sum + countSets(workout), 0);
+  const includePlan = options.includePlan !== false;
+  const includeAdherence = options.includeAdherence !== false;
+  const includeExecution = options.includeExecution !== false;
+  const lines = [
+    "训练协作简报",
+    `范围：${review.rangeLabel}`,
+    "",
+    "训练设定",
+    `- 目标：${goalLabel()}`,
+    `- 环境：${environmentLabel()}`
+  ];
+  if (includePlan) {
+    lines.push("", "计划节奏", `- 训练日：${rhythm.hasPlan ? rhythm.dayLabels : "尚未设置"}`, `- 下一次：${rhythm.nextLabel}`);
+  }
+  if (includeAdherence) {
+    lines.push("", "计划兑现", `- 近 4 周：${rhythmReview.label}`, `- 兑现率：${rhythmReview.value}`, `- 解读：${rhythmReview.detail}`);
+  }
+  if (includeExecution) {
+    lines.push("", "执行概览", `- 最近 7 天训练：${recentWorkouts.length} 次`, `- 有效组数：${totalSets} 组`, `- 本周目标：${weekly.completed}/${weekly.target} 次`);
+  }
+  lines.push(
+    "",
+    "协作请求",
+    "- 请帮我确认下一周的训练节奏与强度是否合适，并优先尊重我对恢复状态的反馈。",
+    "",
+    "隐私说明：本简报由本机生成，不包含健康状态、疼痛、睡眠、备注原文、动作明细、重量、次数、具体日期或完整历史。"
+  );
+  return lines.join("\n");
+}
+
+function updateCoachBriefPreview() {
+  $("coachBriefPreview").value = buildCoachBrief(coachBriefOptions());
+}
+
+function openCoachBriefDialog() {
+  $("coachBriefIncludePlan").checked = true;
+  $("coachBriefIncludeAdherence").checked = true;
+  $("coachBriefIncludeExecution").checked = true;
+  updateCoachBriefPreview();
+  $("coachBriefDialog").showModal();
+  $("coachBriefIncludePlan").focus();
+}
+
+function closeCoachBriefDialog() {
+  $("coachBriefDialog").close();
+}
+
+async function shareCoachBrief(event) {
+  event.preventDefault();
+  const text = buildCoachBrief(coachBriefOptions());
+  try {
+    if (navigator.share) {
+      await navigator.share({ title: "训练协作简报", text });
+      showToast("训练协作简报已交给系统分享");
+    } else {
+      await navigator.clipboard.writeText(text);
+      showToast("训练协作简报已复制");
+    }
+    closeCoachBriefDialog();
+  } catch (error) {
+    if (error?.name === "AbortError") return;
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast("系统分享不可用，训练协作简报已复制");
+      closeCoachBriefDialog();
+    } catch {
+      showToast("分享失败，请稍后再试");
+    }
+  }
 }
 
 function buildCareSummary(options = {}, review = buildRetentionReview()) {
@@ -4187,7 +4273,15 @@ function bindActions() {
   });
   $("retentionInsights").addEventListener("click", event => {
     if (event.target.closest("#exportWeeklyReportBtn")) exportWeeklyReport();
+    if (event.target.closest("#openCoachBriefBtn")) openCoachBriefDialog();
     if (event.target.closest("#openCareSummaryBtn")) openCareSummaryDialog();
+  });
+  $("coachBriefForm").addEventListener("input", updateCoachBriefPreview);
+  $("coachBriefForm").addEventListener("change", updateCoachBriefPreview);
+  $("coachBriefForm").addEventListener("submit", shareCoachBrief);
+  $("cancelCoachBriefBtn").addEventListener("click", closeCoachBriefDialog);
+  $("coachBriefDialog").addEventListener("click", event => {
+    if (event.target === $("coachBriefDialog")) closeCoachBriefDialog();
   });
   $("careSummaryForm").addEventListener("input", updateCareSummaryPreview);
   $("careSummaryForm").addEventListener("change", updateCareSummaryPreview);

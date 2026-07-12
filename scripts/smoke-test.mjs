@@ -134,7 +134,7 @@ async function run() {
 
   const server = spawn(process.execPath, ["server.js"], {
     cwd: process.cwd(),
-    env: { ...process.env, HOST: "127.0.0.1", PORT: String(appPort), APP_VERSION: "1.9.0", OPENAI_API_KEY: "", ADVICE_RATE_LIMIT: "10" },
+    env: { ...process.env, HOST: "127.0.0.1", PORT: String(appPort), APP_VERSION: "1.10.0", OPENAI_API_KEY: "", ADVICE_RATE_LIMIT: "10" },
     stdio: "ignore",
     windowsHide: true
   });
@@ -253,7 +253,7 @@ async function run() {
     assert(serverHttp.csp?.includes("frame-ancestors 'none'"), "Static responses should include a restrictive CSP.");
     assert(serverHttp.frameOptions === "DENY", "Static responses should prevent framing.");
     assert(/^[0-9a-f-]{36}$/i.test(serverHttp.requestId), "API responses should expose a generated request ID.");
-    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.9.0", "Health response should expose status and release version.");
+    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.10.0", "Health response should expose status and release version.");
     assert(Number.isInteger(serverHttp.health.uptimeSeconds) && serverHttp.health.uptimeSeconds >= 0, "Health response should expose a valid uptime.");
     assert(serverHttp.health.openaiConfigured === false && serverHttp.health.model === "gpt-5-mini", "Health response should expose non-secret AI configuration state.");
     assert(serverHttp.indexCache === "no-cache", "HTML should revalidate instead of using a stale shell.");
@@ -1497,6 +1497,26 @@ async function run() {
     assert(careSummary.blocked.disabled && careSummary.blocked.error.includes("至少选择一项"), "Care summary should prevent an empty disclosure.");
     assert(careSummary.closed, "Care summary should close without changing records.");
 
+    const coachBrief = await evaluate(cdp, `(() => {
+      document.querySelector("#openCoachBriefBtn").click();
+      const defaultPreview = document.querySelector("#coachBriefPreview").value;
+      const defaultState = {
+        open: document.querySelector("#coachBriefDialog").open,
+        focused: document.activeElement?.id,
+        text: defaultPreview
+      };
+      document.querySelector("#coachBriefIncludePlan").checked = false;
+      document.querySelector("#coachBriefIncludeAdherence").checked = false;
+      document.querySelector("#coachBriefForm").dispatchEvent(new Event("change", { bubbles: true }));
+      const reducedPreview = document.querySelector("#coachBriefPreview").value;
+      document.querySelector("#cancelCoachBriefBtn").click();
+      return { defaultState, reducedPreview, closed: !document.querySelector("#coachBriefDialog").open };
+    })()`);
+    assert(coachBrief.defaultState.open && coachBrief.defaultState.focused === "coachBriefIncludePlan", "Coach brief should open as an accessible collaboration dialog.");
+    assert(coachBrief.defaultState.text.includes("训练协作简报") && coachBrief.defaultState.text.includes("训练设定") && coachBrief.defaultState.text.includes("计划兑现"), "Coach brief should include actionable planning and execution context.");
+    assert(!coachBrief.defaultState.text.includes("PRIVATE_DAILY_NOTE") && !coachBrief.defaultState.text.includes("PRIVATE_WORKOUT_NOTE") && !coachBrief.defaultState.text.includes("PRIVATE_EXERCISE_NAME"), "Coach brief must exclude health notes and exercise details.");
+    assert(!coachBrief.reducedPreview.includes("计划节奏") && !coachBrief.reducedPreview.includes("计划兑现") && coachBrief.reducedPreview.includes("执行概览") && coachBrief.closed, "Coach brief disclosure controls should update preview and close safely.");
+
     const storageFailure = await evaluate(cdp, `(() => {
       const snapshot = JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)}));
       const originalSetItem = Storage.prototype.setItem;
@@ -1608,7 +1628,7 @@ async function run() {
         overflow: document.documentElement.scrollWidth > innerWidth
       };
     })()`);
-    assert(updateFlow.version.includes("v1.9.0"), "Help should display the current semantic app version.");
+    assert(updateFlow.version.includes("v1.10.0"), "Help should display the current semantic app version.");
     assert(updateFlow.shown && updateFlow.dismissed, "App update banner should be visible and dismissible.");
     assert(updateFlow.message?.type === "SKIP_WAITING" && updateFlow.buttonText === "更新中", "Confirmed update should activate the waiting service worker with clear feedback.");
     assert(!updateFlow.overflow, "Update banner should not cause desktop overflow.");
@@ -1740,8 +1760,26 @@ async function run() {
     assert(mobileCareSummary.previewHeight >= 200 && !mobileCareSummary.overflow, "Mobile care summary preview should remain readable without horizontal overflow.");
     await screenshot(cdp, "smoke-mobile-care-summary.png");
 
-    const mobileSupportAgreement = await evaluate(cdp, `(() => {
+    const mobileCoachBrief = await evaluate(cdp, `(() => {
       document.querySelector("#cancelCareSummaryBtn").click();
+      document.querySelector("#openCoachBriefBtn").click();
+      const dialog = document.querySelector("#coachBriefDialog");
+      const bounds = dialog.getBoundingClientRect();
+      return {
+        open: dialog.open,
+        width: bounds.width,
+        viewportWidth: innerWidth,
+        focused: document.activeElement?.id,
+        previewHeight: document.querySelector("#coachBriefPreview").getBoundingClientRect().height,
+        overflow: document.documentElement.scrollWidth > innerWidth
+      };
+    })()`);
+    assert(mobileCoachBrief.open && mobileCoachBrief.focused === "coachBriefIncludePlan", "Mobile coach brief should open with usable focus.");
+    assert(mobileCoachBrief.width <= mobileCoachBrief.viewportWidth - 24 && mobileCoachBrief.previewHeight >= 200 && !mobileCoachBrief.overflow, "Mobile coach brief should fit with a readable preview.");
+    await screenshot(cdp, "smoke-mobile-coach-brief.png");
+
+    const mobileSupportAgreement = await evaluate(cdp, `(() => {
+      document.querySelector("#cancelCoachBriefBtn").click();
       document.querySelector('[data-tab="today"]').click();
       document.querySelector("#openSupportAgreementBtn").click();
       const dialog = document.querySelector("#supportAgreementDialog");
@@ -1805,6 +1843,7 @@ async function run() {
         mobileRhythmReview,
         mobileWeeklyRhythm,
         mobileCareSummary,
+        mobileCoachBrief,
         mobileSupportAgreement,
         mobileSupportReflection
       },
@@ -1815,6 +1854,7 @@ async function run() {
         "output/playwright/smoke-mobile-rhythm-review.png",
         "output/playwright/smoke-mobile-weekly-rhythm.png",
         "output/playwright/smoke-mobile-care-summary.png",
+        "output/playwright/smoke-mobile-coach-brief.png",
         "output/playwright/smoke-mobile-support-agreement.png",
         "output/playwright/smoke-mobile-support-reflection.png"
       ]

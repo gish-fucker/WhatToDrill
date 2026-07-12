@@ -1,11 +1,11 @@
-const CACHE_NAME = "habit-fitness-shell-v20260712-rhythm-review";
+const CACHE_NAME = "habit-fitness-shell-v20260712-coach-brief";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/privacy.html",
   "/terms.html",
-  "/styles.css?v=20260712-rhythm-review-v1",
-  "/app.js?v=20260712-rhythm-review-v1",
+  "/styles.css?v=20260712-coach-brief-v1",
+  "/app.js?v=20260712-coach-brief-v1",
   "/app-icon.svg",
   "/app-icon-180.png",
   "/app-icon-192.png",
