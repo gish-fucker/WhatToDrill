@@ -134,7 +134,7 @@ async function run() {
 
   const server = spawn(process.execPath, ["server.js"], {
     cwd: process.cwd(),
-    env: { ...process.env, HOST: "127.0.0.1", PORT: String(appPort), APP_VERSION: "1.7.0", OPENAI_API_KEY: "", ADVICE_RATE_LIMIT: "10" },
+    env: { ...process.env, HOST: "127.0.0.1", PORT: String(appPort), APP_VERSION: "1.8.0", OPENAI_API_KEY: "", ADVICE_RATE_LIMIT: "10" },
     stdio: "ignore",
     windowsHide: true
   });
@@ -253,7 +253,7 @@ async function run() {
     assert(serverHttp.csp?.includes("frame-ancestors 'none'"), "Static responses should include a restrictive CSP.");
     assert(serverHttp.frameOptions === "DENY", "Static responses should prevent framing.");
     assert(/^[0-9a-f-]{36}$/i.test(serverHttp.requestId), "API responses should expose a generated request ID.");
-    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.7.0", "Health response should expose status and release version.");
+    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.8.0", "Health response should expose status and release version.");
     assert(Number.isInteger(serverHttp.health.uptimeSeconds) && serverHttp.health.uptimeSeconds >= 0, "Health response should expose a valid uptime.");
     assert(serverHttp.health.openaiConfigured === false && serverHttp.health.model === "gpt-5-mini", "Health response should expose non-secret AI configuration state.");
     assert(serverHttp.indexCache === "no-cache", "HTML should revalidate instead of using a stale shell.");
@@ -1188,6 +1188,8 @@ async function run() {
       document.querySelector("#dailyReminderTime").value = "20:30";
       document.querySelector("#workoutReminderEnabled").checked = true;
       document.querySelector("#workoutReminderTime").value = "18:15";
+      document.querySelector('input[name="plannedWorkoutDays"][value="1"]').checked = true;
+      document.querySelector('input[name="plannedWorkoutDays"][value="4"]').checked = true;
       document.querySelector("#savePreferencesBtn").click();
       const parsed = JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)}));
       const reminderText = document.querySelector("#reminderStatus")?.innerText;
@@ -1213,9 +1215,11 @@ async function run() {
     assert(preferences.settings.dailyReminderTime === "20:30", "Preferences should save daily reminder time.");
     assert(preferences.settings.workoutReminderEnabled, "Preferences should save workout reminder opt-in.");
     assert(preferences.settings.workoutReminderTime === "18:15", "Preferences should save workout reminder time.");
+    assert(preferences.settings.plannedWorkoutDays.join(",") === "1,4", "Preferences should save weekly planned workout days.");
     assert(preferences.reminderText.includes("提醒已配置") || preferences.reminderText.includes("本地提醒已就绪"), "Reminder status should reflect saved reminder settings.");
     assert(preferences.todayText.includes("2400ml"), "Today dashboard should use preferred water target.");
     assert(preferences.weeklyTargetText.includes("/3 次训练"), "Weekly target panel should use preferred weekly workout target.");
+    assert(preferences.weeklyTargetText.includes("周一、周四"), "Weekly target panel should show the selected training rhythm.");
     assert(preferences.insightText.includes("每周 3 次训练目标"), "Retention actions should use weekly workout target.");
 
     const reminderEngine = await evaluate(cdp, `(() => {
@@ -1231,6 +1235,7 @@ async function run() {
         dailyReminderTime: "00:00",
         workoutReminderEnabled: true,
         workoutReminderTime: "00:00",
+        plannedWorkoutDays: [weekdayIndex(today())],
         lastDailyReminderDate: "",
         lastWorkoutReminderDate: ""
       });
@@ -1253,6 +1258,29 @@ async function run() {
     assert(reminderEngine.sentAgain.length === 0, "Reminder scheduler should not duplicate reminders on the same day.");
     assert(reminderEngine.notifications.length === 2, "Reminder scheduler should deliver two local notifications in the test hook.");
     assert(reminderEngine.lastDaily && reminderEngine.lastWorkout, "Reminder scheduler should persist last sent dates.");
+
+    const plannedReminderGate = await evaluate(cdp, `(() => {
+      window.__testNotificationPermission = "granted";
+      window.__testNotifications = [];
+      const snapshot = JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)}));
+      state.dailyLogs = [{ id: "daily", date: today() }];
+      state.workouts = [];
+      state.settings = normalizeSettings({
+        ...state.settings,
+        weeklyWorkoutTarget: 2,
+        workoutReminderEnabled: true,
+        workoutReminderTime: "00:00",
+        plannedWorkoutDays: [(weekdayIndex(today()) + 1) % 7],
+        lastWorkoutReminderDate: ""
+      });
+      const sent = checkReminderSchedule(new Date(today() + "T12:00:00"));
+      const notifications = window.__testNotifications;
+      Object.assign(state, normalizeImportedState(snapshot));
+      localStorage.setItem(${JSON.stringify(storageKey)}, JSON.stringify(state));
+      renderAll();
+      return { sent, notifications };
+    })()`);
+    assert(!plannedReminderGate.sent.includes("workout") && plannedReminderGate.notifications.length === 0, "A planned workout reminder should wait for the selected training day.");
 
     const jsonBackup = await evaluate(cdp, `(() => {
       state.settings = normalizeSettings({
@@ -1555,7 +1583,7 @@ async function run() {
         overflow: document.documentElement.scrollWidth > innerWidth
       };
     })()`);
-    assert(updateFlow.version.includes("v1.7.0"), "Help should display the current semantic app version.");
+    assert(updateFlow.version.includes("v1.8.0"), "Help should display the current semantic app version.");
     assert(updateFlow.shown && updateFlow.dismissed, "App update banner should be visible and dismissible.");
     assert(updateFlow.message?.type === "SKIP_WAITING" && updateFlow.buttonText === "更新中", "Confirmed update should activate the waiting service worker with clear feedback.");
     assert(!updateFlow.overflow, "Update banner should not cause desktop overflow.");
@@ -1634,6 +1662,27 @@ async function run() {
     assert(!mobileInsights.overflow, "Mobile insights layout should not overflow.");
     await screenshot(cdp, "smoke-mobile-insights.png");
 
+    await evaluate(cdp, `document.querySelector('[data-tab="library"]').click(); window.scrollTo(0, 0);`);
+    await delay(150);
+    const mobileWeeklyRhythm = await evaluate(cdp, `(() => {
+      const panel = document.querySelector(".planned-workout-days");
+      const options = document.querySelector(".planned-workout-day-options");
+      const bounds = panel.getBoundingClientRect();
+      return {
+        width: bounds.width,
+        viewportWidth: innerWidth,
+        checkboxes: panel.querySelectorAll('input[name="plannedWorkoutDays"]').length,
+        columns: getComputedStyle(options).gridTemplateColumns.split(" ").length,
+        overflow: document.documentElement.scrollWidth > innerWidth
+      };
+    })()`);
+    assert(mobileWeeklyRhythm.checkboxes === 7 && mobileWeeklyRhythm.columns === 2, "Mobile weekly rhythm settings should expose seven days in a readable two-column grid.");
+    assert(mobileWeeklyRhythm.width <= mobileWeeklyRhythm.viewportWidth && !mobileWeeklyRhythm.overflow, "Mobile weekly rhythm settings should fit without horizontal overflow.");
+    await evaluate(cdp, `document.querySelector(".planned-workout-days").scrollIntoView({ block: "center" });`);
+    await delay(120);
+    await screenshot(cdp, "smoke-mobile-weekly-rhythm.png");
+
+    await evaluate(cdp, `document.querySelector('[data-tab="insights"]').click(); window.scrollTo(0, 0);`);
     const mobileCareSummary = await evaluate(cdp, `(() => {
       document.querySelector("#openCareSummaryBtn").click();
       const dialog = document.querySelector("#careSummaryDialog");
@@ -1713,6 +1762,7 @@ async function run() {
         dataReset,
         mobile,
         mobileInsights,
+        mobileWeeklyRhythm,
         mobileCareSummary,
         mobileSupportAgreement,
         mobileSupportReflection
@@ -1721,6 +1771,7 @@ async function run() {
         "output/playwright/smoke-desktop.png",
         "output/playwright/smoke-mobile.png",
         "output/playwright/smoke-mobile-insights.png",
+        "output/playwright/smoke-mobile-weekly-rhythm.png",
         "output/playwright/smoke-mobile-care-summary.png",
         "output/playwright/smoke-mobile-support-agreement.png",
         "output/playwright/smoke-mobile-support-reflection.png"

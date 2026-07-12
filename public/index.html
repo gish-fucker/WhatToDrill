@@ -9,7 +9,7 @@
     <link rel="icon" href="./app-icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="./app-icon-180.png" sizes="180x180">
     <link rel="manifest" href="./manifest.webmanifest">
-    <link rel="stylesheet" href="./styles.css?v=20260712-support-reflection-v2">
+    <link rel="stylesheet" href="./styles.css?v=20260712-weekly-rhythm-v1">
   </head>
   <body>
     <a class="skip-link" href="#mainContent">跳到主要内容</a>
@@ -319,6 +319,19 @@
                 每周训练目标
                 <input id="weeklyWorkoutTarget" type="number" min="1" max="6" step="1">
               </label>
+              <fieldset class="planned-workout-days wide">
+                <legend>每周计划训练日</legend>
+                <p class="muted">可不选；选中后，训练提醒只会在计划日触发。</p>
+                <div class="planned-workout-day-options">
+                  <label><input type="checkbox" name="plannedWorkoutDays" value="1"> 周一</label>
+                  <label><input type="checkbox" name="plannedWorkoutDays" value="2"> 周二</label>
+                  <label><input type="checkbox" name="plannedWorkoutDays" value="3"> 周三</label>
+                  <label><input type="checkbox" name="plannedWorkoutDays" value="4"> 周四</label>
+                  <label><input type="checkbox" name="plannedWorkoutDays" value="5"> 周五</label>
+                  <label><input type="checkbox" name="plannedWorkoutDays" value="6"> 周六</label>
+                  <label><input type="checkbox" name="plannedWorkoutDays" value="0"> 周日</label>
+                </div>
+              </fieldset>
               <label>
                 饮水目标 ml
                 <input id="waterTargetMl" type="number" min="800" max="5000" step="100">
@@ -701,6 +714,6 @@
     </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=20260712-support-reflection-v2"></script>
+    <script src="./app.js?v=20260712-weekly-rhythm-v1"></script>
   </body>
 </html>

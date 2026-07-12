@@ -1099,6 +1099,41 @@ input[type="checkbox"] {
   accent-color: var(--primary);
 }
 
+.planned-workout-days {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.planned-workout-days legend {
+  color: var(--text);
+  font-weight: 800;
+}
+
+.planned-workout-days p {
+  margin: 0;
+}
+
+.planned-workout-day-options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.planned-workout-day-options label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.planned-workout-day-options input[type="checkbox"] {
+  flex: 0 0 18px;
+}
+
 .water-field {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 64px;
@@ -3021,6 +3056,10 @@ input[type="checkbox"] {
   .support-form-grid,
   .support-score-group {
     grid-template-columns: 1fr;
+  }
+
+  .planned-workout-day-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .support-score-group label:last-child {

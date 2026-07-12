@@ -1,6 +1,6 @@
 const STORAGE_KEY = "habit_fitness_app_v1";
 const WORKOUT_DRAFT_KEY = "habit_fitness_workout_draft_v1";
-const APP_VERSION = "1.7.0";
+const APP_VERSION = "1.8.0";
 const CLOUD_ADVICE_CONSENT_VERSION = 1;
 const BACKUP_SCHEMA_VERSION = 1;
 
@@ -8,6 +8,7 @@ const defaultSettings = {
   waterStepMl: 500,
   waterTargetMl: 2000,
   weeklyWorkoutTarget: 2,
+  plannedWorkoutDays: [],
   trainingGoal: "general",
   preferredEnvironment: "gym",
   conservativeMode: false,
@@ -293,6 +294,12 @@ function sanitizeWeeklyWorkoutTarget(value) {
   return clamp(Math.round(parsed), 1, 6);
 }
 
+function normalizePlannedWorkoutDays(days) {
+  if (!Array.isArray(days)) return [];
+  return [...new Set(days.map(Number).filter(day => Number.isInteger(day) && day >= 0 && day <= 6))]
+    .sort((a, b) => a - b);
+}
+
 function sanitizeReminderTime(value, fallback) {
   if (typeof value !== "string" || !/^\d{2}:\d{2}$/.test(value)) return fallback;
   const [hour, minute] = value.split(":").map(Number);
@@ -311,6 +318,7 @@ function normalizeSettings(settings = {}) {
     waterStepMl: sanitizeWaterStep(settings.waterStepMl ?? defaultSettings.waterStepMl),
     waterTargetMl: sanitizeWaterTarget(settings.waterTargetMl ?? defaultSettings.waterTargetMl),
     weeklyWorkoutTarget: sanitizeWeeklyWorkoutTarget(settings.weeklyWorkoutTarget ?? defaultSettings.weeklyWorkoutTarget),
+    plannedWorkoutDays: normalizePlannedWorkoutDays(settings.plannedWorkoutDays),
     trainingGoal: goalIds.includes(settings.trainingGoal) ? settings.trainingGoal : defaultSettings.trainingGoal,
     preferredEnvironment: environmentIds.includes(settings.preferredEnvironment) ? settings.preferredEnvironment : defaultSettings.preferredEnvironment,
     conservativeMode: Boolean(settings.conservativeMode),
@@ -1411,6 +1419,9 @@ function renderPreferences() {
   $("trainingGoal").value = state.settings.trainingGoal;
   $("preferredEnvironment").value = state.settings.preferredEnvironment;
   $("weeklyWorkoutTarget").value = state.settings.weeklyWorkoutTarget;
+  document.querySelectorAll('input[name="plannedWorkoutDays"]').forEach(input => {
+    input.checked = state.settings.plannedWorkoutDays.includes(Number(input.value));
+  });
   $("waterTargetMl").value = state.settings.waterTargetMl;
   $("conservativeMode").checked = state.settings.conservativeMode;
   $("dailyReminderEnabled").checked = state.settings.dailyReminderEnabled;
@@ -1426,6 +1437,7 @@ function savePreferences() {
     trainingGoal: $("trainingGoal").value,
     preferredEnvironment: $("preferredEnvironment").value,
     weeklyWorkoutTarget: $("weeklyWorkoutTarget").value,
+    plannedWorkoutDays: Array.from(document.querySelectorAll('input[name="plannedWorkoutDays"]:checked')).map(input => Number(input.value)),
     waterTargetMl: $("waterTargetMl").value,
     conservativeMode: $("conservativeMode").checked,
     dailyReminderEnabled: $("dailyReminderEnabled").checked,
@@ -2966,6 +2978,41 @@ function getCurrentTimeText(date = new Date()) {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
+function weekdayIndex(dateText = today()) {
+  return new Date(`${dateText}T12:00:00`).getDay();
+}
+
+function weekdayLabel(day) {
+  return ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][day] || "";
+}
+
+function buildWeeklyRhythm(dateText = today()) {
+  const plannedDays = state.settings.plannedWorkoutDays;
+  if (!plannedDays.length) {
+    return {
+      hasPlan: false,
+      isPlannedToday: false,
+      dayLabels: "未设计划日",
+      nextLabel: "按状态和周目标灵活安排"
+    };
+  }
+  let nextDate = "";
+  for (let offset = 0; offset < 7; offset += 1) {
+    const candidate = addLocalDays(dateText, offset);
+    if (plannedDays.includes(weekdayIndex(candidate))) {
+      nextDate = candidate;
+      break;
+    }
+  }
+  const isPlannedToday = plannedDays.includes(weekdayIndex(dateText));
+  return {
+    hasPlan: true,
+    isPlannedToday,
+    dayLabels: plannedDays.map(weekdayLabel).join("、"),
+    nextLabel: isPlannedToday ? "今天是计划训练日" : `下一次：${nextDate.slice(5)} ${weekdayLabel(weekdayIndex(nextDate))}`
+  };
+}
+
 function shouldRunReminder(reminderTime, now = new Date()) {
   return getCurrentTimeText(now) >= reminderTime;
 }
@@ -2987,6 +3034,7 @@ function checkReminderSchedule(now = new Date()) {
   const hasDailyToday = state.dailyLogs.some(item => item.date === todayText);
   const hasWorkoutToday = state.workouts.some(item => item.date === todayText);
   const weeklyTarget = buildWeeklyTargetProgress();
+  const weeklyRhythm = buildWeeklyRhythm(todayText);
 
   if (
     state.settings.dailyReminderEnabled &&
@@ -3007,12 +3055,15 @@ function checkReminderSchedule(now = new Date()) {
     state.settings.workoutReminderEnabled &&
     !hasWorkoutToday &&
     weeklyTarget.remaining > 0 &&
+    (!weeklyRhythm.hasPlan || weeklyRhythm.isPlannedToday) &&
     state.settings.lastWorkoutReminderDate !== todayText &&
     shouldRunReminder(state.settings.workoutReminderTime, now)
   ) {
     deliverReminderNotification(
-      "本周训练目标还差一点",
-      `本周还差 ${weeklyTarget.remaining} 次训练。状态允许的话，可以从今日建议开始。`,
+      weeklyRhythm.isPlannedToday ? "今天是计划训练日" : "本周训练目标还差一点",
+      weeklyRhythm.isPlannedToday
+        ? `已安排训练节奏。本周还差 ${weeklyTarget.remaining} 次，状态允许的话可以从今日建议开始。`
+        : `本周还差 ${weeklyTarget.remaining} 次训练。状态允许的话，可以从今日建议开始。`,
       "weekly-workout"
     );
     state.settings.lastWorkoutReminderDate = todayText;
@@ -3048,6 +3099,7 @@ function renderWeeklyTargetPanel() {
   const panel = $("weeklyTargetPanel");
   if (!panel) return;
   const progress = buildWeeklyTargetProgress();
+  const rhythm = buildWeeklyRhythm();
   const rangeLabel = `${progress.days[0].slice(5)} - ${progress.days.at(-1).slice(5)}`;
   const remainingLabel = progress.remaining === 0 ? "目标完成" : `还差 ${progress.remaining} 次`;
   panel.innerHTML = `
@@ -3069,6 +3121,7 @@ function renderWeeklyTargetPanel() {
       ${weeklyTargetMetric("周期", rangeLabel, remainingLabel)}
       ${weeklyTargetMetric("训练组数", `${progress.totalSets} 组`, progress.latestWorkout ? progress.latestWorkout.title : "保存训练后更新")}
       ${weeklyTargetMetric("训练间隔", progress.cadence, progress.latestWorkout ? progress.latestWorkout.date : "等待第一次训练")}
+      ${weeklyTargetMetric("计划节奏", rhythm.dayLabels, rhythm.nextLabel)}
       ${weeklyTargetMetric("下一步", progress.nextAction, progress.remaining === 0 ? "恢复优先" : "可执行")}
     </div>
     <div class="weekly-target-actions">
