@@ -4539,6 +4539,7 @@ function registerServiceWorker() {
   navigator.serviceWorker.register("./sw.js")
     .then(registration => {
       updateOfflineStatus(registration.active ? "离线缓存已就绪" : "正在准备离线缓存");
+      navigator.serviceWorker.ready.then(() => updateOfflineStatus("离线缓存已就绪"));
       if (registration.waiting) showAppUpdate(registration);
       registration.addEventListener("updatefound", () => {
         const worker = registration.installing;
