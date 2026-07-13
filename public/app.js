@@ -4529,7 +4529,7 @@ function registerServiceWorker() {
     return;
   }
 
-  navigator.serviceWorker.register("/sw.js")
+  navigator.serviceWorker.register("./sw.js")
     .then(registration => {
       updateOfflineStatus(registration.active ? "离线缓存已就绪" : "正在准备离线缓存");
       if (registration.waiting) showAppUpdate(registration);

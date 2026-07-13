@@ -1,18 +1,19 @@
-const CACHE_NAME = "habit-fitness-shell-v20260713-weekly-target-calibration";
+const CACHE_NAME = "habit-fitness-shell-v20260713-public-delivery";
+const APP_INDEX = new URL("index.html", self.registration.scope).toString();
 const APP_SHELL = [
-  "/",
-  "/index.html",
-  "/privacy.html",
-  "/terms.html",
-  "/styles.css?v=20260713-weekly-target-calibration-v1",
-  "/app.js?v=20260713-weekly-target-calibration-v1",
-  "/app-icon.svg",
-  "/app-icon-180.png",
-  "/app-icon-192.png",
-  "/app-icon-512.png",
-  "/app-icon-maskable-512.png",
-  "/manifest.webmanifest"
-];
+  "./",
+  "index.html",
+  "privacy.html",
+  "terms.html",
+  "styles.css?v=20260713-weekly-target-calibration-v1",
+  "app.js?v=20260713-weekly-target-calibration-v1",
+  "app-icon.svg",
+  "app-icon-180.png",
+  "app-icon-192.png",
+  "app-icon-512.png",
+  "app-icon-maskable-512.png",
+  "manifest.webmanifest"
+].map(path => new URL(path, self.registration.scope).toString());
 
 self.addEventListener("install", event => {
   event.waitUntil(
@@ -43,11 +44,13 @@ self.addEventListener("fetch", event => {
     event.respondWith(
       fetch(request)
         .then(response => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put("/index.html", copy));
+          if (response.ok) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(request, copy));
+          }
           return response;
         })
-        .catch(() => caches.match("/index.html"))
+        .catch(async () => (await caches.match(request)) || caches.match(APP_INDEX))
     );
     return;
   }

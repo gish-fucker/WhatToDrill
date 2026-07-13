@@ -2,9 +2,9 @@
   "name": "日常与健身记录",
   "short_name": "日常记录",
   "description": "记录生活状态、训练负荷和恢复节奏，让建议真正贴近你。",
-  "id": "/",
-  "start_url": "/",
-  "scope": "/",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
   "lang": "zh-CN",
   "display": "standalone",
   "orientation": "portrait-primary",
@@ -13,25 +13,25 @@
   "categories": ["health", "fitness", "productivity"],
   "icons": [
     {
-      "src": "/app-icon.svg",
+      "src": "./app-icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"
     },
     {
-      "src": "/app-icon-192.png",
+      "src": "./app-icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/app-icon-512.png",
+      "src": "./app-icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/app-icon-maskable-512.png",
+      "src": "./app-icon-maskable-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"

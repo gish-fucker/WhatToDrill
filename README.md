@@ -34,6 +34,14 @@ npm start
 http://localhost:5173
 ```
 
+## 公开地址
+
+无需安装 Node.js，可直接访问：
+
+<https://gish-fucker.github.io/Daily-Workout-Record/>
+
+该地址提供完整的本地记录、训练、复盘、导出、安装和离线能力，数据仍保存在当前浏览器。GitHub Pages 是静态托管，不提供云端 AI、账号、同步或支付；需要云端建议时应使用下述 Node.js/Render 部署。
+
 若需要使用云端 AI 建议，可在 PowerShell 中配置：
 
 ```powershell

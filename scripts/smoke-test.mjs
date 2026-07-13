@@ -163,6 +163,13 @@ async function run() {
     const serviceWorkerSource = await serviceWorkerResponse.text();
     const manifestResponse = await fetch(`${baseUrl}/manifest.webmanifest`);
     const manifest = await manifestResponse.json();
+    const subpathManifestUrl = new URL("https://example.com/Daily-Workout-Record/manifest.webmanifest");
+    const subpathManifest = {
+      id: new URL(manifest.id, subpathManifestUrl).pathname,
+      startUrl: new URL(manifest.start_url, subpathManifestUrl).pathname,
+      scope: new URL(manifest.scope, subpathManifestUrl).pathname,
+      icons: manifest.icons.map(icon => new URL(icon.src, subpathManifestUrl).pathname)
+    };
     const iconChecks = {};
     for (const [name, size] of [["app-icon-180.png", 180], ["app-icon-192.png", 192], ["app-icon-512.png", 512], ["app-icon-maskable-512.png", 512]]) {
       const response = await fetch(`${baseUrl}/${name}`);
@@ -176,6 +183,7 @@ async function run() {
     const healthResponse = await fetch(`${baseUrl}/api/health`);
     const healthPayload = await healthResponse.json();
     const versionedAssetResponse = await fetch(`${baseUrl}/app.js?v=smoke`);
+    const appSource = await versionedAssetResponse.text();
     const headResponse = await fetch(`${baseUrl}/styles.css`, { method: "HEAD" });
     const validAdvicePayload = {
       schemaVersion: 1,
@@ -236,8 +244,14 @@ async function run() {
       termsStatus: termsResponse.status,
       termsCsp: termsResponse.headers.get("content-security-policy"),
       updateMessageHandler: serviceWorkerSource.includes("SKIP_WAITING"),
-      iconCacheEntries: Object.keys(iconChecks).every(name => serviceWorkerSource.includes(`/${name}`)),
+      iconCacheEntries: Object.keys(iconChecks).every(name => serviceWorkerSource.includes(name)),
+      scopeAwareShell: serviceWorkerSource.includes("self.registration.scope") && serviceWorkerSource.includes("cache.put(request"),
+      relativeWorkerRegistration: appSource.includes('serviceWorker.register("./sw.js")'),
       manifestIcons: manifest.icons,
+      manifestId: manifest.id,
+      manifestStartUrl: manifest.start_url,
+      manifestScope: manifest.scope,
+      subpathManifest,
       iconChecks,
       assetCache: versionedAssetResponse.headers.get("cache-control"),
       headStatus: headResponse.status,
@@ -262,6 +276,9 @@ async function run() {
     assert(serverHttp.termsCsp?.includes("frame-ancestors 'none'"), "Legal pages should receive the same security headers as the app.");
     assert(serverHttp.updateMessageHandler, "Service worker should support user-confirmed activation.");
     assert(serverHttp.iconCacheEntries, "PWA app shell should cache every raster install icon.");
+    assert(serverHttp.scopeAwareShell && serverHttp.relativeWorkerRegistration, "PWA registration and shell caching should follow the actual deployment scope.");
+    assert(serverHttp.manifestId === "./" && serverHttp.manifestStartUrl === "./" && serverHttp.manifestScope === "./" && serverHttp.manifestIcons.every(icon => icon.src.startsWith("./")), "Manifest URLs should stay relative to the deployment location.");
+    assert(serverHttp.subpathManifest.id === "/Daily-Workout-Record/" && serverHttp.subpathManifest.startUrl === "/Daily-Workout-Record/" && serverHttp.subpathManifest.scope === "/Daily-Workout-Record/" && serverHttp.subpathManifest.icons.every(path => path.startsWith("/Daily-Workout-Record/")), "Manifest URLs should resolve inside a GitHub Pages project subpath.");
     assert(serverHttp.manifestIcons.some(icon => icon.sizes === "192x192" && icon.purpose === "any"), "Manifest should declare a standard 192px icon.");
     assert(serverHttp.manifestIcons.some(icon => icon.sizes === "512x512" && icon.purpose === "any"), "Manifest should declare a standard 512px icon.");
     assert(serverHttp.manifestIcons.some(icon => icon.sizes === "512x512" && icon.purpose === "maskable"), "Manifest should declare a separate maskable icon.");
@@ -667,6 +684,10 @@ async function run() {
     assert(!installPrompt.before.hidden, "Install button should appear when prompt is available.");
     assert(installPrompt.toast.includes("安装"), "Install flow should give user feedback.");
 
+    await navigate(cdp, `${baseUrl}/privacy.html`);
+    const onlinePrivacyBeforeOffline = await evaluate(cdp, `document.querySelector("h1")?.textContent`);
+    assert(onlinePrivacyBeforeOffline === "隐私政策", "Privacy policy should load before testing navigation cache isolation.");
+
     await cdp.send("Network.enable");
     await cdp.send("Network.emulateNetworkConditions", {
       offline: true,
@@ -676,7 +697,7 @@ async function run() {
     });
     {
       const loaded = cdp.waitFor("Page.loadEventFired").catch(() => null);
-      await cdp.send("Page.reload", { ignoreCache: false });
+      await cdp.send("Page.navigate", { url: baseUrl });
       await loaded;
       await delay(500);
     }
