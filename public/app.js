@@ -1,6 +1,6 @@
 const STORAGE_KEY = "habit_fitness_app_v1";
 const WORKOUT_DRAFT_KEY = "habit_fitness_workout_draft_v1";
-const APP_VERSION = "1.10.0";
+const APP_VERSION = "1.12.0";
 const CLOUD_ADVICE_CONSENT_VERSION = 1;
 const BACKUP_SCHEMA_VERSION = 1;
 
@@ -124,6 +124,8 @@ let historyExpanded = false;
 let pendingAppUpdate = null;
 let updateReloadRequested = false;
 let cloudAdviceConfigured = false;
+let editingSupportPartnerId = null;
+let pendingSupportPartnerId = null;
 const onboardingTouched = {
   energy: false,
   soreness: false,
@@ -331,6 +333,8 @@ function normalizeSettings(settings = {}) {
   const supportCadences = ["twice_weekly", "weekly", "biweekly"];
   const supportStyles = ["check_in", "activity", "accountability"];
   const supportBoundaries = ["no_pressure", "no_advice", "ask_first"];
+  const supportPartners = normalizeSupportPartners(settings.supportPartners, settings);
+  const primarySupport = supportPartners[0];
   return {
     waterStepMl: sanitizeWaterStep(settings.waterStepMl ?? defaultSettings.waterStepMl),
     waterTargetMl: sanitizeWaterTarget(settings.waterTargetMl ?? defaultSettings.waterTargetMl),
@@ -350,14 +354,14 @@ function normalizeSettings(settings = {}) {
     cloudAdviceConsentVersion: settings.cloudAdviceConsentVersion === CLOUD_ADVICE_CONSENT_VERSION
       ? CLOUD_ADVICE_CONSENT_VERSION
       : 0,
-    supportEnabled: Boolean(settings.supportEnabled),
-    supportRole: supportRoles.includes(settings.supportRole) ? settings.supportRole : defaultSettings.supportRole,
-    supportCadence: supportCadences.includes(settings.supportCadence) ? settings.supportCadence : defaultSettings.supportCadence,
-    supportStyle: supportStyles.includes(settings.supportStyle) ? settings.supportStyle : defaultSettings.supportStyle,
-    supportBoundary: supportBoundaries.includes(settings.supportBoundary) ? settings.supportBoundary : defaultSettings.supportBoundary,
-    supportNextDate: isValidDateText(settings.supportNextDate) ? settings.supportNextDate : "",
-    supportCheckins: normalizeSupportCheckins(settings.supportCheckins),
-    supportPartners: normalizeSupportPartners(settings.supportPartners, settings)
+    supportEnabled: Boolean(primarySupport),
+    supportRole: primarySupport?.role || (supportRoles.includes(settings.supportRole) ? settings.supportRole : defaultSettings.supportRole),
+    supportCadence: primarySupport?.cadence || (supportCadences.includes(settings.supportCadence) ? settings.supportCadence : defaultSettings.supportCadence),
+    supportStyle: primarySupport?.style || (supportStyles.includes(settings.supportStyle) ? settings.supportStyle : defaultSettings.supportStyle),
+    supportBoundary: primarySupport?.boundary || (supportBoundaries.includes(settings.supportBoundary) ? settings.supportBoundary : defaultSettings.supportBoundary),
+    supportNextDate: primarySupport?.nextDate || "",
+    supportCheckins: primarySupport?.checkins || [],
+    supportPartners
   };
 }
 
@@ -2018,6 +2022,34 @@ function renderRetentionInsights() {
       </section>
     </div>
   `;
+  renderPersonalProgressReport();
+}
+
+function renderPersonalProgressReport() {
+  const panel = $("personalProgressReport");
+  if (!panel) return;
+  const report = buildPersonalProgressReport();
+  const metrics = report.metrics.map(metric => `
+    <div><span>${escapeHtml(metric.label)}</span><strong>${escapeHtml(metric.value)}</strong></div>
+  `).join("");
+  const findings = report.findings.map(item => `
+    <article class="progress-report-item ${escapeAttr(item.level)}">
+      <strong>${escapeHtml(item.title)}</strong>
+      <p>${escapeHtml(item.text)}</p>
+    </article>
+  `).join("");
+  panel.innerHTML = `
+      <div class="personal-progress-heading">
+        <div>
+          <p class="eyebrow">Personal progress</p>
+          <h4>${escapeHtml(report.title)}</h4>
+          <p class="muted">${escapeHtml(report.summary)}</p>
+        </div>
+        ${report.ready ? '<button id="exportPersonalProgressReportBtn" class="ghost-button" type="button">导出阶段报告</button>' : '<span class="confidence-pill low">继续积累</span>'}
+      </div>
+      <div class="personal-progress-metrics">${metrics}</div>
+      <div class="personal-progress-findings">${findings}</div>
+  `;
 }
 
 function retentionMetric(metric) {
@@ -2100,6 +2132,141 @@ function buildRetentionReview() {
     })
   };
   return review;
+}
+
+function buildPersonalProgressReport() {
+  const currentDates = getLastDays(28);
+  const previousEnd = addLocalDays(currentDates[0], -1);
+  const previousStart = addLocalDays(previousEnd, -27);
+  const current = buildProgressWindow(currentDates[0], currentDates.at(-1));
+  const previous = buildProgressWindow(previousStart, previousEnd);
+  const ready = current.dailyCount >= 6 || current.workoutCount >= 3;
+  const hasComparison = ready && (previous.dailyCount >= 6 || previous.workoutCount >= 3);
+  const rhythm = buildRhythmReview();
+  const consistency = buildTrainingConsistency();
+
+  if (!ready) {
+    const dailyMissing = Math.max(0, 6 - current.dailyCount);
+    const workoutMissing = Math.max(0, 3 - current.workoutCount);
+    const gap = dailyMissing && workoutMissing
+      ? `还差 ${dailyMissing} 天状态记录或 ${workoutMissing} 次训练记录。`
+      : dailyMissing ? `还差 ${dailyMissing} 天状态记录。` : `还差 ${workoutMissing} 次训练记录。`;
+    return {
+      ready: false,
+      title: "28 天进展正在建立",
+      summary: `阶段报告需要更多连续记录，${gap}`,
+      metrics: [
+        { label: "状态记录", value: `${current.dailyCount}/6 天` },
+        { label: "训练记录", value: `${current.workoutCount}/3 次` },
+        { label: "当前节奏", value: rhythm.value === "--" ? "等待建立" : rhythm.value },
+        { label: "连续兑现", value: consistency.label }
+      ],
+      findings: [{ level: "info", title: "先建立你的基线", text: "完成几次真实训练并记录状态后，报告才会比较不同阶段，而不是猜测变化。" }]
+    };
+  }
+
+  const findings = buildProgressFindings(current, previous, hasComparison);
+  return {
+    ready: true,
+    title: "28 天个人进展",
+    summary: hasComparison ? "已把最近阶段与此前记录进行保守比较。" : "当前阶段记录已成形；再积累一个完整阶段即可看到前后比较。",
+    metrics: [
+      { label: "训练", value: `${current.workoutCount} 次` },
+      { label: "完成组数", value: `${current.totalSets} 组` },
+      { label: "状态覆盖", value: `${current.dailyCount} 天` },
+      { label: "睡眠", value: current.avgSleep === null ? "暂无" : `${formatMetric(current.avgSleep)}h` },
+      { label: "疼痛", value: current.avgPain === null ? "暂无" : `${formatMetric(current.avgPain)}/5` },
+      { label: "计划兑现", value: rhythm.value === "--" ? "等待建立" : rhythm.value },
+      { label: "连续兑现", value: consistency.label }
+    ],
+    findings
+  };
+}
+
+function buildTrainingConsistency() {
+  const target = Math.max(1, state.settings.weeklyWorkoutTarget || defaultSettings.weeklyWorkoutTarget);
+  const currentStart = startOfLocalWeek(today());
+  const currentCount = countWeekWorkouts(currentStart);
+  let streak = 0;
+  for (let offset = 0; offset < 12; offset += 1) {
+    const weekStart = addLocalDays(currentStart, -7 * offset);
+    if (countWeekWorkouts(weekStart) < target) break;
+    streak += 1;
+  }
+  if (!state.workouts.length) return { label: "正在建立节奏", currentCount, target, streak: 0 };
+  if (streak >= 2) return { label: `连续达标 ${streak} 周`, currentCount, target, streak };
+  if (currentCount >= target) return { label: "本周已达标", currentCount, target, streak };
+  return { label: `本周还差 ${target - currentCount} 次`, currentCount, target, streak: 0 };
+}
+
+function startOfLocalWeek(dateText) {
+  const date = new Date(`${dateText}T12:00:00`);
+  const daysSinceMonday = (date.getDay() + 6) % 7;
+  date.setDate(date.getDate() - daysSinceMonday);
+  return formatLocalDate(date);
+}
+
+function countWeekWorkouts(weekStart) {
+  const weekEnd = addLocalDays(weekStart, 6);
+  return state.workouts.filter(workout => workout.date >= weekStart && workout.date <= weekEnd).length;
+}
+
+function buildProgressWindow(startDate, endDate) {
+  const within = item => item.date >= startDate && item.date <= endDate;
+  const daily = state.dailyLogs.filter(within);
+  const workouts = state.workouts.filter(within);
+  return {
+    dailyCount: daily.length,
+    workoutCount: workouts.length,
+    totalSets: workouts.reduce((sum, workout) => sum + countSets(workout), 0),
+    avgSleep: average(daily.map(item => item.sleepHours).filter(value => value !== null && value !== undefined)),
+    avgPain: average(daily.map(item => item.pain).filter(value => value !== null && value !== undefined)),
+    maxPain: daily.reduce((max, item) => Math.max(max, item.pain ?? 0), 0)
+  };
+}
+
+function buildProgressFindings(current, previous, hasComparison) {
+  const findings = [];
+  if (current.maxPain >= 4 || (current.avgPain ?? 0) >= 2.5) {
+    findings.push({ level: "warning", title: "恢复需要优先", text: "这一阶段的疼痛记录偏高，下个阶段先避开不适动作，把恢复和动作质量放在前面。" });
+  } else if (current.avgSleep !== null && current.avgSleep >= 6.5) {
+    findings.push({ level: "stable", title: "恢复记录较稳定", text: "睡眠和疼痛没有显示明显红灯，可以先维持当前训练节奏。" });
+  } else {
+    findings.push({ level: "info", title: "继续记录恢复信号", text: "补齐睡眠和疼痛记录，下一阶段更容易判断训练是否适合你。" });
+  }
+  if (hasComparison) {
+    const currentLoad = current.workoutCount * 10 + current.totalSets;
+    const previousLoad = previous.workoutCount * 10 + previous.totalSets;
+    if (currentLoad > previousLoad) {
+      findings.push({ level: "stable", title: "训练节奏更稳定", text: "和此前阶段相比，你完成的训练或组数更多；继续按能恢复的节奏推进。" });
+    } else if (currentLoad < previousLoad) {
+      findings.push({ level: "info", title: "训练节奏有所放慢", text: "和此前阶段相比，训练记录减少了；可以按当前状态重新安排，不需要急着补课。" });
+    } else {
+      findings.push({ level: "stable", title: "训练节奏保持平稳", text: "和此前阶段相比，训练量接近；稳定完成本身就是值得保留的进展。" });
+    }
+  } else {
+    findings.push({ level: "info", title: "正在建立可比较的阶段", text: "完成下一个 28 天周期后，系统才会把两个足够完整的阶段进行比较。" });
+  }
+  findings.push({ level: "info", title: "下一阶段行动", text: current.workoutCount >= state.settings.weeklyWorkoutTarget * 4 ? "维持现在的训练频率，重点观察恢复和动作质量。" : `把训练安排为每周 ${state.settings.weeklyWorkoutTarget} 次左右，先追求可持续完成。` });
+  return findings.slice(0, 3);
+}
+
+function buildPersonalProgressReportText(report = buildPersonalProgressReport()) {
+  return [
+    "# 日常与健身记录：个人进展报告",
+    "",
+    `状态：${report.title}`,
+    report.summary,
+    "",
+    "## 阶段概览",
+    ...report.metrics.map(metric => `- ${metric.label}：${metric.value}`),
+    "",
+    "## 阶段发现",
+    ...report.findings.map(item => `- ${item.title}：${item.text}`),
+    "",
+    "## 隐私与安全",
+    "这份报告在当前设备生成，不包含备注、动作明细、重量、次数、具体训练日期或完整历史。它用于训练与恢复记录参考，不构成医疗诊断。"
+  ].join("\n");
 }
 
 function buildRetentionSummary(dailyLogs, workouts, avgSleep, avgPain, highRpeCount, confidenceKey) {
@@ -2292,9 +2459,38 @@ function supportScoreLabel(score) {
   }[score] || "尚未记录";
 }
 
-function buildSupportReflection() {
+function supportPartners() {
+  return state.settings.supportPartners || [];
+}
+
+function supportPartnerById(partnerId) {
+  return supportPartners().find(partner => partner.id === partnerId) || null;
+}
+
+function syncPrimarySupportFields(settings, partners) {
+  const primary = partners[0];
+  return {
+    ...settings,
+    supportPartners: partners,
+    supportEnabled: Boolean(primary),
+    supportRole: primary?.role || defaultSettings.supportRole,
+    supportCadence: primary?.cadence || defaultSettings.supportCadence,
+    supportStyle: primary?.style || defaultSettings.supportStyle,
+    supportBoundary: primary?.boundary || defaultSettings.supportBoundary,
+    supportNextDate: primary?.nextDate || "",
+    supportCheckins: primary?.checkins || []
+  };
+}
+
+function saveSupportPartners(partners) {
+  state.settings = normalizeSettings(syncPrimarySupportFields(state.settings, partners));
+  persistState();
+  renderSupportAgreement();
+}
+
+function buildSupportReflection(partner) {
   const recentStart = addLocalDays(today(), -27);
-  const checkins = state.settings.supportCheckins.filter(item => item.date >= recentStart);
+  const checkins = (partner?.checkins || []).filter(item => item.date >= recentStart);
   if (!checkins.length) {
     return {
       countLabel: "还没有回访",
@@ -2321,8 +2517,9 @@ function buildSupportReflection() {
 function renderSupportAgreement() {
   const panel = $("supportAgreementPanel");
   if (!panel) return;
-  panel.classList.toggle("active", state.settings.supportEnabled);
-  if (!state.settings.supportEnabled) {
+  const partners = supportPartners();
+  panel.classList.toggle("active", partners.length > 0);
+  if (!partners.length) {
     panel.innerHTML = `
       <div>
         <p class="eyebrow">Support agreement</p>
@@ -2333,64 +2530,95 @@ function renderSupportAgreement() {
     `;
     return;
   }
-  const due = supportDueStatus();
-  const reflection = buildSupportReflection();
   panel.innerHTML = `
-    <div class="support-agreement-main">
+    <div class="support-agreement-heading">
       <div>
         <p class="eyebrow">Support agreement</p>
-        <h3>与${escapeHtml(supportRoleLabel())}的支持约定</h3>
-        <p class="muted">${escapeHtml(supportStyleLabel())}；${escapeHtml(supportBoundaryLabel())}。</p>
+        <h3>支持伙伴</h3>
+        <p class="muted">每位伙伴的关怀节奏、反馈与邀请都独立保存。</p>
       </div>
-      <span class="support-due ${escapeAttr(due.key)}">${escapeHtml(due.label)}</span>
+      <button id="openSupportAgreementBtn" type="button">新增伙伴</button>
     </div>
-    <div class="support-agreement-meta">
-      <div><span>频率</span><strong>${escapeHtml(supportCadenceDetails().label)}</strong></div>
-      <div><span>日期</span><strong>${escapeHtml(state.settings.supportNextDate)}</strong></div>
-      <div><span>支持回访</span><strong>${escapeHtml(reflection.countLabel)}</strong></div>
-      <div><span>支持感</span><strong>${escapeHtml(reflection.scoreLabel)}</strong></div>
-    </div>
-    <p class="muted">${escapeHtml(reflection.insight)}</p>
-    <div class="support-agreement-actions">
-      <button id="completeSupportCheckinBtn" type="button">记录一次关怀</button>
-      <button id="shareSupportInviteBtn" class="ghost-button" type="button">分享邀请</button>
-      <button id="openSupportAgreementBtn" class="ghost-button" type="button">编辑</button>
+    <div class="support-partner-list">
+      ${partners.map(partner => {
+        const due = supportDueStatus(partner.nextDate);
+        const reflection = buildSupportReflection(partner);
+        return `
+          <article class="support-partner-card" data-support-partner-id="${escapeAttr(partner.id)}">
+            <div class="support-agreement-main">
+              <div>
+                <h4>与${escapeHtml(supportRoleLabel(partner.role))}的支持约定</h4>
+                <p class="muted">${escapeHtml(supportStyleLabel(partner.style))}；${escapeHtml(supportBoundaryLabel(partner.boundary))}。</p>
+              </div>
+              <span class="support-due ${escapeAttr(due.key)}">${escapeHtml(due.label)}</span>
+            </div>
+            <div class="support-agreement-meta">
+              <div><span>频率</span><strong>${escapeHtml(supportCadenceDetails(partner.cadence).label)}</strong></div>
+              <div><span>日期</span><strong>${escapeHtml(partner.nextDate || "等待安排")}</strong></div>
+              <div><span>支持回访</span><strong>${escapeHtml(reflection.countLabel)}</strong></div>
+              <div><span>支持感</span><strong>${escapeHtml(reflection.scoreLabel)}</strong></div>
+            </div>
+            <p class="muted">${escapeHtml(reflection.insight)}</p>
+            <div class="support-agreement-actions">
+              <button type="button" data-support-action="checkin">记录一次关怀</button>
+              <button class="ghost-button" type="button" data-support-action="share">分享邀请</button>
+              <button class="ghost-button" type="button" data-support-action="edit">编辑</button>
+            </div>
+          </article>
+        `;
+      }).join("")}
     </div>
   `;
 }
 
-function openSupportAgreementDialog() {
-  $("supportRole").value = state.settings.supportRole;
-  $("supportCadence").value = state.settings.supportCadence;
-  $("supportStyle").value = state.settings.supportStyle;
-  $("supportBoundary").value = state.settings.supportBoundary;
+function openSupportAgreementDialog(partnerId = "") {
+  const partner = supportPartnerById(partnerId);
+  editingSupportPartnerId = partner?.id || null;
+  $("supportAgreementTitle").textContent = partner ? "编辑支持约定" : "建立支持约定";
+  $("supportRole").value = partner?.role || defaultSettings.supportRole;
+  $("supportCadence").value = partner?.cadence || defaultSettings.supportCadence;
+  $("supportStyle").value = partner?.style || defaultSettings.supportStyle;
+  $("supportBoundary").value = partner?.boundary || defaultSettings.supportBoundary;
   $("supportAgreementDialog").showModal();
   $("supportRole").focus();
 }
 
 function closeSupportAgreementDialog() {
   $("supportAgreementDialog").close();
+  editingSupportPartnerId = null;
 }
 
 function saveSupportAgreement(event) {
   event.preventDefault();
   const cadence = $("supportCadence").value;
-  state.settings = normalizeSettings({
-    ...state.settings,
-    supportEnabled: true,
-    supportRole: $("supportRole").value,
-    supportCadence: cadence,
-    supportStyle: $("supportStyle").value,
-    supportBoundary: $("supportBoundary").value,
-    supportNextDate: addLocalDays(today(), supportCadenceDetails(cadence).days)
-  });
-  persistState();
-  renderSupportAgreement();
+  const existing = supportPartnerById(editingSupportPartnerId);
+  if (!existing && supportPartners().length >= 6) {
+    showToast("最多可建立 6 位支持伙伴");
+    return;
+  }
+  const partner = {
+    id: existing?.id || uid("support_partner"),
+    role: $("supportRole").value,
+    cadence,
+    style: $("supportStyle").value,
+    boundary: $("supportBoundary").value,
+    nextDate: existing?.cadence === cadence
+      ? existing.nextDate
+      : addLocalDays(today(), supportCadenceDetails(cadence).days),
+    checkins: existing?.checkins || []
+  };
+  const partners = existing
+    ? supportPartners().map(item => item.id === existing.id ? partner : item)
+    : [...supportPartners(), partner];
+  saveSupportPartners(partners);
   closeSupportAgreementDialog();
-  showToast("支持约定已保存");
+  showToast(existing ? "支持约定已更新" : "支持伙伴已添加");
 }
 
-function openSupportCheckinDialog() {
+function openSupportCheckinDialog(partnerId) {
+  const partner = supportPartnerById(partnerId);
+  if (!partner) return;
+  pendingSupportPartnerId = partner.id;
   const defaultScore = document.querySelector('input[name="supportCheckinScore"][value="3"]');
   if (defaultScore) defaultScore.checked = true;
   $("supportCheckinDialog").showModal();
@@ -2399,6 +2627,7 @@ function openSupportCheckinDialog() {
 
 function closeSupportCheckinDialog() {
   $("supportCheckinDialog").close();
+  pendingSupportPartnerId = null;
 }
 
 function completeSupportCheckin(event) {
@@ -2406,34 +2635,36 @@ function completeSupportCheckin(event) {
   const selected = document.querySelector('input[name="supportCheckinScore"]:checked');
   const score = Number(selected?.value);
   if (!Number.isInteger(score) || score < 1 || score > 5) return;
-  const baseline = state.settings.supportNextDate > today() ? state.settings.supportNextDate : today();
-  const supportCheckins = normalizeSupportCheckins([
-    ...state.settings.supportCheckins.filter(item => item.date !== today()),
+  const partner = supportPartnerById(pendingSupportPartnerId);
+  if (!partner) return;
+  const baseline = partner.nextDate > today() ? partner.nextDate : today();
+  const checkins = normalizeSupportCheckins([
+    ...partner.checkins.filter(item => item.date !== today()),
     { date: today(), score }
   ]);
-  state.settings = normalizeSettings({
-    ...state.settings,
-    supportNextDate: addLocalDays(baseline, supportCadenceDetails().days),
-    supportCheckins
-  });
-  persistState();
-  renderSupportAgreement();
+  const updated = {
+    ...partner,
+    nextDate: addLocalDays(baseline, supportCadenceDetails(partner.cadence).days),
+    checkins
+  };
+  saveSupportPartners(supportPartners().map(item => item.id === partner.id ? updated : item));
   closeSupportCheckinDialog();
-  showToast(`已记录关怀，下次是 ${state.settings.supportNextDate}`);
+  showToast(`已记录关怀，下次是 ${updated.nextDate}`);
 }
 
-function buildSupportInvitation() {
+function buildSupportInvitation(partner = supportPartners()[0]) {
+  if (!partner) return "";
   const rhythm = buildWeeklyRhythm();
-  const planLine = state.settings.supportStyle === "accountability" && rhythm.hasPlan
+  const planLine = partner.style === "accountability" && rhythm.hasPlan
     ? `我的计划训练日：${rhythm.dayLabels}。如果方便，你可以在这些日子问问我是否需要支持。`
     : "";
   return [
     "支持约定邀请",
     "",
-    `我想邀请你作为我的${supportRoleLabel()}支持伙伴。`,
-    `频率：${supportCadenceDetails().label}`,
-    `我希望你：${supportStyleLabel()}。`,
-    `也请你：${supportBoundaryLabel()}。`,
+    `我想邀请你作为我的${supportRoleLabel(partner.role)}支持伙伴。`,
+    `频率：${supportCadenceDetails(partner.cadence).label}`,
+    `我希望你：${supportStyleLabel(partner.style)}。`,
+    `也请你：${supportBoundaryLabel(partner.boundary)}。`,
     ...(planLine ? [planLine] : []),
     "",
     "这不是监督任务，也不需要你解决所有问题。稳定、尊重边界的关心本身就很有帮助。",
@@ -2442,8 +2673,9 @@ function buildSupportInvitation() {
   ].join("\n");
 }
 
-async function shareSupportInvitation() {
-  const text = buildSupportInvitation();
+async function shareSupportInvitation(partnerId) {
+  const text = buildSupportInvitation(supportPartnerById(partnerId));
+  if (!text) return;
   try {
     if (navigator.share) {
       await navigator.share({ title: "支持约定邀请", text });
@@ -3870,6 +4102,27 @@ async function exportWeeklyReport() {
   }
 }
 
+async function exportPersonalProgressReport() {
+  const report = buildPersonalProgressReportText();
+  try {
+    const blob = new Blob([report], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `habit-fitness-progress-report-${today()}.md`;
+    link.click();
+    URL.revokeObjectURL(url);
+    showToast("阶段报告已导出");
+  } catch {
+    try {
+      await navigator.clipboard.writeText(report);
+      showToast("下载不可用，阶段报告已复制");
+    } catch {
+      showToast("阶段报告导出失败，请稍后再试");
+    }
+  }
+}
+
 function importData(file) {
   const reader = new FileReader();
   reader.onload = () => {
@@ -4285,8 +4538,12 @@ function bindActions() {
   });
   $("supportAgreementPanel").addEventListener("click", event => {
     if (event.target.closest("#openSupportAgreementBtn")) openSupportAgreementDialog();
-    if (event.target.closest("#completeSupportCheckinBtn")) openSupportCheckinDialog();
-    if (event.target.closest("#shareSupportInviteBtn")) shareSupportInvitation();
+    const action = event.target.closest("[data-support-action]");
+    const partnerId = action?.closest("[data-support-partner-id]")?.dataset.supportPartnerId;
+    if (!action || !partnerId) return;
+    if (action.dataset.supportAction === "checkin") openSupportCheckinDialog(partnerId);
+    if (action.dataset.supportAction === "share") shareSupportInvitation(partnerId);
+    if (action.dataset.supportAction === "edit") openSupportAgreementDialog(partnerId);
   });
   $("supportAgreementForm").addEventListener("submit", saveSupportAgreement);
   $("cancelSupportAgreementBtn").addEventListener("click", closeSupportAgreementDialog);
@@ -4311,6 +4568,9 @@ function bindActions() {
     if (event.target.closest("#exportWeeklyReportBtn")) exportWeeklyReport();
     if (event.target.closest("#openCoachBriefBtn")) openCoachBriefDialog();
     if (event.target.closest("#openCareSummaryBtn")) openCareSummaryDialog();
+  });
+  $("personalProgressReport").addEventListener("click", event => {
+    if (event.target.closest("#exportPersonalProgressReportBtn")) exportPersonalProgressReport();
   });
   $("coachBriefForm").addEventListener("input", updateCoachBriefPreview);
   $("coachBriefForm").addEventListener("change", updateCoachBriefPreview);

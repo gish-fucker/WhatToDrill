@@ -134,7 +134,7 @@ async function run() {
 
   const server = spawn(process.execPath, ["server.js"], {
     cwd: process.cwd(),
-    env: { ...process.env, HOST: "127.0.0.1", PORT: String(appPort), APP_VERSION: "1.10.0", OPENAI_API_KEY: "", ADVICE_RATE_LIMIT: "10" },
+    env: { ...process.env, HOST: "127.0.0.1", PORT: String(appPort), APP_VERSION: "1.12.0", OPENAI_API_KEY: "", ADVICE_RATE_LIMIT: "10" },
     stdio: "ignore",
     windowsHide: true
   });
@@ -253,7 +253,7 @@ async function run() {
     assert(serverHttp.csp?.includes("frame-ancestors 'none'"), "Static responses should include a restrictive CSP.");
     assert(serverHttp.frameOptions === "DENY", "Static responses should prevent framing.");
     assert(/^[0-9a-f-]{36}$/i.test(serverHttp.requestId), "API responses should expose a generated request ID.");
-    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.10.0", "Health response should expose status and release version.");
+    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.12.0", "Health response should expose status and release version.");
     assert(Number.isInteger(serverHttp.health.uptimeSeconds) && serverHttp.health.uptimeSeconds >= 0, "Health response should expose a valid uptime.");
     assert(serverHttp.health.openaiConfigured === false && serverHttp.health.model === "gpt-5-mini", "Health response should expose non-secret AI configuration state.");
     assert(serverHttp.indexCache === "no-cache", "HTML should revalidate instead of using a stale shell.");
@@ -348,38 +348,38 @@ async function run() {
       document.querySelector("#supportStyle").value = "activity";
       document.querySelector("#supportBoundary").value = "no_pressure";
       document.querySelector("#supportAgreementForm").requestSubmit();
-      const firstDate = state.settings.supportNextDate;
-      const invitation = buildSupportInvitation();
+      const friend = state.settings.supportPartners[0];
+      const firstDate = friend.nextDate;
+      const invitation = buildSupportInvitation(friend);
+      document.querySelector("#openSupportAgreementBtn").click();
+      document.querySelector("#supportRole").value = "coach";
+      document.querySelector("#supportCadence").value = "weekly";
+      document.querySelector("#supportStyle").value = "accountability";
+      document.querySelector("#supportBoundary").value = "ask_first";
+      document.querySelector("#supportAgreementForm").requestSubmit();
+      const coach = state.settings.supportPartners[1];
       state.settings = normalizeSettings({
         ...state.settings,
-        supportStyle: "accountability",
         plannedWorkoutDays: [1, 4]
       });
-      const accountabilityInvitation = buildSupportInvitation();
-      state.settings = normalizeSettings({
-        ...state.settings,
-        supportStyle: "activity"
-      });
+      const accountabilityInvitation = buildSupportInvitation(coach);
       const savedText = document.querySelector("#supportAgreementPanel").innerText;
-      document.querySelector("#completeSupportCheckinBtn").click();
+      document.querySelector('[data-support-partner-id="' + friend.id + '"] [data-support-action="checkin"]').click();
       const checkinOpened = document.querySelector("#supportCheckinDialog").open;
       const checkinFocused = document.activeElement?.value;
       document.querySelector('input[name="supportCheckinScore"][value="4"]').checked = true;
       document.querySelector("#supportCheckinForm").requestSubmit();
       const persisted = JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)})).settings;
       const normalizedInvalid = normalizeSettings({
-        supportEnabled: true,
-        supportRole: "attacker",
-        supportCadence: "hourly",
-        supportStyle: "PRIVATE_HEALTH_DATA",
-        supportBoundary: "unknown",
-        supportNextDate: "not-a-date",
-        supportCheckins: [
-          { date: today(), score: 6 },
-          { date: "not-a-date", score: 4 },
-          { date: today(), score: 2 },
-          { date: today(), score: 5 }
-        ]
+        supportPartners: Array.from({ length: 8 }, (_, index) => ({
+          id: index === 1 ? "bad id!" : "partner_" + index,
+          role: index === 0 ? "attacker" : "friend",
+          cadence: index === 0 ? "hourly" : "weekly",
+          style: index === 0 ? "PRIVATE_HEALTH_DATA" : "activity",
+          boundary: index === 0 ? "unknown" : "no_pressure",
+          nextDate: index === 0 ? "not-a-date" : today(),
+          checkins: [{ date: today(), score: index === 0 ? 6 : 4 }]
+        }))
       });
       return {
         emptyText,
@@ -388,9 +388,12 @@ async function run() {
         checkinOpened,
         checkinFocused,
         firstDate,
-        secondDate: state.settings.supportNextDate,
+        secondDate: state.settings.supportPartners.find(item => item.id === friend.id)?.nextDate,
+        coachDate: state.settings.supportPartners.find(item => item.id === coach.id)?.nextDate,
+        coachCheckins: state.settings.supportPartners.find(item => item.id === coach.id)?.checkins,
         expectedFirst: addLocalDays(today(), 3),
         expectedSecond: addLocalDays(today(), 6),
+        expectedCoach: addLocalDays(today(), 7),
         invitation,
         accountabilityInvitation,
         savedText,
@@ -403,12 +406,12 @@ async function run() {
     assert(supportAgreement.opened && supportAgreement.focused === "supportRole", "Support agreement should open and focus its first field.");
     assert(supportAgreement.checkinOpened && supportAgreement.checkinFocused === "3", "Completing a support check-in should ask for a focused local reflection.");
     assert(supportAgreement.firstDate === supportAgreement.expectedFirst && supportAgreement.secondDate === supportAgreement.expectedSecond, "Support check-ins should advance by the selected cadence.");
-    assert(supportAgreement.savedText.includes("与朋友的支持约定") && supportAgreement.savedText.includes("每周两次"), "Saved support agreement should summarize the partner and cadence.");
+    assert(supportAgreement.savedText.includes("与朋友的支持约定") && supportAgreement.savedText.includes("与教练的支持约定") && supportAgreement.savedText.includes("每周两次"), "Saved support agreement should summarize independent partners and cadence.");
     assert(supportAgreement.invitation.includes("陪我完成一次轻松活动") && supportAgreement.invitation.includes("不要催促、比较"), "Support invitation should reflect the selected support and boundary.");
     assert(supportAgreement.accountabilityInvitation.includes("周一、周四") && supportAgreement.accountabilityInvitation.includes("问问我是否需要支持"), "Accountability invitations should turn a weekly rhythm into a concrete support cue.");
     assert(!supportAgreement.invitation.includes("疼痛：") && !supportAgreement.invitation.includes("睡眠：") && !supportAgreement.invitation.includes("PRIVATE_HEALTH_DATA") && !supportAgreement.accountabilityInvitation.includes("疼痛：") && !supportAgreement.accountabilityInvitation.includes("支持感"), "Support invitations must not include health, training, or reflection values.");
-    assert(supportAgreement.persisted.supportEnabled && supportAgreement.persisted.supportRole === "friend" && supportAgreement.persisted.supportNextDate === supportAgreement.secondDate && supportAgreement.persisted.supportCheckins?.[0]?.score === 4, "Support agreement and local reflection should persist locally.");
-    assert(supportAgreement.normalizedInvalid.supportRole === "family" && supportAgreement.normalizedInvalid.supportCadence === "weekly" && supportAgreement.normalizedInvalid.supportNextDate === "" && supportAgreement.normalizedInvalid.supportCheckins.length === 1 && supportAgreement.normalizedInvalid.supportCheckins[0].score === 5, "Imported support settings should normalize allowlists and reflection data.");
+    assert(supportAgreement.persisted.supportEnabled && supportAgreement.persisted.supportRole === "friend" && supportAgreement.persisted.supportPartners?.length === 2 && supportAgreement.persisted.supportCheckins?.[0]?.score === 4 && supportAgreement.coachDate === supportAgreement.expectedCoach && supportAgreement.coachCheckins.length === 0, "Partner records should persist locally while each partner keeps independent dates and reflections.");
+    assert(supportAgreement.normalizedInvalid.supportPartners.length === 6 && supportAgreement.normalizedInvalid.supportPartners[0].role === "family" && supportAgreement.normalizedInvalid.supportPartners[0].cadence === "weekly" && supportAgreement.normalizedInvalid.supportPartners[0].nextDate === "" && supportAgreement.normalizedInvalid.supportPartners[0].checkins.length === 0, "Imported support partners should normalize allowlists, reflection data, IDs, and partner count.");
     assert(!supportAgreement.overflow, "Support agreement should not overflow on desktop.");
 
     const accessibleTabs = await evaluate(cdp, `(() => {
@@ -1050,6 +1053,66 @@ async function run() {
     assert(riskReview.report.includes("## 安全说明"), "Weekly report should include safety disclaimer.");
     assert(!riskReview.overflow, "Insights desktop layout should not overflow.");
 
+    const personalProgress = await evaluate(cdp, `(() => {
+      const snapshot = JSON.parse(JSON.stringify(state));
+      const dates = getLastDays(56);
+      state.dailyLogs = dates.map((date, index) => ({
+        id: "progress-daily-" + index,
+        date,
+        sleepHours: index < 28 ? 6 : 7.5,
+        waterMl: 2100,
+        mood: 3,
+        energy: 3,
+        soreness: 1,
+        pain: index < 28 ? 1 : 0,
+        habits: {},
+        note: "私密阶段备注"
+      }));
+      state.workouts = dates.filter((date, index) => index % 7 === 0 || index >= 28 && index % 7 === 3).map((date, index) => ({
+        id: "progress-workout-" + index,
+        date,
+        title: "秘密动作",
+        duration: 35,
+        sessionRpe: 6,
+        note: "私密训练备注",
+        exercises: [{ name: "秘密深蹲", sets: [{ weight: 40, reps: 8, rpe: 6, note: "不应导出" }, { weight: 40, reps: 8, rpe: 6, note: "不应导出" }] }]
+      }));
+      state.settings = normalizeSettings({ ...state.settings, weeklyWorkoutTarget: 2 });
+      renderAll();
+      const report = buildPersonalProgressReport();
+      const text = buildPersonalProgressReportText(report);
+      const panelText = document.querySelector(".personal-progress-report")?.innerText;
+      const originalClick = HTMLAnchorElement.prototype.click;
+      let downloadName = "";
+      HTMLAnchorElement.prototype.click = function captureDownload() { downloadName = this.download; };
+      document.querySelector("#exportPersonalProgressReportBtn").click();
+      HTMLAnchorElement.prototype.click = originalClick;
+      Object.assign(state, snapshot);
+      persistState();
+      renderAll();
+      return { report, text, panelText, downloadName, overflow: document.documentElement.scrollWidth > innerWidth };
+    })()`);
+    assert(personalProgress.report.ready && personalProgress.report.title === "28 天个人进展", "A 28-day report should become available with enough local records.");
+    assert(personalProgress.panelText.includes("训练节奏更稳定") && personalProgress.panelText.includes("下一阶段行动"), "The progress card should explain meaningful stage comparisons and next actions.");
+    assert(personalProgress.text.includes("## 阶段概览") && personalProgress.text.includes("## 阶段发现"), "Personal progress export should include a readable stage summary.");
+    assert(!personalProgress.text.includes("秘密动作") && !personalProgress.text.includes("秘密深蹲") && !personalProgress.text.includes("私密阶段备注") && !personalProgress.text.includes("40"), "Personal progress export must exclude exercise details and private notes.");
+    assert(personalProgress.downloadName.includes("progress-report") && !personalProgress.overflow, "Personal progress should export locally and fit the desktop layout.");
+
+    const trainingConsistency = await evaluate(cdp, `(() => {
+      const snapshot = JSON.parse(JSON.stringify(state));
+      const currentWeek = startOfLocalWeek(today());
+      state.settings = normalizeSettings({ ...state.settings, weeklyWorkoutTarget: 2 });
+      state.workouts = [0, 1, 2].flatMap(week => [
+        { id: "consistency-" + week + "-a", date: addLocalDays(currentWeek, -7 * week), title: "训练", duration: 30, sessionRpe: 6, note: "", exercises: [] },
+        { id: "consistency-" + week + "-b", date: addLocalDays(currentWeek, -7 * week), title: "训练", duration: 30, sessionRpe: 6, note: "", exercises: [] }
+      ]);
+      const result = buildTrainingConsistency();
+      Object.assign(state, snapshot);
+      renderAll();
+      return result;
+    })()`);
+    assert(trainingConsistency.streak === 3 && trainingConsistency.label === "连续达标 3 周", "Training consistency should count consecutive weekly target completion without a separate plan.");
+
     const historyBrowsing = await evaluate(cdp, `(() => {
       const snapshot = JSON.parse(JSON.stringify(state));
       const days = getLastDays(12);
@@ -1244,7 +1307,7 @@ async function run() {
     assert(preferences.weeklyTargetText.includes("/3 次训练"), "Weekly target panel should use preferred weekly workout target.");
     assert(preferences.weeklyTargetText.includes("周一、周四"), "Weekly target panel should show the selected training rhythm.");
     assert(preferences.insightText.includes("每周 3 次训练目标"), "Retention actions should use weekly workout target.");
-    assert(preferences.rhythm.value === "--" && preferences.rhythm.label.includes("尚未进入计划日") && preferences.normalizedHistory.length === 1 && preferences.normalizedHistory[0].days.join(",") === "1,4", "Rhythm review and imported history should use dated, normalized plan data without inventing prior adherence.");
+    assert((preferences.rhythm.value === "--" || /^\d+%$/.test(preferences.rhythm.value)) && (preferences.rhythm.label.includes("尚未进入计划日") || preferences.rhythm.label.includes("近 4 周")) && preferences.normalizedHistory.length === 1 && preferences.normalizedHistory[0].days.join(",") === "1,4", "Rhythm review and imported history should use dated, normalized plan data without inventing prior adherence.");
 
     const reminderEngine = await evaluate(cdp, `(() => {
       window.__testNotificationPermission = "granted";
@@ -1315,7 +1378,27 @@ async function run() {
         supportStyle: "activity",
         supportBoundary: "no_pressure",
         supportNextDate: addLocalDays(today(), 3),
-        supportCheckins: [{ date: today(), score: 4 }]
+        supportCheckins: [{ date: today(), score: 4 }],
+        supportPartners: [
+          {
+            id: "backup_friend",
+            role: "friend",
+            cadence: "twice_weekly",
+            style: "activity",
+            boundary: "no_pressure",
+            nextDate: addLocalDays(today(), 3),
+            checkins: [{ date: today(), score: 4 }]
+          },
+          {
+            id: "backup_coach",
+            role: "coach",
+            cadence: "weekly",
+            style: "accountability",
+            boundary: "ask_first",
+            nextDate: addLocalDays(today(), 7),
+            checkins: []
+          }
+        ]
       });
       persistState();
       renderAll();
@@ -1338,7 +1421,8 @@ async function run() {
           role: payload.settings.supportRole,
           cadence: payload.settings.supportCadence,
           nextDate: payload.settings.supportNextDate,
-          reflectionScore: payload.settings.supportCheckins?.[0]?.score
+          reflectionScore: payload.settings.supportCheckins?.[0]?.score,
+          partnerCount: payload.settings.supportPartners?.length
         } : null,
         rhythmHistoryCount: payload.settings.weeklyRhythmHistory?.length || 0,
         health: document.querySelector("#dataHealth")?.innerText,
@@ -1350,7 +1434,7 @@ async function run() {
     assert(jsonBackup.storedTimestamp === jsonBackup.stateTimestamp, "Full backup timestamp should persist locally.");
     assert(jsonBackup.schemaVersion === 1, "Full backup should declare schema version 1.");
     assert(jsonBackup.exportedAt === jsonBackup.stateTimestamp, "Full backup metadata should match the recorded backup time.");
-    assert(jsonBackup.supportAgreement?.role === "friend" && jsonBackup.supportAgreement?.cadence === "twice_weekly" && jsonBackup.supportAgreement?.reflectionScore === 4 && jsonBackup.rhythmHistoryCount > 0, "Full backup should preserve support, reflection, and weekly rhythm history.");
+    assert(jsonBackup.supportAgreement?.role === "friend" && jsonBackup.supportAgreement?.cadence === "twice_weekly" && jsonBackup.supportAgreement?.reflectionScore === 4 && jsonBackup.supportAgreement?.partnerCount === 2 && jsonBackup.rhythmHistoryCount > 0, "Full backup should preserve multi-partner support, reflections, and weekly rhythm history.");
     assert(jsonBackup.health.includes("完整备份") && jsonBackup.health.includes("今天"), "Data health should show a current full backup.");
     assert(jsonBackup.toast.includes("JSON 完整备份已导出"), "Full backup should confirm export to the user.");
 
@@ -1628,7 +1712,7 @@ async function run() {
         overflow: document.documentElement.scrollWidth > innerWidth
       };
     })()`);
-    assert(updateFlow.version.includes("v1.10.0"), "Help should display the current semantic app version.");
+    assert(updateFlow.version.includes("v1.12.0"), "Help should display the current semantic app version.");
     assert(updateFlow.shown && updateFlow.dismissed, "App update banner should be visible and dismissible.");
     assert(updateFlow.message?.type === "SKIP_WAITING" && updateFlow.buttonText === "更新中", "Confirmed update should activate the waiting service worker with clear feedback.");
     assert(!updateFlow.overflow, "Update banner should not cause desktop overflow.");
@@ -1798,7 +1882,7 @@ async function run() {
 
     const mobileSupportReflection = await evaluate(cdp, `(() => {
       document.querySelector("#supportAgreementForm").requestSubmit();
-      document.querySelector("#completeSupportCheckinBtn").click();
+      document.querySelector('[data-support-action="checkin"]').click();
       const dialog = document.querySelector("#supportCheckinDialog");
       const bounds = dialog.getBoundingClientRect();
       return {

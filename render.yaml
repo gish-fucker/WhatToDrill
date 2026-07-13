@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: daily-record-app
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: NODE_ENV
+        value: production
+      - key: APP_VERSION
+        value: 1.12.0
+      - key: OPENAI_MODEL
+        value: gpt-5-mini
+      - key: ADVICE_RATE_LIMIT
+        value: 10
+      - key: UPSTREAM_TIMEOUT_MS
+        value: 20000
+      - key: TRUST_PROXY
+        value: 1
+      - key: OPENAI_API_KEY
+        sync: false

@@ -450,6 +450,33 @@ h3 {
   gap: 14px;
 }
 
+.support-agreement-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.support-partner-list {
+  display: grid;
+  gap: 12px;
+}
+
+.support-partner-card {
+  border: 1px solid #cbded7;
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.support-partner-card h4 {
+  margin: 0 0 5px;
+  color: var(--text);
+  font-size: 16px;
+}
+
 .support-due {
   flex: 0 0 auto;
   padding: 6px 10px;
@@ -2040,6 +2067,99 @@ input[type="checkbox"] {
   color: #0f5f95;
 }
 
+.personal-progress-report {
+  margin-bottom: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.personal-progress-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.personal-progress-heading h4 {
+  margin: 2px 0 6px;
+  font-size: 17px;
+}
+
+.personal-progress-heading p {
+  margin-bottom: 0;
+}
+
+.personal-progress-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.personal-progress-metrics div {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  padding: 10px;
+  display: grid;
+  gap: 4px;
+}
+
+.personal-progress-metrics span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.personal-progress-metrics strong {
+  color: var(--text);
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+.personal-progress-findings {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.progress-report-item {
+  min-width: 0;
+  border-left: 3px solid var(--primary);
+  background: var(--primary-soft);
+  padding: 10px;
+}
+
+.progress-report-item.warning {
+  border-left-color: #c08a35;
+  background: #fff7e8;
+}
+
+.progress-report-item.info {
+  border-left-color: #3181a8;
+  background: #eef7fb;
+}
+
+.progress-report-item strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text);
+  line-height: 1.25;
+}
+
+.progress-report-item p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
 .weekly-action span {
   width: 32px;
   height: 32px;
@@ -3074,6 +3194,8 @@ input[type="checkbox"] {
 
   .weekly-review-grid,
   .retention-metrics,
+  .personal-progress-metrics,
+  .personal-progress-findings,
   .exercise-progress-grid,
   .weekly-actions {
     grid-template-columns: 1fr;
@@ -3122,6 +3244,10 @@ input[type="checkbox"] {
   }
 
   .support-agreement-main {
+    display: grid;
+  }
+
+  .support-agreement-heading {
     display: grid;
   }
   .care-disclosure {
@@ -3198,6 +3324,7 @@ input[type="checkbox"] {
   .execution-progress,
   .execution-stats,
   .retention-header,
+  .personal-progress-heading,
   .progress-heading,
   .preference-form,
   .today-brief,

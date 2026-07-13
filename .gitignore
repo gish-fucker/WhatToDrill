@@ -3,3 +3,4 @@ server.err.log
 output/
 .env
 node_modules/
+.playwright-cli/
