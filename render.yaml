@@ -20,5 +20,3 @@ services:
         value: 20000
       - key: TRUST_PROXY
         value: 1
-      - key: OPENAI_API_KEY
-        sync: false

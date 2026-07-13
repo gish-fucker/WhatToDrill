@@ -48,7 +48,7 @@ npm start
 项目根目录已经提供 `render.yaml`。将项目上传到 GitHub 后，在 Render 中选择该仓库并创建 Blueprint，Render 会读取这份配置：
 
 1. 创建一个 Web Service，使用项目根目录的 `render.yaml`。
-2. 在服务的 Environment 中填写 `OPENAI_API_KEY`；不要把真实 key 写入代码或提交到仓库。
+2. 首次公开测试可不配置 `OPENAI_API_KEY`；核心本地记录功能仍可使用。需要启用云端 AI 时，再在服务的 Environment 中单独添加，且不要把真实 key 写入代码或提交到仓库。
 3. 等待部署完成，打开 Render 分配的 `https://*.onrender.com` 地址。
 4. 访问 `/api/health` 检查服务状态，再把首页地址发给用户。
 
