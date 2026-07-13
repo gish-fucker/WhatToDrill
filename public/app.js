@@ -3,6 +3,7 @@ const WORKOUT_DRAFT_KEY = "habit_fitness_workout_draft_v1";
 const APP_VERSION = "1.13.0";
 const CLOUD_ADVICE_CONSENT_VERSION = 1;
 const BACKUP_SCHEMA_VERSION = 1;
+const IS_STATIC_HOSTED_APP = window.location.hostname.endsWith(".github.io");
 
 const defaultSettings = {
   waterStepMl: 500,
@@ -4403,6 +4404,12 @@ function escapeAttr(value) {
 }
 
 async function checkAiStatus() {
+  if (IS_STATIC_HOSTED_APP) {
+    cloudAdviceConfigured = false;
+    $("aiStatus").textContent = "本地建议模式";
+    renderCloudConsentStatus();
+    return;
+  }
   try {
     const response = await fetch("/api/health");
     const data = await response.json();
