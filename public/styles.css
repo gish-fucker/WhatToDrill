@@ -2963,7 +2963,8 @@ input[type="checkbox"] {
 }
 
 .account-form[hidden],
-.account-signed-in[hidden] {
+.account-signed-in[hidden],
+.account-entitlements[hidden] {
   display: none;
 }
 
@@ -3001,6 +3002,46 @@ input[type="checkbox"] {
 
 .account-signed-in button {
   flex: 0 0 auto;
+}
+
+.account-entitlements {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.account-entitlement-heading,
+.account-quota-metrics {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.account-entitlements p {
+  margin: 0;
+}
+
+.account-entitlements [hidden] {
+  display: none;
+}
+
+.account-entitlements progress {
+  width: 100%;
+  height: 8px;
+  accent-color: var(--accent);
+}
+
+.account-quota-metrics {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.account-plan-note {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .account-feedback {

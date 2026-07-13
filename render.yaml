@@ -11,9 +11,11 @@ services:
       - key: NODE_ENV
         value: production
       - key: APP_VERSION
-        value: 1.15.0
+        value: 1.16.0
       - key: OPENAI_MODEL
         value: gpt-5-mini
+      - key: OPENAI_BASE_URL
+        value: https://api.openai.com
       - key: ADVICE_RATE_LIMIT
         value: 10
       - key: ACCOUNT_RATE_LIMIT

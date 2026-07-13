@@ -1,6 +1,6 @@
 const STORAGE_KEY = "habit_fitness_app_v1";
 const WORKOUT_DRAFT_KEY = "habit_fitness_workout_draft_v1";
-const APP_VERSION = "1.15.0";
+const APP_VERSION = "1.16.0";
 const CLOUD_ADVICE_CONSENT_VERSION = 1;
 const BACKUP_SCHEMA_VERSION = 1;
 const MAX_WORKOUT_CSV_BYTES = 5 * 1024 * 1024;
@@ -127,7 +127,9 @@ let historyExpanded = false;
 let pendingAppUpdate = null;
 let updateReloadRequested = false;
 let cloudAdviceConfigured = false;
+let aiAccessMode = "deployment_shared";
 let accountSession = { loading: true, configured: false, signedIn: false, unavailable: false, user: null };
+let accountEntitlements = { loading: false, configured: false, unavailable: false, plan: null, quota: null };
 let accountPendingEmail = "";
 let accountFeedback = { text: "", error: false };
 let editingSupportPartnerId = null;
@@ -4052,11 +4054,26 @@ async function generateAdviceWithMode(useCloud) {
         body: JSON.stringify(payload)
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "AI 服务不可用");
+      if (!response.ok) {
+        const messages = {
+          ACCOUNT_REQUIRED: "需要登录后才能使用云端建议，本次已改用本地建议。",
+          QUOTA_EXHAUSTED: "本月云端建议额度已用完，本次已改用本地建议。",
+          ENTITLEMENT_UNAVAILABLE: "权益状态暂不可用，本次已改用本地建议。"
+        };
+        const error = new Error(messages[data.code] || data.error || "AI 服务不可用");
+        error.code = data.code || "AI_UNAVAILABLE";
+        if (data.entitlement) setAccountEntitlement(data.entitlement);
+        throw error;
+      }
+      if (data.entitlement) setAccountEntitlement(data.entitlement);
       saveAdvice(data.advice, `OpenAI ${data.model}`);
     } catch (error) {
       const localAdvice = generateLocalAdvice(payload, error.message);
       saveAdvice(localAdvice, "本地规则");
+      if (["ACCOUNT_REQUIRED", "QUOTA_EXHAUSTED", "ENTITLEMENT_UNAVAILABLE"].includes(error.code)) {
+        showToast(error.message);
+        checkAccountEntitlements();
+      }
     }
   });
 }
@@ -4794,7 +4811,10 @@ async function checkAiStatus() {
     const response = await fetch("/api/health");
     const data = await response.json();
     cloudAdviceConfigured = Boolean(data.openaiConfigured);
-    $("aiStatus").textContent = cloudAdviceConfigured ? `云端教练已连接 · ${data.model}` : "本地建议模式";
+    aiAccessMode = data.aiAccessMode === "account_quota" ? "account_quota" : "deployment_shared";
+    $("aiStatus").textContent = cloudAdviceConfigured
+      ? aiAccessMode === "account_quota" ? "云端教练已连接 · 账号额度" : `云端教练已连接 · ${data.model}`
+      : "本地建议模式";
   } catch {
     cloudAdviceConfigured = false;
     $("aiStatus").textContent = "离线可用 · 本地建议";
@@ -4812,6 +4832,70 @@ function maskAccountEmail(email) {
 function setAccountFeedback(text = "", error = false) {
   accountFeedback = { text, error };
   renderAccountPanel();
+}
+
+function setAccountEntitlement(data) {
+  if (!data?.configured) {
+    accountEntitlements = { loading: false, configured: false, unavailable: false, plan: null, quota: null };
+  } else {
+    accountEntitlements = {
+      loading: false,
+      configured: true,
+      unavailable: false,
+      plan: data.plan === "pro" ? "pro" : "free",
+      quota: data.quota || null
+    };
+  }
+  renderAccountEntitlements();
+}
+
+function renderAccountEntitlements() {
+  const panel = $("accountEntitlements");
+  if (!panel) return;
+  const shouldShow = accountSession.signedIn && (accountEntitlements.loading || accountEntitlements.configured || accountEntitlements.unavailable);
+  panel.hidden = !shouldShow;
+  if (!shouldShow) return;
+
+  const plan = $("accountPlan");
+  const status = $("accountEntitlementStatus");
+  const progress = $("accountQuotaProgress");
+  const metrics = panel.querySelector(".account-quota-metrics");
+  const reset = $("accountQuotaReset");
+  plan.classList.remove("low", "medium", "high");
+
+  if (accountEntitlements.loading) {
+    plan.textContent = "读取中";
+    plan.classList.add("low");
+    status.textContent = "正在读取服务器验证的权益。";
+    progress.hidden = true;
+    metrics.hidden = true;
+    reset.hidden = true;
+    return;
+  }
+  if (accountEntitlements.unavailable || !accountEntitlements.quota) {
+    plan.textContent = "暂不可用";
+    plan.classList.add("low");
+    status.textContent = "权益状态暂不可用，本地记录和本地建议仍可正常使用。";
+    progress.hidden = true;
+    metrics.hidden = true;
+    reset.hidden = true;
+    return;
+  }
+
+  const quota = accountEntitlements.quota;
+  plan.textContent = accountEntitlements.plan === "pro" ? "Pro" : "Free";
+  plan.classList.add(accountEntitlements.plan === "pro" ? "high" : "medium");
+  status.textContent = quota.pending > 0 ? `本月有 ${quota.pending} 次云端建议正在处理。` : "权益与用量由服务器验证。";
+  progress.max = Math.max(1, Number(quota.limit) || 1);
+  progress.value = Math.max(0, Number(quota.used) || 0);
+  progress.hidden = false;
+  metrics.hidden = false;
+  reset.hidden = false;
+  $("accountQuotaUsed").textContent = String(quota.used ?? 0);
+  $("accountQuotaRemaining").textContent = String(quota.remaining ?? 0);
+  $("accountQuotaLimit").textContent = String(quota.limit ?? 0);
+  const resetDate = new Intl.DateTimeFormat("zh-CN", { timeZone: "UTC", year: "numeric", month: "long", day: "numeric" }).format(new Date(quota.resetAt));
+  reset.textContent = `${resetDate}（UTC）重置`;
 }
 
 function renderAccountPanel() {
@@ -4871,6 +4955,7 @@ function renderAccountPanel() {
 
   feedback.textContent = accountFeedback.text;
   feedback.classList.toggle("error", accountFeedback.error);
+  renderAccountEntitlements();
 }
 
 async function accountApi(path, options = {}) {
@@ -4891,7 +4976,9 @@ async function accountApi(path, options = {}) {
       INVALID_EMAIL: "请输入有效的邮箱地址。",
       INVALID_CODE: "验证码无效或已过期，请检查后重试。",
       RATE_LIMITED: "尝试次数较多，请稍后再试。",
-      CROSS_SITE_REQUEST: "账号请求来源校验失败，请刷新页面重试。"
+      CROSS_SITE_REQUEST: "账号请求来源校验失败，请刷新页面重试。",
+      ACCOUNT_REQUIRED: "登录状态已失效，请重新登录。",
+      ENTITLEMENT_UNAVAILABLE: "权益状态暂不可用，本地功能不受影响。"
     };
     const error = new Error(messages[data.code] || "账号服务暂时不可用，本地记录不受影响。");
     error.code = data.code || "ACCOUNT_UNAVAILABLE";
@@ -4903,6 +4990,7 @@ async function accountApi(path, options = {}) {
 async function checkAccountSession() {
   if (IS_STATIC_HOSTED_APP) {
     accountSession = { loading: false, configured: false, signedIn: false, unavailable: false, user: null };
+    accountEntitlements = { loading: false, configured: false, unavailable: false, plan: null, quota: null };
     renderAccountPanel();
     return;
   }
@@ -4921,6 +5009,29 @@ async function checkAccountSession() {
     accountFeedback = { text: error.message, error: true };
   }
   renderAccountPanel();
+  await checkAccountEntitlements();
+}
+
+async function checkAccountEntitlements() {
+  if (IS_STATIC_HOSTED_APP || !accountSession.signedIn) {
+    accountEntitlements = { loading: false, configured: false, unavailable: false, plan: null, quota: null };
+    renderAccountEntitlements();
+    return;
+  }
+  accountEntitlements = { ...accountEntitlements, loading: true, unavailable: false };
+  renderAccountEntitlements();
+  try {
+    setAccountEntitlement(await accountApi("entitlements"));
+  } catch (error) {
+    if (error.code === "ACCOUNT_REQUIRED") {
+      accountSession = { loading: false, configured: true, signedIn: false, unavailable: false, user: null };
+      accountEntitlements = { loading: false, configured: false, unavailable: false, plan: null, quota: null };
+      renderAccountPanel();
+      return;
+    }
+    accountEntitlements = { loading: false, configured: true, unavailable: true, plan: null, quota: null };
+    renderAccountEntitlements();
+  }
 }
 
 async function requestAccountCode(event) {
@@ -4947,6 +5058,7 @@ async function verifyAccountCode(event) {
       const data = await accountApi("verify", { method: "POST", body: { email: accountPendingEmail, token } });
       accountSession = { loading: false, configured: true, signedIn: true, unavailable: false, user: data.user || null };
       accountPendingEmail = "";
+      await checkAccountEntitlements();
       setAccountFeedback("身份已连接。本机记录没有上传。", false);
     } catch (error) {
       setAccountFeedback(error.message, true);
@@ -4966,6 +5078,7 @@ async function signOutAccount() {
     try {
       const data = await accountApi("signout", { method: "POST" });
       accountSession = { loading: false, configured: Boolean(data.configured), signedIn: false, unavailable: false, user: null };
+      accountEntitlements = { loading: false, configured: false, unavailable: false, plan: null, quota: null };
       accountPendingEmail = "";
       setAccountFeedback("已退出账号。本机记录保持不变。", false);
     } catch (error) {

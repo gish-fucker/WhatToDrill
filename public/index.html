@@ -9,7 +9,7 @@
     <link rel="icon" href="./app-icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="./app-icon-180.png" sizes="180x180">
     <link rel="manifest" href="./manifest.webmanifest">
-    <link rel="stylesheet" href="./styles.css?v=20260713-account-identity-v1">
+    <link rel="stylesheet" href="./styles.css?v=20260713-entitlements-v1">
   </head>
   <body>
     <a class="skip-link" href="#mainContent">跳到主要内容</a>
@@ -480,6 +480,21 @@
               </div>
               <button id="signOutAccountBtn" class="ghost-button" type="button">退出账号</button>
             </div>
+            <div id="accountEntitlements" class="account-entitlements" hidden>
+              <div class="account-entitlement-heading">
+                <strong>服务权益</strong>
+                <span id="accountPlan" class="confidence-pill low">读取中</span>
+              </div>
+              <p id="accountEntitlementStatus" class="muted">正在读取服务器验证的权益。</p>
+              <progress id="accountQuotaProgress" max="1" value="0" aria-label="本月云端建议用量"></progress>
+              <div class="account-quota-metrics">
+                <span>已用 <strong id="accountQuotaUsed">0</strong></span>
+                <span>剩余 <strong id="accountQuotaRemaining">0</strong></span>
+                <span>每月 <strong id="accountQuotaLimit">0</strong></span>
+              </div>
+              <p id="accountQuotaReset" class="muted"></p>
+              <p class="account-plan-note">付费方案尚未开放</p>
+            </div>
             <p id="accountFeedback" class="account-feedback" role="status" aria-live="polite"></p>
             <p class="account-boundary">无需登录即可使用本地记录、导出和安全提示。登录或退出都不会上传、删除或改写当前设备的数据。</p>
           </section>
@@ -776,6 +791,6 @@
     </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js?v=20260713-account-identity-v1"></script>
+    <script src="./app.js?v=20260713-entitlements-v1"></script>
   </body>
 </html>

@@ -250,7 +250,7 @@ async function run() {
       ...process.env,
       HOST: "127.0.0.1",
       PORT: String(appPort),
-      APP_VERSION: "1.15.0",
+      APP_VERSION: "1.16.0",
       OPENAI_API_KEY: "",
       ADVICE_RATE_LIMIT: "10",
       ACCOUNT_RATE_LIMIT: "5",
@@ -476,9 +476,9 @@ async function run() {
     assert(serverHttp.csp?.includes("frame-ancestors 'none'"), "Static responses should include a restrictive CSP.");
     assert(serverHttp.frameOptions === "DENY", "Static responses should prevent framing.");
     assert(/^[0-9a-f-]{36}$/i.test(serverHttp.requestId), "API responses should expose a generated request ID.");
-    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.15.0", "Health response should expose status and release version.");
+    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.16.0", "Health response should expose status and release version.");
     assert(Number.isInteger(serverHttp.health.uptimeSeconds) && serverHttp.health.uptimeSeconds >= 0, "Health response should expose a valid uptime.");
-    assert(serverHttp.health.openaiConfigured === false && serverHttp.health.accountConfigured === true && serverHttp.health.model === "gpt-5-mini", "Health response should expose non-secret service configuration state.");
+    assert(serverHttp.health.openaiConfigured === false && serverHttp.health.accountConfigured === true && serverHttp.health.entitlementConfigured === false && serverHttp.health.aiAccessMode === "deployment_shared" && serverHttp.health.model === "gpt-5-mini", "Health response should expose non-secret service configuration state.");
     assert(serverHttp.indexCache === "no-cache", "HTML should revalidate instead of using a stale shell.");
     assert(serverHttp.privacyStatus === 200 && serverHttp.termsStatus === 200, "Legal pages should be served as public product pages.");
     assert(serverHttp.privacyCache === "no-cache", "Privacy policy should revalidate so users receive policy updates.");
@@ -767,9 +767,18 @@ async function run() {
       const snapshot = JSON.parse(JSON.stringify(state));
       const originalFetch = window.fetch;
       let adviceRequests = 0;
+      let exhaustQuota = false;
       window.fetch = async (url, options) => {
         if (url === "/api/advice") {
           adviceRequests += 1;
+          if (exhaustQuota) return {
+            ok: false,
+            status: 429,
+            json: async () => ({
+              code: "QUOTA_EXHAUSTED",
+              entitlement: { configured: true, plan: "free", quota: { used: 3, pending: 0, remaining: 0, limit: 3, resetAt: "2026-08-01T00:00:00.000Z" } }
+            })
+          };
           return { ok: true, json: async () => ({ advice: "云端测试建议", model: "test-model" }) };
         }
         return originalFetch(url, options);
@@ -811,6 +820,15 @@ async function run() {
         consent: state.settings.cloudAdviceConsentVersion,
         revokeVisible: !document.querySelector("#revokeCloudConsentBtn").hidden
       };
+      state.adviceHistory = [];
+      exhaustQuota = true;
+      await generateAdvice();
+      const quotaFallback = {
+        source: state.adviceHistory.at(-1)?.source,
+        text: state.adviceHistory.at(-1)?.text,
+        toast: document.querySelector("#toast")?.textContent
+      };
+      exhaustQuota = false;
       revokeCloudAdviceConsent();
       const revoked = {
         consent: state.settings.cloudAdviceConsentVersion,
@@ -824,12 +842,13 @@ async function run() {
       persistState();
       renderAdvice();
       renderCloudConsentStatus();
-      return { localOnly, firstPrompt, localChoice, cloudChoice, revoked };
+      return { localOnly, firstPrompt, localChoice, cloudChoice, quotaFallback, revoked };
     })()`);
     assert(cloudConsentFlow.localOnly.requests === 0 && cloudConsentFlow.localOnly.source === "本地规则", "Local advice mode should not call the cloud endpoint.");
     assert(cloudConsentFlow.firstPrompt.open && cloudConsentFlow.firstPrompt.focused === "useLocalAdviceBtn" && cloudConsentFlow.firstPrompt.requests === 0 && cloudConsentFlow.firstPrompt.consent === 0, "First cloud use should ask before sending and focus the local option.");
     assert(cloudConsentFlow.localChoice.closed && cloudConsentFlow.localChoice.source === "本地规则" && cloudConsentFlow.localChoice.requests === 0 && cloudConsentFlow.localChoice.consent === 0, "Choosing local advice should not save consent or send data.");
     assert(cloudConsentFlow.cloudChoice.closed && cloudConsentFlow.cloudChoice.source === "OpenAI test-model" && cloudConsentFlow.cloudChoice.requests === 1 && cloudConsentFlow.cloudChoice.consent === 1 && cloudConsentFlow.cloudChoice.revokeVisible, "Explicit consent should persist, send once, and expose revocation.");
+    assert(cloudConsentFlow.quotaFallback.source === "本地规则" && cloudConsentFlow.quotaFallback.text.includes("本月云端建议额度已用完") && cloudConsentFlow.quotaFallback.toast.includes("已改用本地建议"), "Quota exhaustion should explain and complete a local advice fallback.");
     assert(cloudConsentFlow.revoked.consent === 0 && cloudConsentFlow.revoked.revokeHidden && cloudConsentFlow.revoked.status.includes("首次使用"), "Revoking cloud consent should immediately require consent again.");
 
     await evaluate(cdp, `document.querySelector("#pain").value = "4";
@@ -2142,6 +2161,11 @@ async function run() {
       document.querySelector("#accountCode").value = "123456";
       document.querySelector("#accountCodeForm").requestSubmit();
       await new Promise(resolve => setTimeout(resolve, 350));
+      setAccountEntitlement({
+        configured: true,
+        plan: "pro",
+        quota: { used: 12, pending: 0, remaining: 88, limit: 100, resetAt: "2026-08-01T00:00:00.000Z" }
+      });
       return {
         unavailable,
         initial,
@@ -2150,6 +2174,8 @@ async function run() {
         header: document.querySelector("#accountStatus")?.textContent,
         panel: document.querySelector("#accountPanel")?.innerText,
         signedInVisible: !document.querySelector("#accountSignedIn")?.hidden,
+        entitlementVisible: !document.querySelector("#accountEntitlements")?.hidden,
+        entitlementText: document.querySelector("#accountEntitlements")?.innerText,
         storageUnchanged: localStorage.getItem(${JSON.stringify(storageKey)}) === storageBefore,
         overflow: document.documentElement.scrollWidth > innerWidth
       };
@@ -2161,6 +2187,7 @@ async function run() {
     assert(accountLogin.invalidCodeFeedback.includes("无效或已过期"), "Invalid account code should produce a stable actionable error.");
     assert(!accountLogin.codeState.emailStoredInBusinessState, "Pending account email must not enter local business state.");
     assert(accountLogin.header === "身份已连接" && accountLogin.signedInVisible && accountLogin.panel.includes("本机记录没有上传"), "Verified account UI should show identity without implying sync.");
+    assert(accountLogin.entitlementVisible && accountLogin.entitlementText.includes("Pro") && accountLogin.entitlementText.includes("剩余 88") && accountLogin.entitlementText.includes("付费方案尚未开放"), "Account UI should display only the server-provided entitlement summary without a purchase action.");
     assert(accountLogin.storageUnchanged && !accountLogin.overflow, "Account login should not mutate business storage or overflow desktop layout.");
     await evaluate(cdp, `document.querySelector("#accountPanel").scrollIntoView({ block: "center" })`);
     await screenshot(cdp, "smoke-desktop-account-boundary.png");
@@ -2199,7 +2226,7 @@ async function run() {
         overflow: document.documentElement.scrollWidth > innerWidth
       };
     })()`);
-    assert(updateFlow.version.includes("v1.15.0"), "Help should display the current semantic app version.");
+    assert(updateFlow.version.includes("v1.16.0"), "Help should display the current semantic app version.");
     assert(updateFlow.shown && updateFlow.dismissed, "App update banner should be visible and dismissible.");
     assert(updateFlow.message?.type === "SKIP_WAITING" && updateFlow.buttonText === "更新中", "Confirmed update should activate the waiting service worker with clear feedback.");
     assert(!updateFlow.overflow, "Update banner should not cause desktop overflow.");
@@ -2214,7 +2241,7 @@ async function run() {
     }))()`);
     assert(privacyPage.title.includes("隐私政策") && privacyPage.heading === "隐私政策", "Privacy policy should have a clear document title.");
     assert(privacyPage.text.includes("本地优先") && privacyPage.text.includes("云端建议") && privacyPage.text.includes("清空全部本地数据"), "Privacy policy should explain local, cloud, and deletion data paths.");
-    assert(privacyPage.text.includes("Supabase Auth") && privacyPage.text.includes("登录只建立未来云端服务可使用的身份"), "Privacy policy should disclose the identity provider and separate login from data sync.");
+    assert(privacyPage.text.includes("Supabase Auth") && privacyPage.text.includes("不会自动上传") && privacyPage.text.includes("配额事件不包含训练内容"), "Privacy policy should disclose identity, local-data, and quota-event boundaries.");
     assert(!privacyPage.overflow, "Privacy policy desktop layout should not overflow.");
 
     await navigate(cdp, `${baseUrl}/terms.html`);
@@ -2225,7 +2252,7 @@ async function run() {
     }))()`);
     assert(termsPage.heading === "使用条款", "Terms page should have a clear document title.");
     assert(termsPage.text.includes("不是医疗器械") && termsPage.text.includes("合理使用") && termsPage.text.includes("数据风险"), "Terms should cover health, acceptable use, and local data risks.");
-    assert(termsPage.text.includes("登录仅用于建立身份") && termsPage.text.includes("不代表本机记录已同步"), "Terms should distinguish account identity from local data availability.");
+    assert(termsPage.text.includes("服务器验证的服务权益") && termsPage.text.includes("不代表本机记录已同步") && termsPage.text.includes("月度额度"), "Terms should distinguish account entitlements from local data availability.");
     assert(!termsPage.overflow, "Terms desktop layout should not overflow.");
 
     await navigate(cdp, baseUrl);
@@ -2257,20 +2284,27 @@ async function run() {
     assert(mobileHelp.title === "帮助与版本说明", "Mobile help page should render.");
     assert(!mobileHelp.overflow, "Mobile help layout should not overflow.");
     const mobileAccount = await evaluate(cdp, `(() => {
+      window.__mobileLiveSession = accountSession;
+      window.__mobileLiveEntitlements = accountEntitlements;
+      accountSession = { loading: false, configured: true, signedIn: true, unavailable: false, user: { email: "quota@example.com" } };
+      setAccountEntitlement({ configured: true, plan: "free", quota: { used: 2, pending: 0, remaining: 1, limit: 3, resetAt: "2026-08-01T00:00:00.000Z" } });
+      renderAccountPanel();
       const panel = document.querySelector("#accountPanel");
       panel?.scrollIntoView({ block: "center" });
       const bounds = panel.getBoundingClientRect();
-      return {
+      const result = {
         width: bounds.width,
         viewportWidth: innerWidth,
-        emailVisible: !document.querySelector("#accountEmailForm")?.hidden,
+        entitlement: document.querySelector("#accountEntitlements")?.innerText,
         boundary: panel.innerText,
         overflow: document.documentElement.scrollWidth > innerWidth
       };
+      return result;
     })()`);
     assert(mobileAccount.width <= mobileAccount.viewportWidth && !mobileAccount.overflow, "Account boundary should fit the mobile viewport without horizontal overflow.");
-    assert(mobileAccount.emailVisible && mobileAccount.boundary.includes("不会上传、删除或改写"), "Mobile account UI should preserve the signed-out data boundary.");
+    assert(mobileAccount.entitlement.includes("Free") && mobileAccount.entitlement.includes("剩余 1") && mobileAccount.boundary.includes("不会上传、删除或改写"), "Mobile account UI should fit verified quota and preserve the local data boundary.");
     await screenshot(cdp, "smoke-mobile-account-boundary.png");
+    await evaluate(cdp, `accountSession = window.__mobileLiveSession; accountEntitlements = window.__mobileLiveEntitlements; delete window.__mobileLiveSession; delete window.__mobileLiveEntitlements; renderAccountPanel();`);
 
     await navigate(cdp, `${baseUrl}/privacy.html`);
     const mobilePrivacy = await evaluate(cdp, `(() => ({

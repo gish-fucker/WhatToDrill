@@ -3,12 +3,19 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  completeAdviceQuota,
+  getAccountEntitlement,
+  loadEntitlementConfig,
+  releaseAdviceQuota,
+  reserveAdviceQuota
+} from "./server/entitlements.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = join(__dirname, "public");
 const host = process.env.HOST || "127.0.0.1";
 const port = parseIntegerEnv("PORT", 5173, 1, 65535);
-const appVersion = process.env.APP_VERSION || "1.15.0";
+const appVersion = process.env.APP_VERSION || "1.16.0";
 const maxBodyBytes = 1_000_000;
 const upstreamTimeoutMs = parseIntegerEnv("UPSTREAM_TIMEOUT_MS", 20_000, 1_000, 120_000);
 const adviceRateLimit = parseIntegerEnv("ADVICE_RATE_LIMIT", 10, 1, 1_000);
@@ -20,6 +27,8 @@ const startedAt = Date.now();
 const adviceRequests = new Map();
 const accountRequests = new Map();
 const accountAuth = loadAccountAuthConfig();
+const entitlementConfig = loadEntitlementConfig(accountAuth, upstreamTimeoutMs);
+const openaiResponsesUrl = loadOpenAiResponsesUrl();
 setInterval(() => {
   const cutoff = Date.now() - adviceRateWindowMs;
   adviceRequests.forEach((timestamps, clientId) => {
@@ -83,6 +92,21 @@ function loadAccountAuthConfig() {
     throw new Error("SUPABASE_URL must use HTTPS outside local development.");
   }
   return { baseUrl: url.href.replace(/\/$/, ""), anonKey };
+}
+
+function loadOpenAiResponsesUrl() {
+  const rawUrl = process.env.OPENAI_BASE_URL?.trim() || "https://api.openai.com";
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error("OPENAI_BASE_URL must be a valid URL.");
+  }
+  const isLoopback = ["127.0.0.1", "localhost", "::1"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(process.env.NODE_ENV !== "production" && url.protocol === "http:" && isLoopback)) {
+    throw new Error("OPENAI_BASE_URL must use HTTPS outside local development.");
+  }
+  return `${url.href.replace(/\/$/, "")}/v1/responses`;
 }
 
 function writeLog(event, details = {}) {
@@ -279,21 +303,15 @@ async function readJsonRequest(req, res) {
   }
 }
 
-async function handleAccountSession(req, res) {
-  if (!accountAuth) {
-    sendJson(res, 200, { configured: false, signedIn: false });
-    return;
-  }
+async function resolveAccountUser(req) {
+  if (!accountAuth) return { configured: false, signedIn: false, dataScope: "local_only" };
   const cookies = parseCookies(req);
   try {
     if (cookies.hf_account_access) {
       const current = await callAccountProvider("user", { accessToken: cookies.hf_account_access });
       if (!current.ok && current.status >= 500) throw new Error("Account provider failed.");
       const user = current.ok ? cleanAccountUser(current.data) : null;
-      if (user) {
-        sendJson(res, 200, { configured: true, signedIn: true, user, dataScope: "local_only" });
-        return;
-      }
+      if (user) return { configured: true, signedIn: true, user, dataScope: "local_only" };
     }
 
     if (cookies.hf_account_refresh) {
@@ -304,15 +322,61 @@ async function handleAccountSession(req, res) {
       const user = refreshed.ok ? cleanAccountUser(refreshed.data.user) : null;
       if (!refreshed.ok && refreshed.status >= 500) throw new Error("Account provider failed.");
       if (user && typeof refreshed.data.access_token === "string" && typeof refreshed.data.refresh_token === "string") {
-        setAccountCookies(req, res, refreshed.data);
-        sendJson(res, 200, { configured: true, signedIn: true, user, dataScope: "local_only" });
-        return;
+        return { configured: true, signedIn: true, user, dataScope: "local_only", refreshedSession: refreshed.data };
       }
     }
-    if (cookies.hf_account_access || cookies.hf_account_refresh) clearAccountCookies(req, res);
-    sendJson(res, 200, { configured: true, signedIn: false, dataScope: "local_only" });
+    return {
+      configured: true,
+      signedIn: false,
+      dataScope: "local_only",
+      clearCookies: Boolean(cookies.hf_account_access || cookies.hf_account_refresh)
+    };
   } catch (error) {
-    sendJson(res, error.name === "AbortError" ? 504 : 503, { error: "Account service is temporarily unavailable.", code: "ACCOUNT_UNAVAILABLE" });
+    return {
+      configured: true,
+      signedIn: false,
+      unavailable: true,
+      statusCode: error.name === "AbortError" ? 504 : 503,
+      dataScope: "local_only"
+    };
+  }
+}
+
+function applyAccountResolutionCookies(req, res, resolution) {
+  if (resolution.refreshedSession) setAccountCookies(req, res, resolution.refreshedSession);
+  else if (resolution.clearCookies) clearAccountCookies(req, res);
+}
+
+async function handleAccountSession(req, res) {
+  const resolution = await resolveAccountUser(req);
+  applyAccountResolutionCookies(req, res, resolution);
+  if (resolution.unavailable) {
+    sendJson(res, resolution.statusCode, { error: "Account service is temporarily unavailable.", code: "ACCOUNT_UNAVAILABLE" });
+    return;
+  }
+  const { refreshedSession, clearCookies, ...payload } = resolution;
+  sendJson(res, 200, payload);
+}
+
+async function handleAccountEntitlements(req, res) {
+  if (!entitlementConfig) {
+    sendJson(res, 200, { configured: false });
+    return;
+  }
+  const resolution = await resolveAccountUser(req);
+  applyAccountResolutionCookies(req, res, resolution);
+  if (resolution.unavailable) {
+    sendJson(res, resolution.statusCode, { error: "Account service is temporarily unavailable.", code: "ACCOUNT_UNAVAILABLE" });
+    return;
+  }
+  if (!resolution.signedIn) {
+    sendJson(res, 401, { error: "Sign in to use account entitlements.", code: "ACCOUNT_REQUIRED" });
+    return;
+  }
+  try {
+    sendJson(res, 200, await getAccountEntitlement(entitlementConfig, resolution.user.id));
+  } catch (error) {
+    sendJson(res, error.name === "AbortError" ? 504 : 503, { error: "Entitlement service is temporarily unavailable.", code: "ENTITLEMENT_UNAVAILABLE" });
   }
 }
 
@@ -394,8 +458,9 @@ async function handleAccountSignout(req, res) {
   sendJson(res, 200, { configured: Boolean(accountAuth), signedIn: false, dataScope: "local_only" });
 }
 
-async function handleAdvice(req, res) {
+async function handleAdvice(req, res, requestId) {
   let timeout;
+  let reservationUserId = null;
   try {
     const raw = await readBody(req);
     let payload;
@@ -419,10 +484,43 @@ async function handleAdvice(req, res) {
       return;
     }
 
+    if (entitlementConfig) {
+      if (!isSameOriginRequest(req)) {
+        sendJson(res, 403, { error: "Cross-site advice requests are not allowed.", code: "CROSS_SITE_REQUEST" });
+        return;
+      }
+      const resolution = await resolveAccountUser(req);
+      applyAccountResolutionCookies(req, res, resolution);
+      if (resolution.unavailable) {
+        sendJson(res, resolution.statusCode, { error: "Account service is temporarily unavailable.", code: "ACCOUNT_UNAVAILABLE" });
+        return;
+      }
+      if (!resolution.signedIn) {
+        sendJson(res, 401, { error: "Sign in to use cloud advice.", code: "ACCOUNT_REQUIRED" });
+        return;
+      }
+      let reservation;
+      try {
+        reservation = await reserveAdviceQuota(entitlementConfig, resolution.user.id, requestId);
+      } catch (error) {
+        sendJson(res, error.name === "AbortError" ? 504 : 503, { error: "Entitlement service is temporarily unavailable.", code: "ENTITLEMENT_UNAVAILABLE" });
+        return;
+      }
+      if (!reservation.allowed) {
+        sendJson(res, 429, {
+          error: "Monthly cloud advice quota is exhausted.",
+          code: "QUOTA_EXHAUSTED",
+          entitlement: reservation.entitlement
+        });
+        return;
+      }
+      reservationUserId = resolution.user.id;
+    }
+
     const model = process.env.OPENAI_MODEL || "gpt-5-mini";
     const controller = new AbortController();
     timeout = setTimeout(() => controller.abort(), upstreamTimeoutMs);
-    const response = await fetch("https://api.openai.com/v1/responses", {
+    const response = await fetch(openaiResponsesUrl, {
       method: "POST",
       signal: controller.signal,
       headers: {
@@ -456,14 +554,34 @@ async function handleAdvice(req, res) {
 
     const data = await response.json();
     if (!response.ok) {
+      if (reservationUserId) {
+        await releaseAdviceQuota(entitlementConfig, reservationUserId, requestId).catch(() => {});
+        reservationUserId = null;
+      }
       sendJson(res, response.status, { error: data.error?.message || "OpenAI request failed." });
       return;
     }
 
     const text = data.output_text
       || data.output?.flatMap(item => item.content || []).map(part => part.text || "").join("\n").trim();
-    sendJson(res, 200, { advice: text || "模型没有返回可读建议。", model });
+    let entitlement;
+    if (reservationUserId) {
+      try {
+        entitlement = await completeAdviceQuota(entitlementConfig, reservationUserId, requestId);
+        reservationUserId = null;
+      } catch (error) {
+        await releaseAdviceQuota(entitlementConfig, reservationUserId, requestId).catch(() => {});
+        reservationUserId = null;
+        sendJson(res, error.name === "AbortError" ? 504 : 503, { error: "Unable to finalize cloud advice quota.", code: "ENTITLEMENT_UNAVAILABLE" });
+        return;
+      }
+    }
+    sendJson(res, 200, { advice: text || "模型没有返回可读建议。", model, ...(entitlement ? { entitlement } : {}) });
   } catch (error) {
+    if (reservationUserId) {
+      await releaseAdviceQuota(entitlementConfig, reservationUserId, requestId).catch(() => {});
+      reservationUserId = null;
+    }
     if (error.name === "AbortError") {
       sendJson(res, 504, { error: "AI service timed out." });
       return;
@@ -656,6 +774,8 @@ const server = http.createServer(async (req, res) => {
       uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
       openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
       accountConfigured: Boolean(accountAuth),
+      entitlementConfigured: Boolean(entitlementConfig),
+      aiAccessMode: entitlementConfig ? "account_quota" : "deployment_shared",
       model: process.env.OPENAI_MODEL || "gpt-5-mini"
     });
     return;
@@ -663,12 +783,17 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "POST" && pathname === "/api/advice") {
     if (!allowAdviceRequest(req, res)) return;
-    await handleAdvice(req, res);
+    await handleAdvice(req, res, requestId);
     return;
   }
 
   if (req.method === "GET" && pathname === "/api/account/session") {
     await handleAccountSession(req, res);
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/account/entitlements") {
+    await handleAccountEntitlements(req, res);
     return;
   }
 
@@ -688,7 +813,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname.startsWith("/api/account/")) {
-    res.setHeader("allow", pathname === "/api/account/session" ? "GET" : "POST");
+    res.setHeader("allow", ["/api/account/session", "/api/account/entitlements"].includes(pathname) ? "GET" : "POST");
     sendJson(res, 405, { error: "Method not allowed.", code: "METHOD_NOT_ALLOWED" });
     return;
   }

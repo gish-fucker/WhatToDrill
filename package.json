@@ -1,11 +1,12 @@
 {
   "name": "habit-fitness-app",
-  "version": "1.15.0",
+  "version": "1.16.0",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "check": "node --check public/app.js && node --check server.js",
-    "test:smoke": "node scripts/smoke-test.mjs"
+    "check": "node --check public/app.js && node --check server.js && node --check server/entitlements.js",
+    "test:entitlements": "node scripts/entitlements-test.mjs",
+    "test:smoke": "node scripts/entitlements-test.mjs && node scripts/smoke-test.mjs"
   }
 }
