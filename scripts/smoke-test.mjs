@@ -1192,7 +1192,7 @@ async function run() {
       currentStatus: activeWorkoutSession?.exercises[0]?.sets[0]?.status
     }))()`);
     assert(loadedWorkout.activeTab === "workout", "Coach start should activate workout tab.");
-    assert(loadedWorkout.title === "今日建议 - 全身入门", "Coach start should prefill workout title.");
+    assert(loadedWorkout.title === "全身入门", "Coach start should prefill a clean workout title.");
     assert(loadedWorkout.progress === "0", "Loaded template should start at 0 percent complete.");
     assert(loadedWorkout.sets === "0/11", "Loaded beginner template should expose 11 planned sets.");
     assert(loadedWorkout.collectedSets === 0, "Template cues should not count as completed workout sets.");
@@ -1282,6 +1282,38 @@ async function run() {
     assert(focusedFinish.summary.visible && focusedFinish.summary.metrics.includes("完成 1 组") && !focusedFinish.summary.preselected && focusedFinish.requiredError, "Summary should show automatic duration and require an unselected plain-language feeling.");
     assert(focusedFinish.workouts === 1 && focusedFinish.savedSets === 1 && focusedFinish.savedReps === 9 && focusedFinish.savedRpe === 6, "Focused save should materialize only the explicitly completed set and map the overall feeling.");
     assert(!focusedFinish.activeSession && focusedFinish.draftRemoved && focusedFinish.activeTab === "today", "Successful save should clear the session only after history is written and return to today.");
+
+    const metricUi = await evaluate(cdp, `(() => {
+      const template = {
+        id: "metric-ui",
+        name: "计量测试",
+        exercises: [
+          { name: "平板支撑", metric: "seconds", sets: [{ reps: 30, note: "按秒完成" }] },
+          { name: "快走", metric: "minutes", sets: [{ reps: 10, note: "按分钟完成" }] },
+          { name: "放松", metric: "completion", sets: [{ reps: null, note: "完成即可" }] }
+        ]
+      };
+      startFocusedWorkoutSession(template, template.name);
+      activateTab("workout", { scroll: false });
+      const seconds = document.querySelector("#focusedCurrentSet").innerText;
+      document.querySelector("#completeFocusedSetBtn").click();
+      const minutes = document.querySelector("#focusedCurrentSet").innerText;
+      document.querySelector("#completeFocusedSetBtn").click();
+      const completion = {
+        text: document.querySelector("#focusedCurrentSet").innerText,
+        hasPrimary: Boolean(document.querySelector("#focusedPrimaryValue")),
+        hasWeight: Boolean(document.querySelector("#focusedWeightValue"))
+      };
+      document.querySelector("#completeFocusedSetBtn").click();
+      const statusText = document.querySelector(".focused-plan-list").textContent;
+      const progress = WorkoutSessionModel.progress(activeWorkoutSession);
+      clearWorkoutDraft();
+      renderFocusedWorkoutSession();
+      return { seconds, minutes, completion, statusText, progress };
+    })()`);
+    assert(metricUi.seconds.includes("实际秒") && metricUi.minutes.includes("实际分钟"), "Focused UI should label second- and minute-based targets in plain language.");
+    assert(metricUi.completion.text.includes("完成这段动作") && !metricUi.completion.hasPrimary && !metricUi.completion.hasWeight, "Completion-only sets should not ask for repetitions or weight.");
+    assert(metricUi.progress.completed === 3 && metricUi.statusText.includes("✓ 已完成"), "Plan status should combine text, symbol, and color rather than color alone.");
 
     const painGateSaved = await evaluate(cdp, `(() => {
       const saved = state.dailyLogs.find(item => item.date === today());

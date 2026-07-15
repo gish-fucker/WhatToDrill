@@ -1731,7 +1731,8 @@ input[type="checkbox"] {
 }
 
 .focused-current-set:focus {
-  outline: none;
+  outline: 3px solid var(--primary);
+  outline-offset: 3px;
 }
 
 .focused-set-heading {
@@ -1785,6 +1786,16 @@ input[type="checkbox"] {
   min-height: 58px;
   font-size: 22px;
   font-weight: 900;
+}
+
+.focused-set-inputs input[type="number"] {
+  appearance: textfield;
+}
+
+.focused-set-inputs input[type="number"]::-webkit-inner-spin-button,
+.focused-set-inputs input[type="number"]::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
 }
 
 .completion-only-cue {
@@ -4038,6 +4049,8 @@ input[type="checkbox"] {
 
 .confirm-dialog {
   width: min(440px, calc(100vw - 32px));
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
   padding: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius);

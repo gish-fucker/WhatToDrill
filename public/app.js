@@ -1234,8 +1234,8 @@ function startDailyCoachWorkout(options = {}) {
   }
 
   const recommendation = buildDailyCoachRecommendation();
-  fillWorkoutFromTemplate(recommendation.template, `今日建议 - ${recommendation.template.name}`);
-  startFocusedWorkoutSession(recommendation.template, `今日建议 - ${recommendation.template.name}`);
+  fillWorkoutFromTemplate(recommendation.template, recommendation.template.name);
+  startFocusedWorkoutSession(recommendation.template, recommendation.template.name);
   activateTab("workout");
   showToast(`已载入${recommendation.template.name}`);
 }
@@ -1289,9 +1289,9 @@ function focusedTargetText(set) {
 }
 
 function setStatusLabel(status) {
-  if (status === "completed") return "已完成";
-  if (status === "skipped") return "已跳过";
-  return "待完成";
+  if (status === "completed") return "✓ 已完成";
+  if (status === "skipped") return "— 已跳过";
+  return "○ 待完成";
 }
 
 function renderFocusedWorkoutSession() {
