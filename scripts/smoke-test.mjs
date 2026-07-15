@@ -560,7 +560,8 @@ async function run() {
         const bounds = button.getBoundingClientRect();
         return bounds.width > 0 && bounds.height > 0 && style.display !== "none" && style.visibility !== "hidden" && style.backgroundColor === "rgb(31, 114, 95)";
       }).map(button => button.id),
-      technicalStatusHidden: document.querySelector(".technical-status")?.hidden && getComputedStyle(document.querySelector(".technical-status")).display === "none",
+      headerTechnicalAbsent: !document.querySelector("header #accountStatus") && !document.querySelector("header #offlineStatus") && !document.querySelector("header #installStatus"),
+      settingsStatusPresent: Boolean(document.querySelector("#technicalSettingsPanel #accountStatus") && document.querySelector("#technicalSettingsPanel #exportBtn")),
       onboardingVisible: !document.querySelector("#starterGuide").hidden,
       extendedDailyHidden: document.querySelector("#extendedDailyRecord")?.hidden,
       weeklyTargetHidden: document.querySelector("#weeklyTargetPanel")?.hidden,
@@ -619,7 +620,7 @@ async function run() {
     assert(todayCheck.coachStatus === "新手默认方案", "Empty daily coach should clearly identify the default beginner plan.");
     assert(todayCheck.coachTitle === "全身入门", "Empty daily coach should recommend full-body beginner template.");
     assert(todayCheck.primaryStartButtons.length === 1 && todayCheck.primaryStartButtons[0] === "startCoachWorkoutBtn", `The first-use home should expose one visually primary start action: ${JSON.stringify(todayCheck.primaryStartButtons)}.`);
-    assert(todayCheck.technicalStatusHidden, "Normal first-use home should hide technical status controls.");
+    assert(todayCheck.headerTechnicalAbsent && todayCheck.settingsStatusPresent, "Normal first-use home should keep technical controls out of the header and preserve them in settings.");
     assert(!todayCheck.onboardingVisible && todayCheck.extendedDailyHidden && todayCheck.weeklyTargetHidden && todayCheck.supportAgreementHidden, "First-use home should hide onboarding, extended records, weekly targets, and support agreements.");
     assert(todayCheck.retentionTitle === "复盘中心", "Insights review center should render on first run.");
     assert(todayCheck.retentionConfidence === "数据偏少", "Empty review center should show low-data confidence.");
@@ -998,14 +999,20 @@ async function run() {
       await loaded;
       await delay(500);
     }
-    const offlineLoad = await evaluate(cdp, `(() => ({
+    const offlineLoad = await evaluate(cdp, `(() => {
+      window.dispatchEvent(new Event("offline"));
+      return ({
       title: document.title,
       hasApp: Boolean(document.querySelector(".app-shell")),
       status: document.querySelector("#offlineStatus")?.textContent,
+      noticeVisible: !document.querySelector("#connectionNotice")?.hidden,
+      noticeText: document.querySelector("#connectionNotice")?.textContent,
       overflow: document.documentElement.scrollWidth > innerWidth
-    }))()`);
+      });
+    })()`);
     assert(offlineLoad.title === "今天练什么", "Offline reload should serve the cached app shell.");
     assert(offlineLoad.hasApp, "Offline reload should render the app shell.");
+    assert(offlineLoad.noticeVisible && offlineLoad.noticeText.includes("仍可以训练和记录"), `Offline mode should show one concise global notice while keeping local recording available: ${JSON.stringify(offlineLoad)}.`);
     assert(!offlineLoad.overflow, "Offline app shell should not overflow.");
     await cdp.send("Network.emulateNetworkConditions", {
       offline: false,
@@ -1027,7 +1034,7 @@ async function run() {
         focused: document.activeElement?.id
       })));
     })()`);
-    assert(settingsEntry.activeTab === "help" && settingsEntry.focused === "accountPanel", "Settings should open and focus the existing account and data area.");
+    assert(settingsEntry.activeTab === "help" && settingsEntry.focused === "technicalSettingsPanel", "Settings should open and focus the application and local-data area.");
     const readinessPanel = await evaluate(cdp, `(() => {
       document.querySelector('[data-tab="today"]').click();
       document.querySelector("#showExtendedDailyBtn").click();

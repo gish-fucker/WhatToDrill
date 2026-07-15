@@ -9,7 +9,7 @@
     <link rel="icon" href="../app-icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="../app-icon-180.png" sizes="180x180">
     <link rel="manifest" href="../manifest.webmanifest">
-    <link rel="stylesheet" href="../styles.css?v=20260715-p0-summary-v1">
+    <link rel="stylesheet" href="../styles.css?v=20260715-p0-settings-v2">
   </head>
   <body class="app-initializing">
     <a class="skip-link" href="#mainContent">跳到主要内容</a>
@@ -22,14 +22,6 @@
         </div>
       </div>
       <button id="openSettingsBtn" class="ghost-button settings-button" type="button">设置</button>
-      <div class="header-actions technical-status" hidden>
-        <span id="accountStatus" class="status-pill">账号状态检测中</span>
-        <span id="aiStatus" class="status-pill">建议模式检测中</span>
-        <span id="offlineStatus" class="status-pill">离线状态检测中</span>
-        <span id="installStatus" class="status-pill">安装状态检测中</span>
-        <button id="installAppBtn" class="ghost-button" type="button">安装方式</button>
-        <button id="exportBtn" class="ghost-button" type="button">导出</button>
-      </div>
     </header>
 
     <aside id="appUpdateBanner" class="app-update-banner" role="status" aria-live="polite" hidden>
@@ -42,6 +34,8 @@
         <button id="dismissAppUpdateBtn" class="ghost-button" type="button">稍后</button>
       </div>
     </aside>
+
+    <aside id="connectionNotice" class="connection-notice" role="status" aria-live="polite" hidden></aside>
 
     <main id="mainContent" class="app-shell" tabindex="-1" aria-busy="true">
       <nav class="tabs" role="tablist" aria-label="主导航">
@@ -455,6 +449,26 @@
             </div>
           </section>
 
+          <section id="technicalSettingsPanel" class="help-panel technical-settings-panel" aria-labelledby="technicalSettingsTitle" tabindex="-1">
+            <div class="panel-heading compact-heading">
+              <div>
+                <p class="eyebrow">设置</p>
+                <h3 id="technicalSettingsTitle">应用与本机数据</h3>
+              </div>
+            </div>
+            <div class="settings-status-grid">
+              <div><strong>使用身份</strong><span id="accountStatus" class="status-pill">正在确认</span></div>
+              <div><strong>训练建议</strong><span id="aiStatus" class="status-pill">正在确认</span></div>
+              <div><strong>离线使用</strong><span id="offlineStatus" class="status-pill">正在确认</span></div>
+              <div><strong>安装到设备</strong><span id="installStatus" class="status-pill">正在确认</span></div>
+            </div>
+            <div class="settings-data-actions">
+              <button id="installAppBtn" class="ghost-button" type="button">安装到主屏幕</button>
+              <button id="exportBtn" class="ghost-button" type="button">导出备份</button>
+            </div>
+            <p class="muted">训练和状态记录默认保存在当前设备；导出备份后可自行保存或迁移。</p>
+          </section>
+
           <section id="accountPanel" class="help-panel account-panel" aria-labelledby="accountPanelTitle">
             <div class="panel-heading compact-heading">
               <div>
@@ -538,7 +552,7 @@
             <div class="help-list">
               <article>
                 <strong>PWA 安装</strong>
-                <p class="muted">头部会显示安装状态；浏览器支持时可直接安装到桌面或主屏幕。</p>
+                <p class="muted">在“设置”查看安装状态；浏览器支持时可直接安装到桌面或主屏幕。</p>
               </article>
               <article>
                 <strong>离线可用</strong>
@@ -899,6 +913,6 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script src="../workout-session-model.js?v=20260715-p0-session-v1"></script>
-    <script src="../app.js?v=20260715-p0-summary-v1"></script>
+    <script src="../app.js?v=20260715-p0-settings-v2"></script>
   </body>
 </html>

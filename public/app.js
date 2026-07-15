@@ -2325,8 +2325,7 @@ function showExtendedDailyRecord() {
 function openSettings() {
   activateTab("help");
   window.requestAnimationFrame(() => {
-    const panel = $("accountPanel");
-    panel.setAttribute("tabindex", "-1");
+    const panel = $("technicalSettingsPanel");
     panel.scrollIntoView({ behavior: preferredScrollBehavior(), block: "start" });
     panel.focus({ preventScroll: true });
   });
@@ -5909,8 +5908,14 @@ function updateOfflineStatus(message = "") {
   const status = $("offlineStatus");
   if (!status) return;
   const isOnline = navigator.onLine;
-  status.textContent = message || (isOnline ? "可离线打开" : "当前离线");
-  status.classList.toggle("offline", !isOnline);
+  const isOffline = !isOnline || message === "当前离线";
+  status.textContent = message || (isOnline ? "可以离线记录" : "当前离线，记录仍会保存在本机");
+  status.classList.toggle("offline", isOffline);
+  const notice = $("connectionNotice");
+  if (notice) {
+    notice.hidden = !isOffline;
+    notice.textContent = isOffline ? "当前没有网络。你仍可以训练和记录，内容会保存在这台设备。" : "";
+  }
 }
 
 function showAppUpdate(registration) {
