@@ -24,7 +24,8 @@ assert.equal(model.inferMetric(null, "按秒记录在次数里", "平板支撑")
 assert.equal(model.inferMetric(null, "按分钟记录在次数里", "快走"), "minutes");
 
 const initial = createPlan();
-assert.equal(initial.version, 2, "New sessions should use the explicit-state schema.");
+assert.equal(initial.version, 3, "New sessions should use the workout-companion schema.");
+assert.deepEqual(initial.companion, { rest: null, transition: null });
 assert.deepEqual(model.progress(initial), { total: 4, completed: 0, skipped: 0, pending: 4, percent: 0 });
 assert.equal(model.canFinish(initial), false, "A session with no completed set cannot finish.");
 
@@ -97,9 +98,55 @@ const legacy = model.migrateDraft({
     ]
   }]
 }, { idFactory, startedAt });
-assert.equal(legacy.version, 2);
+assert.equal(legacy.version, 3);
 assert.equal(legacy.exercises[0].sets[0].status, "completed", "Legacy weight is strong evidence of completion.");
 assert.equal(legacy.exercises[0].sets[1].status, "pending", "Ambiguous legacy values must remain pending.");
 assert.equal(legacy.exercises[0].sets[1].actual.reps, 12, "Legacy input should remain visible after migration.");
+
+const companionNow = "2026-07-16T10:00:00.000Z";
+let companion = model.createSession({
+  title: "高频工具测试",
+  exercises: [
+    { name: "卧推", sets: [
+      { target: { weight: 40, reps: 8 } },
+      { target: { weight: 40, reps: 8 } }
+    ] },
+    { name: "坐姿划船", sets: [
+      { target: { weight: 35, reps: 10 } }
+    ] }
+  ]
+}, { idFactory, startedAt: companionNow });
+const companionFirst = companion.exercises[0].sets[0].id;
+const companionSecond = companion.exercises[0].sets[1].id;
+const companionThird = companion.exercises[1].sets[0].id;
+companion = model.completeSet(companion, companionFirst, { weight: 42.5, reps: 8 }, { now: companionNow });
+assert.equal(companion.companion.transition.kind, "set");
+assert.equal(companion.companion.transition.targetSetId, companionSecond);
+assert.equal(model.remainingRestSeconds(companion, "2026-07-16T10:00:30.000Z"), 60);
+companion = model.prefillCurrentWeight(companion);
+assert.equal(companion.exercises[0].sets[1].actual.weight, 42.5, "The next set should reuse the nearest completed weight in the same exercise.");
+const extended = model.adjustRest(companion, 30);
+assert.equal(model.remainingRestSeconds(extended, "2026-07-16T10:00:30.000Z"), 90);
+const reset = model.resetRest(extended, "2026-07-16T10:01:00.000Z");
+assert.equal(model.remainingRestSeconds(reset, "2026-07-16T10:01:00.000Z"), 90);
+assert.equal(model.clearRest(reset).companion.rest, null);
+
+const movedExercise = model.completeSet(companion, companionSecond, { weight: 45, reps: 8 }, { now: "2026-07-16T10:02:00.000Z" });
+assert.equal(movedExercise.currentSetId, companionThird);
+assert.equal(movedExercise.companion.transition.kind, "exercise", "The final set of an exercise should announce the next exercise.");
+assert.equal(model.prefillCurrentWeight(movedExercise).exercises[1].sets[0].actual.weight, null, "Weights must not carry across exercises.");
+const finishedCompanion = model.completeSet(movedExercise, companionThird, { weight: 35, reps: 10 }, { now: "2026-07-16T10:04:00.000Z" });
+assert.equal(finishedCompanion.companion.rest, null, "The final pending set should not start rest.");
+assert.equal(finishedCompanion.companion.transition, null);
+
+const undoneCompanion = model.undoSet(companion, companionFirst);
+assert.equal(undoneCompanion.companion.rest, null, "Undoing the source set should clear its rest timer.");
+assert.equal(undoneCompanion.companion.transition, null);
+const manuallySelected = model.selectSet(companion, companionThird);
+assert.equal(manuallySelected.companion.transition, null, "Manual selection should clear stale transition context.");
+
+const v2Draft = model.migrateDraft({ ...companion, version: 2, companion: undefined }, { idFactory, startedAt: companionNow });
+assert.equal(v2Draft.version, 3);
+assert.deepEqual(v2Draft.companion, { rest: null, transition: null });
 
 console.log("Workout session model tests passed.");

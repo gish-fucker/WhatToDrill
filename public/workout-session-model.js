@@ -1,7 +1,8 @@
 (function attachWorkoutSessionModel(global) {
   "use strict";
 
-  const VERSION = 2;
+  const VERSION = 3;
+  const DEFAULT_REST_SECONDS = 90;
   const VALID_STATUSES = new Set(["pending", "completed", "skipped"]);
   const VALID_METRICS = new Set(["reps", "seconds", "minutes", "completion"]);
   const FEELING_RPE = Object.freeze({ easy: 4, right: 6, hard: 8 });
@@ -49,6 +50,28 @@
     return { weight: null, reps: null, rpe: null, note: "" };
   }
 
+  function emptyCompanion() {
+    return { rest: null, transition: null };
+  }
+
+  function normalizeCompanion(companion = {}) {
+    const rest = companion.rest?.sourceSetId && companion.rest?.startedAt && companion.rest?.endsAt
+      ? {
+          sourceSetId: normalizeText(companion.rest.sourceSetId),
+          startedAt: companion.rest.startedAt,
+          endsAt: companion.rest.endsAt
+        }
+      : null;
+    const transition = companion.transition?.sourceSetId && companion.transition?.targetSetId
+      ? {
+          sourceSetId: normalizeText(companion.transition.sourceSetId),
+          targetSetId: normalizeText(companion.transition.targetSetId),
+          kind: companion.transition.kind === "exercise" ? "exercise" : "set"
+        }
+      : null;
+    return { rest, transition };
+  }
+
   function normalizeSet(set = {}, exercise = {}, idFactory = defaultId) {
     const targetSource = set.target || set;
     const actualSource = set.actual || emptyActual();
@@ -91,6 +114,7 @@
       templateId: normalizeText(plan.templateId),
       startedAt: plan.startedAt || options.startedAt || new Date().toISOString(),
       currentSetId: plan.currentSetId || null,
+      companion: normalizeCompanion(plan.companion),
       exercises
     };
     if (!flattenSets(session).some(set => set.id === session.currentSetId)) {
@@ -132,11 +156,32 @@
     });
   }
 
-  function completeSet(session, setId, patch) {
+  function completeSet(session, setId, patch, options = {}) {
     const next = updateSet(session, setId, (set, _exercise, draft) => {
       if (patch) set.actual = normalizeValues({ ...set.actual, ...patch });
       set.status = "completed";
-      draft.currentSetId = nextPendingSetId(draft, setId);
+      const targetSetId = nextPendingSetId(draft, setId);
+      draft.currentSetId = targetSetId;
+      draft.companion = normalizeCompanion(draft.companion);
+      if (!targetSetId) {
+        draft.companion = emptyCompanion();
+        return;
+      }
+      const startedAt = options.now || new Date().toISOString();
+      const startedMs = Date.parse(startedAt);
+      const safeStartedAt = Number.isFinite(startedMs) ? startedAt : new Date().toISOString();
+      const source = findSet(draft, setId);
+      const target = findSet(draft, targetSetId);
+      draft.companion.rest = {
+        sourceSetId: setId,
+        startedAt: safeStartedAt,
+        endsAt: new Date(Date.parse(safeStartedAt) + DEFAULT_REST_SECONDS * 1000).toISOString()
+      };
+      draft.companion.transition = {
+        sourceSetId: setId,
+        targetSetId,
+        kind: source?.exercise.id === target?.exercise.id ? "set" : "exercise"
+      };
     });
     return next;
   }
@@ -145,6 +190,7 @@
     return updateSet(session, setId, (set, _exercise, draft) => {
       set.status = "skipped";
       draft.currentSetId = nextPendingSetId(draft, setId);
+      draft.companion = emptyCompanion();
     });
   }
 
@@ -152,6 +198,7 @@
     return updateSet(session, setId, (set, _exercise, draft) => {
       set.status = "pending";
       draft.currentSetId = setId;
+      draft.companion = emptyCompanion();
     });
   }
 
@@ -159,6 +206,61 @@
     const next = clone(session);
     if (!findSet(next, setId)) throw new Error(`Unknown workout set: ${setId}`);
     next.currentSetId = setId;
+    next.companion = emptyCompanion();
+    return next;
+  }
+
+  function remainingRestSeconds(session, now = new Date().toISOString()) {
+    const end = Date.parse(session.companion?.rest?.endsAt);
+    const current = Date.parse(now);
+    return Number.isFinite(end) && Number.isFinite(current)
+      ? Math.max(0, Math.ceil((end - current) / 1000))
+      : 0;
+  }
+
+  function adjustRest(session, deltaSeconds) {
+    const next = clone(session);
+    next.companion = normalizeCompanion(next.companion);
+    const end = Date.parse(next.companion.rest?.endsAt);
+    const delta = Number(deltaSeconds);
+    if (Number.isFinite(end) && Number.isFinite(delta)) {
+      next.companion.rest.endsAt = new Date(end + delta * 1000).toISOString();
+    }
+    return next;
+  }
+
+  function resetRest(session, now = new Date().toISOString()) {
+    const next = clone(session);
+    next.companion = normalizeCompanion(next.companion);
+    if (!next.companion.rest) return next;
+    const current = Date.parse(now);
+    if (!Number.isFinite(current)) return next;
+    next.companion.rest.startedAt = now;
+    next.companion.rest.endsAt = new Date(current + DEFAULT_REST_SECONDS * 1000).toISOString();
+    return next;
+  }
+
+  function clearRest(session) {
+    const next = clone(session);
+    next.companion = normalizeCompanion(next.companion);
+    next.companion.rest = null;
+    return next;
+  }
+
+  function prefillCurrentWeight(session) {
+    const next = clone(session);
+    const exercise = next.exercises.find(item => item.sets.some(set => set.id === next.currentSetId));
+    if (!exercise) return next;
+    const currentIndex = exercise.sets.findIndex(set => set.id === next.currentSetId);
+    const current = exercise.sets[currentIndex];
+    if (!current || current.actual.weight !== null) return next;
+    for (let index = currentIndex - 1; index >= 0; index -= 1) {
+      const candidate = exercise.sets[index];
+      if (candidate.status !== "completed") continue;
+      const weight = candidate.actual.weight ?? candidate.target.weight;
+      if (weight !== null) current.actual.weight = weight;
+      break;
+    }
     return next;
   }
 
@@ -228,12 +330,14 @@
 
   function migrateDraft(draft = {}, options = {}) {
     if (draft.version === VERSION) return createSession(draft, options);
+    if (draft.version === 2) return createSession({ ...draft, companion: emptyCompanion() }, options);
     const migrated = {
       id: draft.id,
       date: draft.date,
       title: draft.title,
       templateId: draft.templateId,
       startedAt: draft.startedAt || options.startedAt,
+      companion: emptyCompanion(),
       exercises: (Array.isArray(draft.exercises) ? draft.exercises : []).map(exercise => ({
         name: exercise.name,
         metric: exercise.metric,
@@ -250,6 +354,7 @@
 
   global.WorkoutSessionModel = Object.freeze({
     VERSION,
+    DEFAULT_REST_SECONDS,
     VALID_METRICS: Object.freeze(Array.from(VALID_METRICS)),
     createSession,
     migrateDraft,
@@ -264,6 +369,11 @@
     canFinish,
     feelingToRpe,
     elapsedMinutes,
+    remainingRestSeconds,
+    adjustRest,
+    resetRest,
+    clearRest,
+    prefillCurrentWeight,
     toWorkoutRecord
   });
 })(globalThis);
