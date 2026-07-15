@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "check": "node --check public/app.js && node --check server.js && node --check server/entitlements.js",
+    "check": "node --check public/workout-session-model.js && node --check public/app.js && node --check server.js && node --check server/entitlements.js",
+    "test:workout-session": "node scripts/workout-session-test.mjs",
     "test:entitlements": "node scripts/entitlements-test.mjs",
-    "test:smoke": "node scripts/entitlements-test.mjs && node scripts/smoke-test.mjs"
+    "test:smoke": "node scripts/workout-session-test.mjs && node scripts/entitlements-test.mjs && node scripts/smoke-test.mjs"
   }
 }
