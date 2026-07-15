@@ -1324,7 +1324,10 @@ function renderFocusedWorkoutSession() {
         <h2>${escapeHtml(activeWorkoutSession.title)}</h2>
         <p class="muted">已训练 ${elapsed} 分钟 · 完成 ${modelProgress.completed}/${modelProgress.total} 组</p>
       </div>
-      <span class="focused-progress" aria-label="完成进度 ${modelProgress.percent}%">${modelProgress.percent}%</span>
+      <div class="focused-session-header-actions">
+        <span class="focused-progress" aria-label="完成进度 ${modelProgress.percent}%">${modelProgress.percent}%</span>
+        <button id="requestFinishFocusedWorkoutBtn" class="text-button" type="button">结束训练</button>
+      </div>
     </div>
     ${current ? focusedCurrentSetMarkup(current) : `
       <div class="focused-session-done">
@@ -1438,6 +1441,116 @@ function selectFocusedSet(setId) {
   persistWorkoutDraft();
   renderFocusedWorkoutSession();
   $("focusedCurrentSet")?.focus();
+}
+
+function closeFocusedFinishDialog() {
+  closeInputDialog("focusedFinishDialog");
+}
+
+function openFocusedFinishDialog() {
+  if (!activeWorkoutSession) return;
+  const progress = WorkoutSessionModel.progress(activeWorkoutSession);
+  if (progress.completed > 0 && progress.pending === 0) {
+    showFocusedWorkoutSummary();
+    return;
+  }
+
+  const dialog = $("focusedFinishDialog");
+  $("focusedFinishDecision").hidden = false;
+  $("focusedSummaryForm").hidden = true;
+  $("zeroCompletedActions").hidden = progress.completed > 0;
+  $("pendingWorkoutActions").hidden = progress.completed === 0;
+  $("focusedFinishTitle").textContent = progress.completed === 0 ? "还没有完成任何一组" : `还有 ${progress.pending} 组未处理`;
+  $("focusedFinishDescription").textContent = progress.completed === 0
+    ? "现在保存不会产生训练记录。你可以继续、保留草稿稍后回来，或放弃这次训练。"
+    : "未完成的组不会写入历史。你可以继续训练，也可以只保存已经明确完成的组。";
+  dialog.setAttribute("aria-labelledby", "focusedFinishTitle");
+  if (!dialog.open) {
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+  }
+  (progress.completed === 0 ? $("continueEmptyWorkoutBtn") : $("continuePendingWorkoutBtn")).focus();
+}
+
+function showFocusedWorkoutSummary() {
+  if (!activeWorkoutSession || !WorkoutSessionModel.canFinish(activeWorkoutSession)) {
+    openFocusedFinishDialog();
+    return;
+  }
+  const progress = WorkoutSessionModel.progress(activeWorkoutSession);
+  const duration = WorkoutSessionModel.elapsedMinutes(activeWorkoutSession.startedAt) || 1;
+  const dialog = $("focusedFinishDialog");
+  $("focusedFinishDecision").hidden = true;
+  const form = $("focusedSummaryForm");
+  form.hidden = false;
+  form.reset();
+  $("focusedSummaryError").hidden = true;
+  $("focusedSummaryMetrics").textContent = `${duration} 分钟 · 完成 ${progress.completed} 组${progress.skipped ? ` · 跳过 ${progress.skipped} 组` : ""}`;
+  dialog.setAttribute("aria-labelledby", "focusedSummaryTitle");
+  if (!dialog.open) {
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+  }
+  form.querySelector('input[name="workoutFeeling"]')?.focus();
+}
+
+function keepFocusedWorkoutDraft() {
+  persistWorkoutDraft();
+  closeFocusedFinishDialog();
+  activateTab("today");
+  showToast("训练草稿已保留");
+}
+
+function abandonFocusedWorkout() {
+  clearWorkoutDraft();
+  closeFocusedFinishDialog();
+  clearWorkoutForm();
+  renderAll();
+  activateTab("today");
+  showToast("已放弃这次训练");
+}
+
+function saveFocusedWorkout(event) {
+  event.preventDefault();
+  if (!activeWorkoutSession) return;
+  const data = new FormData(event.currentTarget);
+  const feeling = data.get("workoutFeeling");
+  const error = $("focusedSummaryError");
+  if (!feeling) {
+    error.hidden = false;
+    error.focus();
+    return;
+  }
+
+  try {
+    const record = WorkoutSessionModel.toWorkoutRecord(activeWorkoutSession, {
+      feeling,
+      sessionRpe: numberOrNull($("focusedSummaryRpe").value),
+      note: $("focusedSummaryNote").value,
+      endedAt: new Date().toISOString()
+    });
+    const saved = {
+      ...record,
+      id: uid("workout"),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    const completedCount = saved.exercises.reduce((sum, exercise) => sum + exercise.sets.length, 0);
+    state.workouts.push(saved);
+    refreshExerciseLastUsed();
+    lastWorkoutSummary = buildSavedWorkoutSummary(saved);
+    clearWorkoutDraft();
+    saveState();
+    closeFocusedFinishDialog();
+    clearWorkoutForm();
+    renderAll();
+    activateTab("today");
+    showToast(`训练已保存 · ${completedCount} 组`);
+  } catch (saveError) {
+    error.textContent = saveError?.message || "训练保存失败，请重试。";
+    error.hidden = false;
+    error.focus();
+  }
 }
 
 function openPainGate() {
@@ -5988,6 +6101,16 @@ function bindActions() {
   $("painGateDialog").addEventListener("click", event => {
     if (event.target === $("painGateDialog")) closePainGate();
   });
+  $("focusedSummaryForm").addEventListener("submit", saveFocusedWorkout);
+  $("continueEmptyWorkoutBtn").addEventListener("click", closeFocusedFinishDialog);
+  $("keepEmptyWorkoutBtn").addEventListener("click", keepFocusedWorkoutDraft);
+  $("abandonEmptyWorkoutBtn").addEventListener("click", abandonFocusedWorkout);
+  $("continuePendingWorkoutBtn").addEventListener("click", closeFocusedFinishDialog);
+  $("confirmFinishWithPendingBtn").addEventListener("click", showFocusedWorkoutSummary);
+  $("cancelFocusedSummaryBtn").addEventListener("click", closeFocusedFinishDialog);
+  $("focusedFinishDialog").addEventListener("click", event => {
+    if (event.target === $("focusedFinishDialog")) closeFocusedFinishDialog();
+  });
   $("accountEmailForm").addEventListener("submit", requestAccountCode);
   $("accountCodeForm").addEventListener("submit", verifyAccountCode);
   $("changeAccountEmailBtn").addEventListener("click", changeAccountEmail);
@@ -6211,6 +6334,10 @@ function bindActions() {
     if (event.target.closest("#focusedCurrentSet")) persistFocusedActual();
   });
   $("focusedWorkoutSession").addEventListener("click", event => {
+    if (event.target.closest("#requestFinishFocusedWorkoutBtn")) {
+      openFocusedFinishDialog();
+      return;
+    }
     if (event.target.closest("#completeFocusedSetBtn")) {
       completeFocusedSet();
       return;
@@ -6224,7 +6351,7 @@ function bindActions() {
       return;
     }
     if (event.target.closest("#finishFocusedWorkoutBtn")) {
-      showToast("训练已完成，请确认整体感受后保存");
+      showFocusedWorkoutSummary();
       return;
     }
     const setButton = event.target.closest("[data-session-set-id]");

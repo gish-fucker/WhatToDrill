@@ -1192,6 +1192,19 @@ async function run() {
     assert(loadedWorkout.focusedVisible && loadedWorkout.currentExercise === "腿举" && loadedWorkout.currentSetText.includes("第 1 组 / 共 3 组") && loadedWorkout.currentSetText.includes("完成这组"), "Coach start should focus the first planned set and its explicit completion action.");
     assert(loadedWorkout.legacyHidden && loadedWorkout.sessionVersion === 2 && loadedWorkout.currentStatus === "pending", "Focused training should hide the legacy editor and keep the set explicitly pending.");
 
+    const emptyFinish = await evaluate(cdp, `(() => {
+      document.querySelector("#requestFinishFocusedWorkoutBtn").click();
+      const result = {
+        open: document.querySelector("#focusedFinishDialog").open,
+        title: document.querySelector("#focusedFinishTitle").textContent,
+        actionsVisible: !document.querySelector("#zeroCompletedActions").hidden,
+        workouts: state.workouts.length
+      };
+      document.querySelector("#continueEmptyWorkoutBtn").click();
+      return result;
+    })()`);
+    assert(emptyFinish.open && emptyFinish.title.includes("还没有完成") && emptyFinish.actionsVisible && emptyFinish.workouts === 0, "A zero-completion session should offer continue, keep, or abandon without creating history.");
+
     const typedPending = await evaluate(cdp, `(() => {
       document.querySelector("#focusedPrimaryValue").value = "9";
       document.querySelector("#focusedPrimaryValue").dispatchEvent(new Event("input", { bubbles: true }));
@@ -1224,7 +1237,44 @@ async function run() {
       firstActual: activeWorkoutSession?.exercises[0]?.sets[0]?.actual?.reps
     }))()`);
     assert(restoredFocusedSession.visible && restoredFocusedSession.startedAt === completedFocusedSet.startedAt && restoredFocusedSession.completed === 1 && restoredFocusedSession.currentSetId && restoredFocusedSession.firstActual === 9, "Reload should restore focused progress, current set, actual input, and original start time.");
-    await evaluate(cdp, `clearWorkoutDraft(); renderFocusedWorkoutSession()`);
+
+    const focusedFinish = await evaluate(cdp, `(() => {
+      document.querySelector("#requestFinishFocusedWorkoutBtn").click();
+      const pendingPrompt = {
+        title: document.querySelector("#focusedFinishTitle").textContent,
+        pendingVisible: !document.querySelector("#pendingWorkoutActions").hidden
+      };
+      document.querySelector("#confirmFinishWithPendingBtn").click();
+      const summary = {
+        visible: !document.querySelector("#focusedSummaryForm").hidden,
+        metrics: document.querySelector("#focusedSummaryMetrics").textContent,
+        preselected: document.querySelector('input[name="workoutFeeling"]:checked')?.value || ""
+      };
+      document.querySelector("#focusedSummaryForm").requestSubmit();
+      const requiredError = !document.querySelector("#focusedSummaryError").hidden;
+      document.querySelector('input[name="workoutFeeling"][value="right"]').click();
+      document.querySelector("#focusedSummaryForm").requestSubmit();
+      const saved = state.workouts[0];
+      const result = {
+        pendingPrompt,
+        summary,
+        requiredError,
+        workouts: state.workouts.length,
+        savedSets: saved.exercises.reduce((sum, exercise) => sum + exercise.sets.length, 0),
+        savedReps: saved.exercises[0].sets[0].reps,
+        savedRpe: saved.sessionRpe,
+        activeSession: activeWorkoutSession,
+        draftRemoved: localStorage.getItem(${JSON.stringify(workoutDraftKey)}) === null,
+        activeTab: document.querySelector(".tab.active")?.dataset.tab
+      };
+      state.workouts = [];
+      saveState();
+      return result;
+    })()`);
+    assert(focusedFinish.pendingPrompt.title.includes("10 组") && focusedFinish.pendingPrompt.pendingVisible, "Ending early should disclose the remaining set count before summary.");
+    assert(focusedFinish.summary.visible && focusedFinish.summary.metrics.includes("完成 1 组") && !focusedFinish.summary.preselected && focusedFinish.requiredError, "Summary should show automatic duration and require an unselected plain-language feeling.");
+    assert(focusedFinish.workouts === 1 && focusedFinish.savedSets === 1 && focusedFinish.savedReps === 9 && focusedFinish.savedRpe === 6, "Focused save should materialize only the explicitly completed set and map the overall feeling.");
+    assert(!focusedFinish.activeSession && focusedFinish.draftRemoved && focusedFinish.activeTab === "today", "Successful save should clear the session only after history is written and return to today.");
 
     const painGateSaved = await evaluate(cdp, `(() => {
       const saved = state.dailyLogs.find(item => item.date === today());

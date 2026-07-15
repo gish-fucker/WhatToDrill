@@ -9,7 +9,7 @@
     <link rel="icon" href="../app-icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="../app-icon-180.png" sizes="180x180">
     <link rel="manifest" href="../manifest.webmanifest">
-    <link rel="stylesheet" href="../styles.css?v=20260715-p0-focused-v1">
+    <link rel="stylesheet" href="../styles.css?v=20260715-p0-summary-v1">
   </head>
   <body class="app-initializing">
     <a class="skip-link" href="#mainContent">跳到主要内容</a>
@@ -677,6 +677,46 @@
       </div>
     </dialog>
 
+    <dialog id="focusedFinishDialog" class="confirm-dialog focused-finish-dialog" aria-labelledby="focusedFinishTitle">
+      <div id="focusedFinishDecision" class="confirm-dialog-body" hidden>
+        <p class="eyebrow">结束训练</p>
+        <h2 id="focusedFinishTitle">确认结束</h2>
+        <p id="focusedFinishDescription"></p>
+        <div id="zeroCompletedActions" class="focused-finish-actions" hidden>
+          <button id="continueEmptyWorkoutBtn" type="button">继续训练</button>
+          <button id="keepEmptyWorkoutBtn" class="ghost-button" type="button">保留草稿</button>
+          <button id="abandonEmptyWorkoutBtn" class="danger-button" type="button">放弃这次训练</button>
+        </div>
+        <div id="pendingWorkoutActions" class="confirm-dialog-actions" hidden>
+          <button id="continuePendingWorkoutBtn" class="ghost-button" type="button">继续训练</button>
+          <button id="confirmFinishWithPendingBtn" type="button">仍然结束</button>
+        </div>
+      </div>
+      <form id="focusedSummaryForm" class="confirm-dialog-body focused-summary-form" hidden>
+        <p class="eyebrow">训练总结</p>
+        <h2 id="focusedSummaryTitle">今天练得怎么样？</h2>
+        <p id="focusedSummaryMetrics" class="focused-summary-metrics"></p>
+        <fieldset class="workout-feeling-options">
+          <legend>整体感受（必选）</legend>
+          <label><input type="radio" name="workoutFeeling" value="easy"><span>轻松</span></label>
+          <label><input type="radio" name="workoutFeeling" value="right"><span>正合适</span></label>
+          <label><input type="radio" name="workoutFeeling" value="hard"><span>有点吃力</span></label>
+        </fieldset>
+        <details class="focused-summary-more">
+          <summary>补充更多</summary>
+          <div class="focused-summary-fields">
+            <label>精确难度 1-10（可不填）<input id="focusedSummaryRpe" type="number" min="1" max="10" step="1"></label>
+            <label>备注（可不填）<textarea id="focusedSummaryNote" rows="3" maxlength="500" placeholder="例如：哪个动作最舒服"></textarea></label>
+          </div>
+        </details>
+        <p id="focusedSummaryError" class="field-error" role="alert" tabindex="-1" hidden>请选择今天训练的整体感受。</p>
+        <div class="confirm-dialog-actions">
+          <button id="cancelFocusedSummaryBtn" class="ghost-button" type="button">返回训练</button>
+          <button type="submit">保存训练</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog id="waterStepDialog" class="confirm-dialog input-dialog" aria-labelledby="waterStepDialogTitle" aria-describedby="waterStepDialogDescription">
       <form id="waterStepForm" class="confirm-dialog-body" novalidate>
         <p class="eyebrow">Water shortcut</p>
@@ -859,6 +899,6 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script src="../workout-session-model.js?v=20260715-p0-session-v1"></script>
-    <script src="../app.js?v=20260715-p0-focused-v1"></script>
+    <script src="../app.js?v=20260715-p0-summary-v1"></script>
   </body>
 </html>

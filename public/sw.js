@@ -1,4 +1,4 @@
-const CACHE_NAME = "habit-fitness-shell-v20260715-p0-focused-v1";
+const CACHE_NAME = "habit-fitness-shell-v20260715-p0-summary-v1";
 const LANDING_INDEX = new URL("index.html", self.registration.scope).toString();
 const APP_INDEX = new URL("app/index.html", self.registration.scope).toString();
 const APP_PATH = new URL("app/", self.registration.scope).pathname;
@@ -9,8 +9,8 @@ const APP_SHELL = [
   "app/index.html",
   "privacy.html",
   "terms.html",
-  "styles.css?v=20260715-p0-focused-v1",
-  "app.js?v=20260715-p0-focused-v1",
+  "styles.css?v=20260715-p0-summary-v1",
+  "app.js?v=20260715-p0-summary-v1",
   "workout-session-model.js?v=20260715-p0-session-v1",
   "app-icon.svg",
   "app-icon-180.png",
