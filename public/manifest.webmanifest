@@ -1,7 +1,7 @@
 {
-  "name": "日常与健身记录",
-  "short_name": "日常与健身记录",
-  "description": "你的训练与恢复助手，根据恢复状态安排适合今天的训练，并带你逐组完成。",
+  "name": "WhatToDrill · 今天练什么",
+  "short_name": "WhatToDrill",
+  "description": "根据恢复状态安排下一次训练，并逐组记录表现。",
   "id": "./app/",
   "start_url": "./app/",
   "scope": "./",

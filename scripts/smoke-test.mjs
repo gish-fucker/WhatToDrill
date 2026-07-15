@@ -432,7 +432,7 @@ async function run() {
       requestId: healthResponse.headers.get("x-request-id"),
       health: healthPayload,
       indexCache: indexResponse.headers.get("cache-control"),
-      landingReady: landingHtml.includes("今天练什么，直接告诉你") && landingHtml.includes('href="./app/"'),
+      landingReady: landingHtml.includes("今天练什么，不用再猜") && landingHtml.includes("WhatToDrill") && landingHtml.includes('href="./app/"'),
       appStatus: appResponse.status,
       appReady: appHtml.includes('id="mainContent"') && appHtml.includes('../app.js'),
       privacyStatus: privacyResponse.status,
@@ -543,7 +543,7 @@ async function run() {
       deviceScaleFactor: 1,
       mobile: false
     });
-    await evaluate(cdp, `localStorage.removeItem(${JSON.stringify(storageKey)}); localStorage.removeItem(${JSON.stringify(workoutDraftKey)})`);
+    await evaluate(cdp, `activeWorkoutSession = null; clearWorkoutForm(); localStorage.removeItem(${JSON.stringify(storageKey)}); localStorage.removeItem(${JSON.stringify(workoutDraftKey)})`);
     await reload(cdp);
 
     const todayCheck = await evaluate(cdp, `(() => ({
@@ -568,6 +568,8 @@ async function run() {
       supportAgreementHidden: document.querySelector("#supportAgreementPanel")?.hidden,
       safetyHidden: document.querySelector("#safetyStrip")?.hidden,
       retentionTitle: document.querySelector("#retentionInsights h3")?.textContent,
+      retentionHidden: document.querySelector("#retentionInsights")?.hidden,
+      progressEmptyVisible: !document.querySelector("#progressEmptyState")?.hidden,
       retentionConfidence: document.querySelector("#retentionInsights .confidence-pill")?.textContent,
       retentionText: document.querySelector("#retentionInsights")?.innerText,
       safetyText: document.querySelector("#safetyStrip")?.innerText,
@@ -610,28 +612,27 @@ async function run() {
         };
       })(),
       exerciseProgressText: document.querySelector("#exerciseProgress")?.innerText,
+      exerciseProgressHidden: document.querySelector("#exerciseProgress")?.hidden,
       overflow: document.documentElement.scrollWidth > innerWidth
     }))()`);
     assert(todayCheck.localToday === todayCheck.inputDate, "Today input should use local browser date.");
     assert(todayCheck.lastTrendDate === todayCheck.localToday, "Trend windows should end on local today.");
     assert(todayCheck.recentIncludesToday === 1, "Recent filters should include local today.");
-    assert(todayCheck.title === "日常与健身记录", "The application should use the approved product name.");
+    assert(todayCheck.title === "WhatToDrill · 今天练什么", "The application should use the approved product name.");
     assert(!todayCheck.firstUseText.includes("Personal log") && !todayCheck.firstUseText.includes("Daily Coach"), "The first-use surface should not expose legacy English headings.");
     assert(todayCheck.coachStatus === "新手默认方案", "Empty daily coach should clearly identify the default beginner plan.");
     assert(todayCheck.coachTitle === "全身入门", "Empty daily coach should recommend full-body beginner template.");
     assert(todayCheck.primaryStartButtons.length === 1 && todayCheck.primaryStartButtons[0] === "startCoachWorkoutBtn", `The first-use home should expose one visually primary start action: ${JSON.stringify(todayCheck.primaryStartButtons)}.`);
     assert(todayCheck.headerTechnicalAbsent && todayCheck.settingsStatusPresent, "Normal first-use home should keep technical controls out of the header and preserve them in settings.");
     assert(!todayCheck.onboardingVisible && todayCheck.extendedDailyHidden && todayCheck.weeklyTargetHidden && todayCheck.supportAgreementHidden, "First-use home should hide onboarding, extended records, weekly targets, and support agreements.");
-    assert(todayCheck.retentionTitle === "复盘中心", "Insights review center should render on first run.");
-    assert(todayCheck.retentionConfidence === "数据偏少", "Empty review center should show low-data confidence.");
-    assert(todayCheck.retentionText.includes("数据还不足"), "Empty review center should explain missing data.");
+    assert(todayCheck.progressEmptyVisible && todayCheck.retentionHidden, "First-run insights should show one useful start state instead of an empty review dashboard.");
     assert(todayCheck.safetyHidden, "Normal first-use home should keep generic safety copy out of the primary path.");
     assert(!todayCheck.quality.initializing && todayCheck.quality.mainBusy === "false", "The active panel should be revealed only after synchronous initialization finishes.");
     assert(todayCheck.quality.meterRole === "progressbar" && todayCheck.quality.meterNow === "0" && todayCheck.quality.meterText.includes("0/2"), "Weekly target progress should expose valid current-value semantics.");
     assert(todayCheck.quality.underHeight.length === 0, `Visible buttons should provide a 44px touch target: ${todayCheck.quality.underHeight.join(", ")}`);
     assert(todayCheck.quality.inlineStyleCount === 0, "Rendered app content should not use inline styles that violate the production CSP.");
     assert(todayCheck.quality.hasReducedMotionRule, "The interface should respect reduced-motion preferences.");
-    assert(todayCheck.exerciseProgressText.includes("还没有可分析的动作"), "Empty exercise progress should explain missing workout data.");
+    assert(todayCheck.exerciseProgressHidden, "Empty exercise progress should stay hidden until the user repeats an exercise.");
     assert(!todayCheck.overflow, "Today desktop layout should not overflow.");
 
     const supportAgreement = await evaluate(cdp, `(() => {
@@ -948,7 +949,7 @@ async function run() {
     }
     assert(pwaReady.supported, "Browser should support service workers for PWA smoke test.");
     assert(pwaReady.controlled, "Service worker should control the app after activation.");
-    assert(pwaReady.caches.some(name => name.includes("habit-fitness-shell")), "App shell cache should be created.");
+    assert(pwaReady.caches.some(name => name.includes("what-to-drill-shell")), "App shell cache should be created.");
 
     const installPrompt = await evaluate(cdp, `(async () => {
       let prevented = false;
@@ -1010,7 +1011,7 @@ async function run() {
       overflow: document.documentElement.scrollWidth > innerWidth
       });
     })()`);
-    assert(offlineLoad.title === "日常与健身记录", "Offline reload should serve the cached app shell.");
+    assert(offlineLoad.title === "WhatToDrill · 今天练什么", "Offline reload should serve the cached app shell.");
     assert(offlineLoad.hasApp, "Offline reload should render the app shell.");
     assert(offlineLoad.noticeVisible && offlineLoad.noticeText.includes("仍可以训练和记录"), `Offline mode should show one concise global notice while keeping local recording available: ${JSON.stringify(offlineLoad)}.`);
     assert(!offlineLoad.overflow, "Offline app shell should not overflow.");
@@ -1166,9 +1167,17 @@ async function run() {
     assert(restoredWorkoutDraft.title === "草稿恢复测试" && restoredWorkoutDraft.weight === "12.5", "Reload should restore the unfinished workout draft.");
     assert(restoredWorkoutDraft.toast.includes("已恢复未完成"), "Draft restoration should be visible to the user.");
 
-    await evaluate(cdp, `localStorage.removeItem(${JSON.stringify(storageKey)}); localStorage.removeItem(${JSON.stringify(workoutDraftKey)})`);
+    await evaluate(cdp, `activeWorkoutSession = null; clearWorkoutForm(); localStorage.removeItem(${JSON.stringify(storageKey)}); localStorage.removeItem(${JSON.stringify(workoutDraftKey)})`);
     await reload(cdp);
 
+    const freshStart = await evaluate(cdp, `(() => ({
+      hasStart: Boolean(document.querySelector("#startCoachWorkoutBtn")),
+      coachText: document.querySelector("#dailyCoach")?.innerText,
+      storage: localStorage.getItem(${JSON.stringify(storageKey)}),
+      draft: localStorage.getItem(${JSON.stringify(workoutDraftKey)}),
+      initializing: document.body.classList.contains("app-initializing")
+    }))()`);
+    assert(freshStart.hasStart, `Fresh state should restore the daily coach start action: ${JSON.stringify(freshStart)}.`);
     await evaluate(cdp, `document.querySelector("#startCoachWorkoutBtn").click()`);
     const painGate = await evaluate(cdp, `(() => ({
       open: document.querySelector("#painGateDialog").open,
@@ -1296,33 +1305,41 @@ async function run() {
       const snapshot = JSON.parse(JSON.stringify(state));
       const date = today();
       const baseWorkout = {
-        id: "rule-workout", date, title: "规则训练", sessionRpe: 4,
+        id: "rule-workout", date, title: "规则训练", sessionRpe: 4, feeling: "easy", sourceTemplateId: "beginner_full_body",
+        completionSummary: { completed: 2, skipped: 0, pending: 0 },
         exercises: [{ name: "腿举", sets: [{ weight: 20, reps: 8, rpe: 4, note: "" }, { weight: 20, reps: 8, rpe: 4, note: "" }] }]
       };
-      const session = { exercises: [{ name: "腿举", cue: "", sets: [
-        { metric: "reps", status: "completed", target: { weight: 20, reps: 8, rpe: 4, note: "" }, actual: { weight: 20, reps: 8, rpe: 4, note: "" } },
-        { metric: "reps", status: "completed", target: { weight: 20, reps: 8, rpe: 4, note: "" }, actual: { weight: 20, reps: 8, rpe: 4, note: "" } }
-      ] }] };
+      state.settings.trainingRotation = TrainingRotationModel.defaultRotation();
+      state.workouts = [baseWorkout];
       state.dailyLogs = [{ id: "rule-good", date, sleepHours: 7.5, energy: 4, soreness: 1, pain: 0 }];
-      const easy = buildNextWorkoutPlan(baseWorkout, { session, feeling: "easy", completionSummary: { completed: 2, skipped: 0, pending: 0 } });
-      const hard = buildNextWorkoutPlan({ ...baseWorkout, sessionRpe: 8 }, { session, feeling: "hard", completionSummary: { completed: 2, skipped: 0, pending: 0 } });
+      const easy = buildNextWorkoutPlan(baseWorkout);
+      state.workouts = [{ ...baseWorkout, sessionRpe: 8, feeling: "hard" }];
+      const hard = buildNextWorkoutPlan(state.workouts[0]);
       state.dailyLogs = [{ id: "rule-low", date, sleepHours: 5.5, energy: 2, soreness: 4, pain: 0 }];
-      const lowRecovery = buildNextWorkoutPlan(baseWorkout, { session, feeling: "right", completionSummary: { completed: 2, skipped: 0, pending: 0 } });
+      const lowRecovery = buildNextWorkoutPlan(state.workouts[0]);
       state.dailyLogs = [{ id: "rule-pain", date, sleepHours: 7, energy: 2, soreness: 3, pain: 4 }];
-      const pain = buildNextWorkoutPlan(baseWorkout, { session, feeling: "right", completionSummary: { completed: 2, skipped: 0, pending: 0 } });
-      state.dailyLogs = [{ id: "rule-missed", date, sleepHours: 7, energy: 3, soreness: 2, pain: 0 }];
-      const missedSession = JSON.parse(JSON.stringify(session));
-      missedSession.exercises[0].sets[0].actual.reps = 6;
-      const missed = buildNextWorkoutPlan({ ...baseWorkout, sessionRpe: 6 }, { session: missedSession, feeling: "right", completionSummary: { completed: 2, skipped: 0, pending: 0 } });
+      const pain = buildNextWorkoutPlan(state.workouts[0]);
+      state.dailyLogs = [{ id: "rule-incomplete", date, sleepHours: 7, energy: 3, soreness: 2, pain: 0 }];
+      state.workouts = [{ ...baseWorkout, feeling: "right", sessionRpe: 6, completionSummary: { completed: 1, skipped: 1, pending: 0 } }];
+      const incomplete = buildNextWorkoutPlan(state.workouts[0]);
+      state.settings.trainingRotation = TrainingRotationModel.normalizeRotation({ mode: "upper_lower", currentIndex: 1 }, getAllTemplates());
+      const lowerHistory = {
+        id: "lower-history", date: addLocalDays(date, -7), title: "下肢训练", sessionRpe: 6, feeling: "right",
+        rotationDayId: "rotation_lower", sourceTemplateId: "beginner_lower", completionSummary: { completed: 3, skipped: 0, pending: 0 },
+        exercises: [{ name: "腿举", sets: [{ weight: 35, reps: 10, rpe: 6, note: "" }] }]
+      };
+      state.workouts = [baseWorkout, lowerHistory];
+      const rotated = buildNextWorkoutPlan(baseWorkout);
       Object.assign(state, normalizeImportedState(snapshot));
       renderAll();
-      return { easy, hard, lowRecovery, pain, missed };
+      return { easy, hard, lowRecovery, pain, incomplete, rotated };
     })()`);
     assert(nextWorkoutRules.easy.exercises[0].sets[0].weight === 22.5 && nextWorkoutRules.easy.adjustments[0].includes("小幅增加"), "Easy completed sessions should make a small, explainable progression.");
     assert(nextWorkoutRules.hard.exercises[0].sets[0].weight === 20 && nextWorkoutRules.hard.adjustments[0].includes("保持"), "Hard sessions should hold load rather than push progression.");
     assert(nextWorkoutRules.lowRecovery.exercises[0].sets.length === 1 && nextWorkoutRules.lowRecovery.adjustments[0].includes("少做一组"), "Poor recovery should reduce volume before increasing load.");
     assert(nextWorkoutRules.pain.title === "恢复优先训练" && nextWorkoutRules.pain.reasons[0].includes("安全优先"), "High pain should replace loading with a recovery plan.");
-    assert(nextWorkoutRules.missed.exercises[0].sets[0].reps === 6 && nextWorkoutRules.missed.adjustments[0].includes("实际完成"), "Missed rep targets should reset the next target to the last completed level.");
+    assert(nextWorkoutRules.incomplete.exercises[0].sets[0].weight === 20 && nextWorkoutRules.incomplete.adjustments[0].includes("稳定完成"), "Incomplete sessions should hold the same-day load instead of progressing it.");
+    assert(nextWorkoutRules.rotated.title === "下肢训练" && nextWorkoutRules.rotated.sourceComparableWorkoutId === "lower-history" && nextWorkoutRules.rotated.exercises[0].sets[0].weight === 35, "Rotation should choose the next training day and reuse that day's own history.");
 
     const metricUi = await evaluate(cdp, `(() => {
       const template = {
@@ -1376,6 +1393,8 @@ async function run() {
         pain: saved?.pain,
         safetyPlan: document.querySelector("#workoutTitle").value.includes("恢复拉伸")
       };
+      clearWorkoutDraft();
+      clearWorkoutForm();
       state.dailyLogs = [];
       saveState();
       activateTab("today", { scroll: false });
@@ -1471,11 +1490,11 @@ async function run() {
       title: document.querySelector("#dailyCoach h2")?.textContent,
       text: document.querySelector("#dailyCoach")?.innerText,
       action: document.querySelector("#startNextWorkoutBtn")?.textContent,
-      pattern: document.querySelector(".pattern-progress")?.innerText,
+      patternOnHome: Boolean(document.querySelector("#dailyCoach .pattern-progress")),
       overflow: document.documentElement.scrollWidth > innerWidth
     }))()`);
-    assert(nextWorkoutHome.title === "下一次训练" && nextWorkoutHome.action === "开始训练", "Home should prioritize the generated next workout over template selection.");
-    assert(nextWorkoutHome.text.includes("根据上次训练生成") && nextWorkoutHome.pattern.includes("个人训练规律"), "Home should explain the plan source and show the lightweight pattern-unlock expectation.");
+    assert(nextWorkoutHome.title === "下一次训练" && nextWorkoutHome.action === "确认并开始", "Home should prioritize the generated next workout and make its confirmation state explicit.");
+    assert(nextWorkoutHome.text.includes("训练顺序") && !nextWorkoutHome.patternOnHome, "Home should explain the rotation source without competing pattern-progress content.");
     assert(!nextWorkoutHome.overflow, "Next workout home card should fit the desktop viewport.");
 
     const nextWorkoutStart = await evaluate(cdp, `(() => {
@@ -1495,6 +1514,71 @@ async function run() {
       return accepted;
     })()`);
     assert(nextWorkoutStart.status === "started" && nextWorkoutStart.acceptedAt && nextWorkoutStart.startedAt && nextWorkoutStart.focusedTitle && nextWorkoutStart.activeTab === "workout", "Starting the next workout should record plan acceptance and carry its exercises into the focused session.");
+
+    const rotationUi = await evaluate(cdp, `(() => {
+      const snapshot = JSON.parse(JSON.stringify(state));
+      activateTab("library", { scroll: false });
+      renderLibrary();
+      document.querySelector("#trainingRotationMode").value = "custom";
+      document.querySelector("#trainingRotationMode").dispatchEvent(new Event("change", { bubbles: true }));
+      const customRows = document.querySelectorAll(".rotation-day-row");
+      customRows[0].querySelector(".rotation-label").value = "上肢 A";
+      customRows[1].querySelector(".rotation-label").value = "下肢 A";
+      document.querySelector("#savePreferencesBtn").click();
+      const customSaved = {
+        mode: state.settings.trainingRotation.mode,
+        labels: state.settings.trainingRotation.days.map(day => day.label),
+        rows: customRows.length
+      };
+
+      document.querySelector("#trainingRotationMode").value = "upper_lower";
+      document.querySelector("#trainingRotationMode").dispatchEvent(new Event("change", { bubbles: true }));
+      document.querySelector("#savePreferencesBtn").click();
+      const source = {
+        id: "rotation-ui-source", date: today(), title: "上肢训练", sessionRpe: 6, feeling: "right",
+        rotationDayId: "rotation_upper", sourceTemplateId: "beginner_upper", completionSummary: { completed: 4, skipped: 0, pending: 0 },
+        exercises: [{ name: "卧推", sets: [{ weight: 20, reps: 8, rpe: 6, note: "" }] }]
+      };
+      const lowerHistory = {
+        id: "rotation-ui-lower", date: addLocalDays(today(), -7), title: "下肢训练", sessionRpe: 6, feeling: "right",
+        rotationDayId: "rotation_lower", sourceTemplateId: "beginner_lower", completionSummary: { completed: 4, skipped: 0, pending: 0 },
+        exercises: [{ name: "腿举", sets: [{ weight: 42.5, reps: 10, rpe: 6, note: "" }] }]
+      };
+      state.workouts = [source, lowerHistory];
+      state.settings.trainingRotation.currentIndex = 0;
+      state.nextWorkoutPlan = buildNextWorkoutPlan(source);
+      showNextWorkoutResult(source, state.nextWorkoutPlan);
+      const daySelect = document.querySelector("#nextWorkoutDaySelect");
+      daySelect.value = "rotation_lower";
+      daySelect.dispatchEvent(new Event("change", { bubbles: true }));
+      const changed = {
+        title: state.nextWorkoutPlan.title,
+        comparable: state.nextWorkoutPlan.sourceComparableWorkoutId,
+        weight: state.nextWorkoutPlan.exercises[0].sets[0].weight
+      };
+      const chosenDate = addLocalDays(today(), 3);
+      document.querySelector("#nextWorkoutDateInput").value = chosenDate;
+      document.querySelector("#confirmNextWorkoutBtn").click();
+      const confirmed = {
+        status: state.nextWorkoutPlan.status,
+        date: state.nextWorkoutPlan.scheduledFor,
+        decision: state.nextWorkoutPlan.userDecision,
+        nextIndex: state.settings.trainingRotation.currentIndex,
+        dialogClosed: !document.querySelector("#nextWorkoutResultDialog").open
+      };
+      state.nextWorkoutPlan = buildNextWorkoutPlan(source);
+      showNextWorkoutResult(source, state.nextWorkoutPlan);
+      document.querySelector("#selfDecideNextWorkoutBtn").click();
+      const selfDecided = state.nextWorkoutPlan === null;
+      Object.assign(state, normalizeImportedState(snapshot));
+      persistState();
+      renderAll();
+      return { customSaved, changed, confirmed, chosenDate, selfDecided, overflow: document.documentElement.scrollWidth > innerWidth };
+    })()`);
+    assert(rotationUi.customSaved.mode === "custom" && rotationUi.customSaved.rows === 2 && rotationUi.customSaved.labels.join("→") === "上肢 A→下肢 A", "Users should be able to save a named custom training order.");
+    assert(rotationUi.changed.title === "下肢训练" && rotationUi.changed.comparable === "rotation-ui-lower" && rotationUi.changed.weight === 42.5, "Changing the suggested training day should rebuild it from that day's own history.");
+    assert(rotationUi.confirmed.status === "planned" && rotationUi.confirmed.date === rotationUi.chosenDate && rotationUi.confirmed.decision === "changed_day" && rotationUi.confirmed.nextIndex === 0 && rotationUi.confirmed.dialogClosed, "Users should be able to change the date and confirm a different rotation day without ambiguous state.");
+    assert(rotationUi.selfDecided && !rotationUi.overflow, "Choosing to decide independently should remove the automatic plan without causing layout overflow.");
 
     const previousSetHistory = await evaluate(cdp, `(() => {
       const savedName = JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)})).workouts[0].exercises[0].name;
@@ -1766,11 +1850,13 @@ async function run() {
       accountSession = { loading: false, configured: true, signedIn: false, unavailable: false, user: null };
       renderProLongitudinalReport();
       const signedOutText = document.querySelector("#proLongitudinalReport")?.innerText;
+      const signedOutHidden = document.querySelector("#proLongitudinalReport")?.hidden;
 
       accountSession = { loading: false, configured: true, signedIn: true, unavailable: false, user: { email: "pro@example.com" } };
       accountEntitlements = { loading: false, configured: true, unavailable: true, plan: null, quota: null };
       renderProLongitudinalReport();
       const unavailableText = document.querySelector("#proLongitudinalReport")?.innerText;
+      const unavailableHidden = document.querySelector("#proLongitudinalReport")?.hidden;
 
       state.dailyLogs = getLastDays(17).map((date, index) => ({ id: "short-90-" + index, date, sleepHours: 7, pain: 0 }));
       state.workouts = [];
@@ -1811,6 +1897,7 @@ async function run() {
       renderProLongitudinalReport();
       const freeText = document.querySelector("#proLongitudinalReport")?.innerText;
       const freeHasExport = Boolean(document.querySelector("#exportProLongitudinalReportBtn"));
+      const freeHidden = document.querySelector("#proLongitudinalReport")?.hidden;
 
       accountEntitlements = { ...accountEntitlements, plan: "pro" };
       renderProLongitudinalReport();
@@ -1831,6 +1918,7 @@ async function run() {
       renderProLongitudinalReport();
       const downgradedText = document.querySelector("#proLongitudinalReport")?.innerText;
       const downgradedHasExport = Boolean(document.querySelector("#exportProLongitudinalReportBtn"));
+      const downgradedHidden = document.querySelector("#proLongitudinalReport")?.hidden;
       const storageUnchanged = localStorage.getItem(${JSON.stringify(storageKey)}) === storageBefore;
       const overflow = document.documentElement.scrollWidth > innerWidth;
 
@@ -1841,9 +1929,12 @@ async function run() {
       return {
         staticHidden,
         signedOutText,
+        signedOutHidden,
         unavailableText,
+        unavailableHidden,
         freeText,
         freeHasExport,
+        freeHidden,
         insufficient90,
         shortAnnual,
         report90,
@@ -1855,21 +1946,22 @@ async function run() {
         downloadName,
         downgradedText,
         downgradedHasExport,
+        downgradedHidden,
         storageUnchanged,
         overflow
       };
     })()`);
     assert(proLongitudinal.staticHidden, "Deployments without account quota should hide Pro longitudinal reports.");
-    assert(proLongitudinal.signedOutText.includes("需登录") && proLongitudinal.signedOutText.includes("不会上传"), "Signed-out report UI should explain identity and local-data boundaries.");
-    assert(proLongitudinal.unavailableText.includes("权益暂不可用") && proLongitudinal.unavailableText.includes("不会把故障解释为 Free"), "Entitlement failure must not guess a plan.");
+    assert(proLongitudinal.signedOutHidden && !proLongitudinal.signedOutText, "Signed-out users should not see an unavailable Pro placeholder in the progress page.");
+    assert(proLongitudinal.unavailableHidden && !proLongitudinal.unavailableText, "Entitlement failures should hide the commercial module instead of exposing internal states.");
     assert(!proLongitudinal.insufficient90.ready && proLongitudinal.insufficient90.readinessDetail.includes("还差 1 天状态记录"), "The 90-day report should enforce its minimum data threshold.");
     assert(!proLongitudinal.shortAnnual.ready && proLongitudinal.shortAnnual.readinessDetail.includes("记录跨度还差"), "Annual reports should require enough historical span even when record density is high.");
-    assert(proLongitudinal.freeText.includes("付费方案尚未开放") && proLongitudinal.freeText.includes("数据已准备") && !proLongitudinal.freeHasExport, "Free users should see readiness without a fake purchase or export action.");
+    assert(proLongitudinal.freeHidden && !proLongitudinal.freeText && !proLongitudinal.freeHasExport, "Free users should not see a Pro card without a real purchase path.");
     assert(proLongitudinal.report90.ready && proLongitudinal.report90.hasComparison && proLongitudinal.panel90.includes("近期训练节奏更稳定"), "A sufficiently recorded 90-day Pro report should compare early and recent stages.");
     assert(proLongitudinal.annual.ready && proLongitudinal.annual.hasComparison && proLongitudinal.annual.window.spanDays >= 365 && proLongitudinal.annual.window.recordedMonthCount >= 12, "Annual reports should enforce history span and summarize cross-year months.");
-    assert(proLongitudinal.annualPanel.includes("年度纵向进展") && proLongitudinal.downloadName.includes("pro-annual-report"), "Pro users should switch periods and export the selected report.");
+    assert(proLongitudinal.annualPanel.includes("年度纵向进展") && proLongitudinal.downloadName.includes("annual-report"), "Confirmed Pro users should switch periods and export the selected report.");
     assert(![proLongitudinal.text90, proLongitudinal.annualText].some(text => text.includes("PRIVATE_") || text.includes("987") || text.includes("具体训练日期：")), "Longitudinal exports must exclude private record details.");
-    assert(proLongitudinal.downgradedText.includes("当前为 Free") && !proLongitudinal.downgradedText.includes("完成组数") && !proLongitudinal.downgradedHasExport, "Plan downgrade should immediately remove prior Pro report content.");
+    assert(proLongitudinal.downgradedHidden && !proLongitudinal.downgradedText && !proLongitudinal.downgradedHasExport, "Plan downgrade should immediately remove prior Pro report content and placeholders.");
     assert(proLongitudinal.storageUnchanged && !proLongitudinal.overflow, "Longitudinal reports should not mutate business storage or overflow desktop layout.");
     await evaluate(cdp, `document.querySelector("#proLongitudinalReport").scrollIntoView({ block: "center" })`);
     await screenshot(cdp, "smoke-desktop-pro-longitudinal.png");
@@ -1961,6 +2053,7 @@ async function run() {
       const privateDate = addLocalDays(currentWeek, -7);
 
       setCompletedWeeks([1, 1, 1, 1], 4);
+      state.workouts.push({ id: "calibration-coverage", date: addLocalDays(today(), -40), title: "覆盖起点", duration: 20, sessionRpe: 5, note: "", exercises: [] });
       window.__targetCalibrationVisualState = JSON.parse(JSON.stringify(state));
       document.querySelector('[data-tab="insights"]').click();
       appliedWeeklyTargetCalibration = null;
@@ -1983,10 +2076,13 @@ async function run() {
         width: panel?.getBoundingClientRect().width,
         buttonWidth: button?.getBoundingClientRect().width,
         viewportWidth: innerWidth,
-        overflow: document.documentElement.scrollWidth > innerWidth
+        overflow: document.documentElement.scrollWidth > innerWidth,
+        reportHidden: document.querySelector("#personalProgressReport")?.hidden,
+        insightsHidden: document.querySelector("#insights")?.hidden,
+        visibility: TrainingRotationModel.progressVisibility(state.workouts, state.dailyLogs)
       };
     })()`);
-    assert(desktopCalibrationLayout.width <= desktopCalibrationLayout.viewportWidth && desktopCalibrationLayout.buttonWidth < desktopCalibrationLayout.width && !desktopCalibrationLayout.overflow, "Desktop target calibration should fit without overflow.");
+    assert(desktopCalibrationLayout.width <= desktopCalibrationLayout.viewportWidth && desktopCalibrationLayout.buttonWidth < desktopCalibrationLayout.width && !desktopCalibrationLayout.overflow, `Desktop target calibration should fit without overflow: ${JSON.stringify(desktopCalibrationLayout)}.`);
     await screenshot(cdp, "smoke-desktop-target-calibration.png");
     await evaluate(cdp, `Object.assign(state, window.__targetCalibrationSnapshot); appliedWeeklyTargetCalibration = null; renderAll();`);
 
@@ -2699,7 +2795,7 @@ async function run() {
     assert(accountLogin.invalidCodeFeedback.includes("无效或已过期"), "Invalid account code should produce a stable actionable error.");
     assert(!accountLogin.codeState.emailStoredInBusinessState, "Pending account email must not enter local business state.");
     assert(accountLogin.header === "身份已连接" && accountLogin.signedInVisible && accountLogin.panel.includes("本机记录没有上传"), "Verified account UI should show identity without implying sync.");
-    assert(accountLogin.entitlementVisible && accountLogin.entitlementText.includes("Pro") && accountLogin.entitlementText.includes("剩余 88") && accountLogin.entitlementText.includes("付费方案尚未开放"), "Account UI should display only the server-provided entitlement summary without a purchase action.");
+    assert(accountLogin.entitlementVisible && accountLogin.entitlementText.includes("Pro") && accountLogin.entitlementText.includes("剩余 88") && !accountLogin.entitlementText.includes("付费方案"), "Account UI should display only the server-provided entitlement summary without a fake purchase message.");
     assert(accountLogin.storageUnchanged && !accountLogin.overflow, "Account login should not mutate business storage or overflow desktop layout.");
     await evaluate(cdp, `document.querySelector("#accountPanel").scrollIntoView({ block: "center" })`);
     await screenshot(cdp, "smoke-desktop-account-boundary.png");
@@ -2738,7 +2834,7 @@ async function run() {
         overflow: document.documentElement.scrollWidth > innerWidth
       };
     })()`);
-    assert(updateFlow.version.includes("v1.18.0"), "Help should display the current semantic app version.");
+    assert(updateFlow.version.includes("v1.19.0"), "Help should display the current semantic app version.");
     assert(updateFlow.shown && updateFlow.dismissed, "App update banner should be visible and dismissible.");
     assert(updateFlow.message?.type === "SKIP_WAITING" && updateFlow.buttonText === "更新中", "Confirmed update should activate the waiting service worker with clear feedback.");
     assert(!updateFlow.overflow, "Update banner should not cause desktop overflow.");

@@ -1,6 +1,6 @@
 const STORAGE_KEY = "habit_fitness_app_v1";
 const WORKOUT_DRAFT_KEY = "habit_fitness_workout_draft_v1";
-const APP_VERSION = "1.18.0";
+const APP_VERSION = "1.19.0";
 const CLOUD_ADVICE_CONSENT_VERSION = 1;
 const BACKUP_SCHEMA_VERSION = 1;
 const MAX_WORKOUT_CSV_BYTES = 5 * 1024 * 1024;
@@ -13,6 +13,7 @@ const defaultSettings = {
   weeklyWorkoutTarget: 2,
   plannedWorkoutDays: [],
   weeklyRhythmHistory: [],
+  trainingRotation: TrainingRotationModel.defaultRotation(),
   trainingGoal: "general",
   preferredEnvironment: "gym",
   conservativeMode: false,
@@ -174,7 +175,7 @@ function loadState() {
         exercises: mergeDefaultExercises(parsed.exercises),
         templates: parsed.templates || [],
         adviceHistory: parsed.adviceHistory || [],
-        settings: normalizeSettings(parsed.settings),
+        settings: normalizeSettings(parsed.settings, parsed.templates),
         nextWorkoutPlan: normalizeNextWorkoutPlan(parsed.nextWorkoutPlan)
       };
     }
@@ -188,14 +189,14 @@ function loadState() {
     exercises: mergeDefaultExercises([]),
     templates: [],
     adviceHistory: [],
-    settings: normalizeSettings({}),
+    settings: normalizeSettings({}, []),
     nextWorkoutPlan: null
   };
 }
 
 function normalizeNextWorkoutPlan(plan) {
   if (!plan || typeof plan !== "object" || !Array.isArray(plan.exercises)) return null;
-  const status = ["planned", "started", "superseded"].includes(plan.status) ? plan.status : "planned";
+  const status = ["suggested", "planned", "started", "superseded"].includes(plan.status) ? plan.status : "suggested";
   const exercises = plan.exercises.map(exercise => {
     const sets = Array.isArray(exercise?.sets) ? exercise.sets.map(set => ({
       weight: numberOrNull(set?.weight),
@@ -214,7 +215,7 @@ function normalizeNextWorkoutPlan(plan) {
   }).filter(exercise => exercise.name && exercise.sets.length);
   if (!exercises.length || !isValidDateText(plan.scheduledFor)) return null;
   return {
-    version: 1,
+    version: 2,
     id: typeof plan.id === "string" && plan.id ? plan.id : uid("next_plan"),
     sourceWorkoutId: typeof plan.sourceWorkoutId === "string" ? plan.sourceWorkoutId : "",
     sourceWorkoutDate: isValidDateText(plan.sourceWorkoutDate) ? plan.sourceWorkoutDate : "",
@@ -225,7 +226,14 @@ function normalizeNextWorkoutPlan(plan) {
     exercises,
     adjustments: Array.isArray(plan.adjustments) ? plan.adjustments.filter(item => typeof item === "string" && item.trim()).slice(0, 4) : [],
     reasons: Array.isArray(plan.reasons) ? plan.reasons.filter(item => typeof item === "string" && item.trim()).slice(0, 4) : [],
-    source: plan.source === "last_workout" ? "last_workout" : "last_workout",
+    source: ["training_rotation", "last_workout", "recovery_override"].includes(plan.source) ? plan.source : "last_workout",
+    rotationDayId: typeof plan.rotationDayId === "string" ? plan.rotationDayId : "",
+    sourceTemplateId: typeof plan.sourceTemplateId === "string" ? plan.sourceTemplateId : "",
+    rotationIndex: Number.isInteger(Number(plan.rotationIndex)) ? Number(plan.rotationIndex) : 0,
+    sourceComparableWorkoutId: typeof plan.sourceComparableWorkoutId === "string" ? plan.sourceComparableWorkoutId : "",
+    userDecision: ["suggested", "changed_day", "recovery", "self_decided"].includes(plan.userDecision) ? plan.userDecision : "suggested",
+    rotationAdvancedAt: Number.isFinite(Date.parse(plan.rotationAdvancedAt)) ? new Date(plan.rotationAdvancedAt).toISOString() : "",
+    estimatedDuration: numberOrNull(plan.estimatedDuration),
     acceptedAt: Number.isFinite(Date.parse(plan.acceptedAt)) ? new Date(plan.acceptedAt).toISOString() : "",
     startedAt: Number.isFinite(Date.parse(plan.startedAt)) ? new Date(plan.startedAt).toISOString() : ""
   };
@@ -399,7 +407,7 @@ function sanitizeReminderTime(value, fallback) {
   return value;
 }
 
-function normalizeSettings(settings = {}) {
+function normalizeSettings(settings = {}, customTemplates = []) {
   const goalIds = ["general", "fat_loss", "muscle_gain", "strength", "recovery"];
   const environmentIds = ["gym", "home", "mixed"];
   const supportRoles = ["family", "friend", "coach"];
@@ -414,6 +422,10 @@ function normalizeSettings(settings = {}) {
     weeklyWorkoutTarget: sanitizeWeeklyWorkoutTarget(settings.weeklyWorkoutTarget ?? defaultSettings.weeklyWorkoutTarget),
     plannedWorkoutDays: normalizePlannedWorkoutDays(settings.plannedWorkoutDays),
     weeklyRhythmHistory: normalizeWeeklyRhythmHistory(settings.weeklyRhythmHistory),
+    trainingRotation: TrainingRotationModel.normalizeRotation(settings.trainingRotation, [
+      ...beginnerTemplates,
+      ...(Array.isArray(customTemplates) ? customTemplates : [])
+    ]),
     trainingGoal: goalIds.includes(settings.trainingGoal) ? settings.trainingGoal : defaultSettings.trainingGoal,
     preferredEnvironment: environmentIds.includes(settings.preferredEnvironment) ? settings.preferredEnvironment : defaultSettings.preferredEnvironment,
     conservativeMode: Boolean(settings.conservativeMode),
@@ -858,6 +870,8 @@ function saveWorkout() {
     sessionRpe: Number($("sessionRpe").value),
     note: $("workoutNote").value.trim(),
     exercises,
+    rotationDayId: existingWorkout?.rotationDayId || "",
+    sourceTemplateId: existingWorkout?.sourceTemplateId || "",
     createdAt: existingWorkout?.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -992,6 +1006,9 @@ function restoreWorkoutDraft() {
 
     if (draft.version === WorkoutSessionModel.VERSION) {
       activeWorkoutSession = WorkoutSessionModel.migrateDraft(draft);
+      activeWorkoutSession.rotationDayId = typeof draft.rotationDayId === "string" ? draft.rotationDayId : "";
+      activeWorkoutSession.sourceTemplateId = typeof draft.sourceTemplateId === "string" ? draft.sourceTemplateId : activeWorkoutSession.templateId || "";
+      activeWorkoutSession.nextPlanId = typeof draft.nextPlanId === "string" ? draft.nextPlanId : "";
       const legacyExercises = activeWorkoutSession.exercises.map(exercise => ({
         name: exercise.name,
         sets: exercise.sets.map(set => ({
@@ -1081,8 +1098,10 @@ function openDeleteWorkoutDialog(workoutId) {
   pendingWorkoutDeleteId = workout.id;
   $("deleteWorkoutSummary").textContent = `${workout.date} · ${workout.title} · ${countSets(workout)} 组`;
   const dialog = $("deleteWorkoutDialog");
-  if (typeof dialog.showModal === "function") dialog.showModal();
-  else dialog.setAttribute("open", "");
+  if (!dialog.open) {
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+  }
   $("cancelDeleteWorkoutBtn").focus();
 }
 
@@ -1232,16 +1251,19 @@ function planExerciseSource(workout, session = null) {
   })).filter(exercise => exercise.sets.length);
 }
 
-function makeRecoveryPlan(workout, recovery) {
+function makeRecoveryPlan(workout, recovery, rotationDay = null) {
   const template = pickBeginnerTemplate("recovery");
+  const recoveryReason = recovery.highPain
+    ? `记录到疼痛 ${recovery.pain}/5，先把恢复放在前面`
+    : "你选择把下一次改为恢复训练，先维持活动和恢复节奏";
   return {
-    version: 1,
+    version: 2,
     id: uid("next_plan"),
     sourceWorkoutId: workout.id,
     sourceWorkoutDate: workout.date,
     createdAt: new Date().toISOString(),
     scheduledFor: addLocalDays(workout.date, 2),
-    status: "planned",
+    status: "suggested",
     title: "恢复优先训练",
     exercises: template.exercises.map(exercise => ({
       name: exercise.name,
@@ -1249,11 +1271,18 @@ function makeRecoveryPlan(workout, recovery) {
       cue: exercise.cue || "",
       sets: exercise.sets.map(set => ({ ...set, weight: numberOrNull(set.weight), reps: numberOrNull(set.reps) })),
       adjustment: "暂停原训练负荷，改为轻松恢复",
-      reason: `记录到疼痛 ${recovery.pain}/5，先把恢复放在前面`
+      reason: recoveryReason
     })),
     adjustments: ["已把原训练改为轻松恢复，不安排大重量或冲强度。"],
-    reasons: [`疼痛 ${recovery.pain}/5，安全优先于推进。`],
-    source: "last_workout",
+    reasons: [recovery.highPain ? `疼痛 ${recovery.pain}/5，安全优先于推进。` : "按你的选择改为轻松恢复，不推进原训练顺序。"],
+    source: "recovery_override",
+    rotationDayId: rotationDay?.id || "",
+    sourceTemplateId: template.id,
+    rotationIndex: state.settings.trainingRotation.currentIndex,
+    sourceComparableWorkoutId: "",
+    userDecision: "recovery",
+    rotationAdvancedAt: "",
+    estimatedDuration: template.duration,
     acceptedAt: "",
     startedAt: ""
   };
@@ -1261,41 +1290,64 @@ function makeRecoveryPlan(workout, recovery) {
 
 function buildNextWorkoutPlan(workout, options = {}) {
   const recovery = recoveryForNextWorkout(workout.date);
-  if (recovery.highPain) return makeRecoveryPlan(workout, recovery);
+  const templates = getAllTemplates();
+  const rotation = TrainingRotationModel.normalizeRotation(state.settings.trainingRotation, templates);
+  const requestedDay = options.rotationDayId
+    ? rotation.days.find(day => day.id === options.rotationDayId)
+    : null;
+  const resolved = requestedDay
+    ? { rotation, day: requestedDay, template: templates.find(template => template.id === requestedDay.templateId) || null }
+    : TrainingRotationModel.resolveNextDay(rotation, templates);
+  const day = resolved.day;
+  const template = resolved.template;
+  if (!day || !template) return null;
+  if (recovery.highPain || options.forceRecovery) return makeRecoveryPlan(workout, recovery, day);
 
-  const completion = options.completionSummary || workout.completionSummary || {};
+  const comparable = TrainingRotationModel.findComparableWorkout(
+    state.workouts,
+    day
+  );
+  const completion = comparable?.completionSummary || {};
   const incomplete = Number(completion.pending || 0) + Number(completion.skipped || 0) > 0;
-  const source = planExerciseSource(workout, options.session);
-  const sessionRpe = Number(workout.sessionRpe ?? 6);
-  const feeling = options.feeling || workout.feeling || (sessionRpe <= 4 ? "easy" : sessionRpe >= 8 ? "hard" : "right");
-  const missedTarget = options.session?.exercises?.some(exercise => exercise.sets.some(set => (
-    set.status === "completed"
-    && set.metric !== "completion"
-    && set.target.reps !== null
-    && set.actual.reps !== null
-    && set.actual.reps < set.target.reps
-  )));
-  const reasons = [];
+  const comparableSource = comparable ? planExerciseSource(comparable) : [];
+  const source = template.exercises.map(exercise => {
+    const history = comparableSource.find(item => item.name === exercise.name);
+    const selected = history || {
+      name: exercise.name,
+      metric: WorkoutSessionModel.inferMetric(exercise.metric, exercise.sets?.[0]?.note, exercise.name),
+      cue: exercise.cue || "",
+      sets: exercise.sets.map(set => ({
+        weight: numberOrNull(set.weight),
+        reps: numberOrNull(set.reps),
+        rpe: numberOrNull(set.rpe),
+        note: set.note || ""
+      }))
+    };
+    return { ...selected, cue: exercise.cue || selected.cue || exercise.sets?.[0]?.note || "" };
+  });
+  const sessionRpe = Number(comparable?.sessionRpe ?? 6);
+  const feeling = comparable?.feeling || (sessionRpe <= 4 ? "easy" : sessionRpe >= 8 ? "hard" : "right");
+  const reasons = [`按你的训练顺序，下一次轮到${day.label}。`];
   const adjustments = [];
   let scheduledOffset = sessionRpe >= 8 || recovery.lowRecovery ? 2 : 1;
 
   if (recovery.lowRecovery) {
-    reasons.push(`上次记录睡眠 ${formatMetric(recovery.sleepHours)}h、酸痛 ${recovery.soreness}/5。`);
+    reasons.push(`今天记录睡眠 ${formatMetric(recovery.sleepHours)}h、酸痛 ${recovery.soreness}/5。`);
     adjustments.push("下一次每个动作少做一组，先守住恢复。" );
   } else if (incomplete) {
-    reasons.push(`上次有 ${Number(completion.skipped || 0) + Number(completion.pending || 0)} 组没有完成。`);
-    adjustments.push("先延续上次未完成的部分，不急着加量。" );
-  } else if (missedTarget) {
-    reasons.push("有动作没有达到原定次数。" );
-    adjustments.push("保持重量，把目标回到上次实际完成水平。" );
+    reasons.push(`上一次${day.label}有 ${Number(completion.skipped || 0) + Number(completion.pending || 0)} 组没有完成。`);
+    adjustments.push("沿用上一次同训练日的负荷，先稳定完成。" );
   } else if (feeling === "easy" && sessionRpe <= 5) {
-    reasons.push("上次训练完成稳定，而且仍有余力。" );
+    reasons.push(`上一次${day.label}完成稳定，而且仍有余力。` );
     adjustments.push("小幅增加重量；没有重量的动作增加 1 次。" );
   } else if (feeling === "hard" || sessionRpe >= 8) {
-    reasons.push("上次整体强度已经偏高。" );
+    reasons.push(`上一次${day.label}整体强度已经偏高。` );
     adjustments.push("保持重量和组数，先让恢复跟上。" );
+  } else if (!comparable) {
+    reasons.push(`这是${day.label}的首次基线，先按模板完成，再根据表现调整。`);
+    adjustments.push("先使用模板目标建立基线，不急着加量。" );
   } else {
-    reasons.push("上次训练节奏正合适。" );
+    reasons.push(`上一次${day.label}节奏正合适。` );
     adjustments.push("保持重量和组数，稳定复现动作质量。" );
   }
 
@@ -1303,17 +1355,7 @@ function buildNextWorkoutPlan(workout, options = {}) {
     let sets = exercise.sets.map(set => ({ ...set }));
     let adjustment = adjustments[0];
     if (recovery.lowRecovery && sets.length > 1) sets = sets.slice(0, -1);
-    if (missedTarget && options.session) {
-      const original = options.session.exercises.find(item => item.name === exercise.name);
-      sets = sets.map((set, index) => {
-        const sourceSet = original?.sets[index];
-        if (sourceSet?.status === "completed" && sourceSet.actual.reps !== null && sourceSet.target.reps !== null && sourceSet.actual.reps < sourceSet.target.reps) {
-          return { ...set, reps: sourceSet.actual.reps, weight: sourceSet.actual.weight ?? set.weight };
-        }
-        return set;
-      });
-    }
-    if (!recovery.lowRecovery && !incomplete && !missedTarget && feeling === "easy" && sessionRpe <= 5) {
+    if (!recovery.lowRecovery && !incomplete && comparable && feeling === "easy" && sessionRpe <= 5) {
       sets = sets.map(set => {
         if (set.weight !== null && set.weight > 0) return { ...set, weight: set.weight + (set.weight >= 20 ? 2.5 : 1) };
         if (set.reps !== null) return { ...set, reps: set.reps + 1 };
@@ -1333,29 +1375,32 @@ function buildNextWorkoutPlan(workout, options = {}) {
 
   if (!exercises.length) return null;
   return {
-    version: 1,
+    version: 2,
     id: uid("next_plan"),
     sourceWorkoutId: workout.id,
     sourceWorkoutDate: workout.date,
     createdAt: new Date().toISOString(),
     scheduledFor: addLocalDays(workout.date, scheduledOffset),
-    status: "planned",
-    title: workout.title || "下一次训练",
+    status: "suggested",
+    title: day.label || template.name || "下一次训练",
     exercises,
     adjustments,
     reasons,
-    source: "last_workout",
+    source: "training_rotation",
+    rotationDayId: day.id,
+    sourceTemplateId: day.templateId,
+    rotationIndex: rotation.days.findIndex(item => item.id === day.id),
+    sourceComparableWorkoutId: comparable?.id || "",
+    userDecision: options.rotationDayId ? "changed_day" : "suggested",
+    rotationAdvancedAt: "",
+    estimatedDuration: Number(template.duration) || null,
     acceptedAt: "",
     startedAt: ""
   };
 }
 
 function trainingPatternProgress() {
-  const trainingDates = new Set(state.workouts.map(workout => workout.date));
-  const days = [...new Set(state.dailyLogs.filter(log => (
-    trainingDates.has(log.date)
-    && [log.sleepHours, log.energy, log.soreness, log.pain].some(value => value !== null && value !== undefined)
-  )).map(log => log.date))].slice(-7);
+  const days = TrainingRotationModel.validObservationDates(state.workouts, state.dailyLogs).slice(-7);
   const data = {
     training: state.workouts.length,
     sleep: state.dailyLogs.filter(log => log.sleepHours !== null && log.sleepHours !== undefined).length,
@@ -1370,8 +1415,8 @@ function patternProgressMarkup(compact = false) {
     <section class="pattern-progress ${compact ? "compact" : ""}" aria-label="个人训练规律进度">
       <div>
         <p class="eyebrow">Personal pattern</p>
-        <h3>个人训练规律：${progress.days}/7 天</h3>
-        <p class="muted">${progress.remaining ? `再记录 ${progress.remaining} 天，我们会生成初步分析。` : "已收集足够的基础记录，初步分析会在下一轮提供。"}</p>
+        <h3>已获得 ${progress.days} 个有效观察日</h3>
+        <p class="muted">${progress.remaining ? `有效观察日 = 当天同时记录身体状态并完成训练。还差 ${progress.remaining} 天；下次训练前花 15 秒记录状态。` : "已达到分析门槛，可在进步页查看你的个人训练规律。"}</p>
       </div>
       <div class="pattern-progress-data">
         <span>训练 ${progress.data.training} 次</span>
@@ -1496,10 +1541,28 @@ function startDailyCoachWorkout(options = {}) {
   }
 
   const recommendation = buildDailyCoachRecommendation();
-  fillWorkoutFromTemplate(recommendation.template, recommendation.template.name);
-  startFocusedWorkoutSession(recommendation.template, recommendation.template.name);
+  const resolvedRotation = TrainingRotationModel.resolveNextDay(state.settings.trainingRotation, getAllTemplates());
+  const followsRotation = resolvedRotation.template?.id === recommendation.template.id;
+  const sessionTemplate = followsRotation ? {
+    ...recommendation.template,
+    rotationDayId: resolvedRotation.day.id,
+    sourceTemplateId: resolvedRotation.day.templateId
+  } : recommendation.template;
+  if (followsRotation) {
+    state.settings = normalizeSettings({
+      ...state.settings,
+      trainingRotation: TrainingRotationModel.advanceRotation(
+        state.settings.trainingRotation,
+        resolvedRotation.day.id,
+        getAllTemplates()
+      )
+    }, state.templates);
+    persistState();
+  }
+  fillWorkoutFromTemplate(sessionTemplate, sessionTemplate.name);
+  startFocusedWorkoutSession(sessionTemplate, sessionTemplate.name);
   activateTab("workout");
-  showToast(`已载入${recommendation.template.name}`);
+  showToast(`已载入${sessionTemplate.name}`);
 }
 
 function startNextWorkoutPlan() {
@@ -1509,6 +1572,7 @@ function startNextWorkoutPlan() {
     startDailyCoachWorkout({ skipPainGate: true });
     return;
   }
+  if (plan.status === "suggested") confirmNextWorkoutPlan(plan.userDecision || "suggested", { persist: false });
   plan.status = "started";
   plan.acceptedAt = plan.acceptedAt || new Date().toISOString();
   plan.startedAt = new Date().toISOString();
@@ -1516,6 +1580,9 @@ function startNextWorkoutPlan() {
   const template = {
     id: plan.id,
     name: plan.title,
+    rotationDayId: plan.rotationDayId,
+    sourceTemplateId: plan.sourceTemplateId,
+    nextPlanId: plan.id,
     exercises: plan.exercises.map(exercise => ({
       name: exercise.name,
       metric: exercise.metric,
@@ -1525,9 +1592,36 @@ function startNextWorkoutPlan() {
   };
   fillWorkoutFromTemplate(template, plan.title);
   startFocusedWorkoutSession(template, plan.title);
-  activeWorkoutSession.nextPlanId = plan.id;
   activateTab("workout");
   showToast("已载入下一次训练");
+}
+
+function confirmNextWorkoutPlan(userDecision = "suggested", options = {}) {
+  const plan = state.nextWorkoutPlan;
+  if (!plan || plan.status === "superseded") return false;
+  plan.userDecision = userDecision;
+  plan.status = "planned";
+  plan.acceptedAt = plan.acceptedAt || new Date().toISOString();
+  const shouldAdvance = plan.rotationDayId
+    && plan.source !== "recovery_override"
+    && !["recovery", "self_decided"].includes(userDecision)
+    && !plan.rotationAdvancedAt;
+  if (shouldAdvance) {
+    state.settings = normalizeSettings({
+      ...state.settings,
+      trainingRotation: TrainingRotationModel.advanceRotation(
+        state.settings.trainingRotation,
+        plan.rotationDayId,
+        getAllTemplates()
+      )
+    }, state.templates);
+    plan.rotationAdvancedAt = new Date().toISOString();
+  }
+  if (options.persist !== false) {
+    saveState();
+    showToast("下次计划已确认");
+  }
+  return true;
 }
 
 function continuePreviousWorkout() {
@@ -1560,6 +1654,9 @@ function startFocusedWorkoutSession(template, title) {
       }))
     }))
   });
+  activeWorkoutSession.rotationDayId = template.rotationDayId || "";
+  activeWorkoutSession.sourceTemplateId = template.sourceTemplateId || template.id || "";
+  activeWorkoutSession.nextPlanId = template.nextPlanId || "";
   lastCompletedSetId = null;
   persistWorkoutDraft();
   renderFocusedWorkoutSession();
@@ -1836,6 +1933,8 @@ function saveFocusedWorkout(event) {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       feeling,
+      rotationDayId: activeWorkoutSession.rotationDayId || "",
+      sourceTemplateId: activeWorkoutSession.sourceTemplateId || activeWorkoutSession.templateId || "",
       completionSummary
     };
     const completedCount = saved.exercises.reduce((sum, exercise) => sum + exercise.sets.length, 0);
@@ -1861,16 +1960,35 @@ function saveFocusedWorkout(event) {
 function showNextWorkoutResult(workout, plan = state.nextWorkoutPlan) {
   const dialog = $("nextWorkoutResultDialog");
   const completion = workout.completionSummary || { completed: countSets(workout), skipped: 0, pending: 0 };
+  const rotation = state.settings.trainingRotation;
+  const dayOptions = rotation.days.map(day => `<option value="${escapeAttr(day.id)}" ${day.id === plan?.rotationDayId ? "selected" : ""}>${escapeHtml(day.label)}</option>`).join("");
   const planDetails = plan ? `
     <section class="next-result-plan">
-      <p class="eyebrow">Next workout</p>
+      <p class="eyebrow">下一次训练建议</p>
       <h3>${escapeHtml(plan.title)}</h3>
-      <p class="muted">预计 ${escapeHtml(plan.scheduledFor)} · ${plan.exercises.length} 个动作</p>
+      <p class="muted">${plan.exercises.length} 个动作${plan.estimatedDuration ? ` · 约 ${plan.estimatedDuration} 分钟` : ""}</p>
       <ul>${plan.adjustments.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
       <details>
         <summary>为什么这样安排</summary>
         <ul>${plan.reasons.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
       </details>
+      <div class="next-plan-controls">
+        <label>
+          训练日期
+          <input id="nextWorkoutDateInput" type="date" value="${escapeAttr(plan.scheduledFor)}">
+        </label>
+        ${plan.source !== "recovery_override" && rotation.days.length > 1 ? `
+          <label>
+            训练日
+            <select id="nextWorkoutDaySelect">${dayOptions}</select>
+          </label>
+        ` : ""}
+      </div>
+      <div class="next-plan-decision-actions">
+        <button id="confirmNextWorkoutBtn" type="button">确认下次计划</button>
+        ${plan.source !== "recovery_override" ? '<button id="makeNextWorkoutRecoveryBtn" class="ghost-button" type="button">改成恢复训练</button>' : ""}
+        <button id="selfDecideNextWorkoutBtn" class="text-button" type="button">这次我自己决定</button>
+      </div>
     </section>
   ` : `<p class="muted">这次训练已保存；下次打开首页时会根据你的状态给出建议。</p>`;
   $("nextWorkoutResultContent").innerHTML = `
@@ -1882,13 +2000,69 @@ function showNextWorkoutResult(workout, plan = state.nextWorkoutPlan) {
       <span>跳过 ${completion.skipped || 0} 组</span>
       <span>待完成 ${completion.pending || 0} 组</span>
     </div>
-    <p class="next-result-announcement">下一次训练已安排</p>
+    <p class="next-result-announcement">请确认下一次怎么练</p>
     ${planDetails}
     ${patternProgressMarkup(true)}
   `;
-  if (typeof dialog.showModal === "function") dialog.showModal();
-  else dialog.setAttribute("open", "");
-  $("closeNextWorkoutResultBtn").focus();
+  if (!dialog.open) {
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+  }
+  $("confirmNextWorkoutBtn")?.focus();
+}
+
+function sourceWorkoutForNextPlan() {
+  return state.workouts.find(workout => workout.id === state.nextWorkoutPlan?.sourceWorkoutId) || null;
+}
+
+function changeSuggestedRotationDay(rotationDayId) {
+  const sourceWorkout = sourceWorkoutForNextPlan();
+  if (!sourceWorkout) {
+    showToast("找不到这次建议的来源训练，请返回首页重新生成");
+    return;
+  }
+  const scheduledFor = $("nextWorkoutDateInput")?.value;
+  const plan = buildNextWorkoutPlan(sourceWorkout, { rotationDayId });
+  if (!plan) {
+    showToast("所选训练日暂时不可用");
+    return;
+  }
+  if (isValidDateText(scheduledFor)) plan.scheduledFor = scheduledFor;
+  state.nextWorkoutPlan = plan;
+  persistState();
+  showNextWorkoutResult(sourceWorkout, plan);
+}
+
+function confirmSuggestedNextWorkout() {
+  const plan = state.nextWorkoutPlan;
+  if (!plan) return;
+  const scheduledFor = $("nextWorkoutDateInput")?.value;
+  if (!isValidDateText(scheduledFor)) {
+    showToast("请选择有效的下次训练日期");
+    $("nextWorkoutDateInput")?.focus();
+    return;
+  }
+  plan.scheduledFor = scheduledFor;
+  confirmNextWorkoutPlan(plan.userDecision || "suggested");
+  closeNextWorkoutResult();
+}
+
+function makeSuggestedWorkoutRecovery() {
+  const sourceWorkout = sourceWorkoutForNextPlan();
+  if (!sourceWorkout) return;
+  const plan = buildNextWorkoutPlan(sourceWorkout, { forceRecovery: true });
+  if (!plan) return;
+  state.nextWorkoutPlan = plan;
+  persistState();
+  showNextWorkoutResult(sourceWorkout, plan);
+}
+
+function chooseNextWorkoutMyself() {
+  state.nextWorkoutPlan = null;
+  persistState();
+  closeNextWorkoutResult();
+  renderAll();
+  showToast("已取消自动计划，你可以随时从训练页开始");
 }
 
 function closeNextWorkoutResult() {
@@ -2281,6 +2455,8 @@ function renderPreferences() {
   $("trainingGoal").value = state.settings.trainingGoal;
   $("preferredEnvironment").value = state.settings.preferredEnvironment;
   $("weeklyWorkoutTarget").value = state.settings.weeklyWorkoutTarget;
+  $("trainingRotationMode").value = state.settings.trainingRotation.mode;
+  renderTrainingRotationEditor(state.settings.trainingRotation.days);
   document.querySelectorAll('input[name="plannedWorkoutDays"]').forEach(input => {
     input.checked = state.settings.plannedWorkoutDays.includes(Number(input.value));
   });
@@ -2293,10 +2469,136 @@ function renderPreferences() {
   renderReminderStatus();
 }
 
+function rotationTemplateOptions(selectedId = "") {
+  return getAllTemplates()
+    .filter(template => template.id !== "beginner_recovery")
+    .map(template => `<option value="${escapeAttr(template.id)}" ${template.id === selectedId ? "selected" : ""}>${escapeHtml(template.name)}</option>`)
+    .join("");
+}
+
+function rotationDayRowMarkup(day, index) {
+  return `
+    <div class="rotation-day-row" data-rotation-day-id="${escapeAttr(day.id || uid("rotation_day"))}">
+      <span class="rotation-day-index">${index + 1}</span>
+      <label>
+        训练模板
+        <select class="rotation-template">${rotationTemplateOptions(day.templateId)}</select>
+      </label>
+      <label>
+        显示名称
+        <input class="rotation-label" type="text" maxlength="40" value="${escapeAttr(day.label || "")}" placeholder="例如：上肢 A">
+      </label>
+      <div class="rotation-day-actions">
+        <button class="text-button move-rotation-day-up" type="button" aria-label="上移训练日" ${index === 0 ? "disabled" : ""}>↑</button>
+        <button class="text-button move-rotation-day-down" type="button" aria-label="下移训练日">↓</button>
+        <button class="text-button remove-rotation-day" type="button">删除</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderCustomRotationDays(days) {
+  const container = $("customRotationDays");
+  container.innerHTML = days.map(rotationDayRowMarkup).join("");
+  const rows = Array.from(container.querySelectorAll(".rotation-day-row"));
+  rows.at(-1)?.querySelector(".move-rotation-day-down")?.setAttribute("disabled", "");
+}
+
+function collectRotationDays() {
+  return Array.from($("customRotationDays").querySelectorAll(".rotation-day-row")).map((row, index) => {
+    const templateId = row.querySelector(".rotation-template").value;
+    const template = getAllTemplates().find(item => item.id === templateId);
+    return {
+      id: row.dataset.rotationDayId || uid("rotation_day"),
+      templateId,
+      label: row.querySelector(".rotation-label").value.trim() || template?.name || `训练日 ${index + 1}`
+    };
+  });
+}
+
+function renderTrainingRotationSummary(mode, days) {
+  const labels = days.map(day => day.label).join(" → ");
+  const descriptions = {
+    full_body: "适合每周 1–2 次：每次回到同一套全身训练。",
+    upper_lower: "适合每周 2–4 次：上肢和下肢依次轮换。",
+    custom: labels ? `当前顺序：${labels}` : "添加 2–6 个训练日，建立自己的顺序。"
+  };
+  $("trainingRotationSummary").textContent = descriptions[mode] || descriptions.full_body;
+}
+
+function renderTrainingRotationEditor(days = null) {
+  const mode = $("trainingRotationMode").value;
+  const editor = $("customRotationEditor");
+  editor.hidden = mode !== "custom";
+  let displayDays;
+  if (mode === "custom") {
+    displayDays = Array.isArray(days) && days.length
+      ? days
+      : TrainingRotationModel.BUILT_IN_DAYS.upper_lower.map(day => ({ ...day, id: uid("rotation_day") }));
+    renderCustomRotationDays(displayDays);
+  } else {
+    displayDays = TrainingRotationModel.BUILT_IN_DAYS[mode] || TrainingRotationModel.BUILT_IN_DAYS.full_body;
+  }
+  renderTrainingRotationSummary(mode, displayDays);
+  setFieldError("trainingRotationError", "");
+}
+
+function addRotationDay() {
+  const days = collectRotationDays();
+  if (days.length >= 6) {
+    setFieldError("trainingRotationError", "最多设置 6 个训练日。");
+    return;
+  }
+  const template = getAllTemplates().find(item => item.id !== "beginner_recovery");
+  if (!template) {
+    setFieldError("trainingRotationError", "请先创建一个可用训练模板。");
+    return;
+  }
+  days.push({ id: uid("rotation_day"), templateId: template.id, label: template.name });
+  renderCustomRotationDays(days);
+  renderTrainingRotationSummary("custom", days);
+}
+
+function handleRotationEditorClick(event) {
+  if (event.target.closest("#addRotationDayBtn")) {
+    addRotationDay();
+    return;
+  }
+  const row = event.target.closest(".rotation-day-row");
+  if (!row) return;
+  const rows = Array.from($("customRotationDays").children);
+  const index = rows.indexOf(row);
+  if (event.target.closest(".remove-rotation-day")) rows.splice(index, 1);
+  if (event.target.closest(".move-rotation-day-up") && index > 0) [rows[index - 1], rows[index]] = [rows[index], rows[index - 1]];
+  if (event.target.closest(".move-rotation-day-down") && index < rows.length - 1) [rows[index], rows[index + 1]] = [rows[index + 1], rows[index]];
+  const days = rows.filter(item => !event.target.closest(".remove-rotation-day") || item !== row).map((item, dayIndex) => {
+    const templateId = item.querySelector(".rotation-template").value;
+    const template = getAllTemplates().find(entry => entry.id === templateId);
+    return {
+      id: item.dataset.rotationDayId || uid("rotation_day"),
+      templateId,
+      label: item.querySelector(".rotation-label").value.trim() || template?.name || `训练日 ${dayIndex + 1}`
+    };
+  });
+  renderCustomRotationDays(days);
+  renderTrainingRotationSummary("custom", days);
+}
+
 function savePreferences() {
   const plannedWorkoutDays = Array.from(document.querySelectorAll('input[name="plannedWorkoutDays"]:checked')).map(input => Number(input.value));
   const normalizedPlanDays = normalizePlannedWorkoutDays(plannedWorkoutDays);
   const changedRhythm = normalizedPlanDays.join(",") !== state.settings.plannedWorkoutDays.join(",");
+  const previousRotationSignature = JSON.stringify({
+    mode: state.settings.trainingRotation.mode,
+    days: state.settings.trainingRotation.days.map(day => [day.templateId, day.label])
+  });
+  const rotationMode = $("trainingRotationMode").value;
+  const rotationDays = rotationMode === "custom" ? collectRotationDays() : [];
+  if (rotationMode === "custom" && rotationDays.length < 2) {
+    setFieldError("trainingRotationError", "自定义训练顺序至少需要 2 个训练日。");
+    $("trainingRotationFieldset").scrollIntoView({ behavior: preferredScrollBehavior(), block: "center" });
+    return;
+  }
   state.settings = normalizeSettings({
     ...state.settings,
     trainingGoal: $("trainingGoal").value,
@@ -2306,13 +2608,27 @@ function savePreferences() {
     weeklyRhythmHistory: changedRhythm
       ? [...state.settings.weeklyRhythmHistory, { effectiveDate: today(), days: normalizedPlanDays }]
       : state.settings.weeklyRhythmHistory,
+    trainingRotation: {
+      mode: rotationMode,
+      days: rotationDays,
+      currentIndex: state.settings.trainingRotation.mode === rotationMode ? state.settings.trainingRotation.currentIndex : 0,
+      updatedAt: new Date().toISOString()
+    },
     waterTargetMl: $("waterTargetMl").value,
     conservativeMode: $("conservativeMode").checked,
     dailyReminderEnabled: $("dailyReminderEnabled").checked,
     dailyReminderTime: $("dailyReminderTime").value,
     workoutReminderEnabled: $("workoutReminderEnabled").checked,
     workoutReminderTime: $("workoutReminderTime").value
+  }, state.templates);
+  const nextRotationSignature = JSON.stringify({
+    mode: state.settings.trainingRotation.mode,
+    days: state.settings.trainingRotation.days.map(day => [day.templateId, day.label])
   });
+  if (previousRotationSignature !== nextRotationSignature && state.nextWorkoutPlan?.status !== "started") {
+    const sourceWorkout = sourceWorkoutForNextPlan() || state.workouts.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
+    state.nextWorkoutPlan = sourceWorkout ? buildNextWorkoutPlan(sourceWorkout) : null;
+  }
   saveState();
   startReminderScheduler();
   showToast("偏好已保存，提醒和建议会按你的目标调整");
@@ -2636,8 +2952,61 @@ function renderAll() {
   renderLibrary();
   renderWorkoutExerciseOptions();
   renderAdvice();
+  renderProgressEntry();
+  applyProgressVisibility();
   updateWaterStepUi();
   renderFirstUseHome();
+}
+
+function renderProgressEntry() {
+  const visibility = TrainingRotationModel.progressVisibility(state.workouts, state.dailyLogs);
+  const empty = $("progressEmptyState");
+  const early = $("progressEarlySummary");
+  empty.innerHTML = `
+    <p class="eyebrow">从第一次训练开始</p>
+    <h3>完成一套训练后，这里只展示真正属于你的变化</h3>
+    <p class="muted">现在不需要研究空图表。先完成第一次训练，我们会保留记录并安排下一步。</p>
+    <button id="startFromProgressBtn" type="button">开始今天训练</button>
+  `;
+  const latest = state.workouts.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
+  const plan = state.nextWorkoutPlan?.status !== "superseded" ? state.nextWorkoutPlan : null;
+  early.innerHTML = latest ? `
+    <p class="eyebrow">最近训练</p>
+    <h3>${escapeHtml(latest.title)}</h3>
+    <p class="muted">${escapeHtml(latest.date)} · ${countSets(latest)} 组已记录</p>
+    ${plan ? `
+      <article class="progress-next-plan">
+        <span>${plan.status === "suggested" ? "等待确认" : "已确认"} · ${escapeHtml(plan.scheduledFor)}</span>
+        <strong>下一次：${escapeHtml(plan.title)}</strong>
+        <small>${escapeHtml(plan.adjustments[0] || "按训练顺序继续")}</small>
+      </article>
+      <button id="openNextPlanFromProgressBtn" type="button">${plan.status === "suggested" ? "确认下一次计划" : "开始下一次训练"}</button>
+    ` : '<button id="startFromProgressBtn" type="button">看看今天怎么练</button>'}
+  ` : "";
+  empty.hidden = !visibility.empty;
+  early.hidden = visibility.empty || visibility.workoutCount >= 3;
+}
+
+function applyProgressVisibility() {
+  const visibility = TrainingRotationModel.progressVisibility(state.workouts, state.dailyLogs);
+  const personalProgressReady = visibility.personalReport && buildPersonalProgressReport().ready;
+  const mapping = {
+    readinessPanel: visibility.weeklyTrend,
+    retentionInsights: visibility.weeklyTrend,
+    personalTrainingPatterns: visibility.personalPatterns,
+    personalProgressReport: personalProgressReady,
+    weeklyReview: visibility.weeklyTrend,
+    summaryGrid: visibility.weeklyTrend,
+    exerciseProgress: visibility.exerciseComparison,
+    recentTrendsPanel: visibility.weeklyTrend,
+    progressAdvicePanel: visibility.weeklyTrend,
+    progressHistoryPanel: visibility.weeklyTrend
+  };
+  Object.entries(mapping).forEach(([id, visible]) => {
+    const element = $(id);
+    if (element) element.hidden = !visible;
+  });
+  $("generateAdviceBtn").hidden = !visibility.weeklyTrend;
 }
 
 function renderFirstUseHome() {
@@ -3144,7 +3513,12 @@ function renderPersonalProgressReport() {
 function renderProLongitudinalReport() {
   const panel = $("proLongitudinalReport");
   if (!panel) return;
-  if (aiAccessMode !== "account_quota") {
+  const hasConfirmedPro = aiAccessMode === "account_quota"
+    && accountSession.signedIn
+    && !accountEntitlements.loading
+    && !accountEntitlements.unavailable
+    && accountEntitlements.plan === "pro";
+  if (!hasConfirmedPro) {
     panel.hidden = true;
     panel.replaceChildren();
     return;
@@ -3193,21 +3567,8 @@ function renderProLongitudinalReport() {
 
   const report = buildProLongitudinalReport(proReportPeriod);
   if (accountEntitlements.plan !== "pro") {
-    panel.innerHTML = `
-      ${heading("Free", "medium")}
-      <div class="pro-report-title-row">
-        <div>
-          <h5>90 天与年度纵向报告</h5>
-          <p class="muted">查看活跃周/月、最长连续训练周、首尾阶段变化和下一阶段行动。</p>
-        </div>
-        ${periodControl}
-      </div>
-      <div class="pro-report-readiness">
-        <strong>${escapeHtml(report.ready ? `${report.periodLabel}数据已准备` : report.readinessTitle)}</strong>
-        <p>${escapeHtml(report.ready ? "升级通道开放后，服务器确认 Pro 即可在本机生成，不需要上传长期记录。" : report.readinessDetail)}</p>
-      </div>
-      <p class="pro-report-plan-note">当前为 Free · 付费方案尚未开放</p>
-    `;
+    panel.hidden = true;
+    panel.replaceChildren();
     return;
   }
 
@@ -3504,7 +3865,7 @@ function applyWeeklyTargetCalibration() {
   state.settings = normalizeSettings({
     ...state.settings,
     weeklyWorkoutTarget: calibration.recommendedTarget
-  });
+  }, state.templates);
   saveState();
   showToast(`周目标已调整为每周 ${calibration.recommendedTarget} 次`);
 }
@@ -3579,7 +3940,7 @@ function buildProgressFindings(current, previous, hasComparison) {
 
 function buildPersonalProgressReportText(report = buildPersonalProgressReport()) {
   return [
-    "# 日常与健身记录：个人进展报告",
+    "# WhatToDrill：个人进展报告",
     "",
     `状态：${report.title}`,
     report.summary,
@@ -3759,7 +4120,7 @@ function buildProLongitudinalReport(period = proReportPeriod) {
 function buildProLongitudinalReportText(report = buildProLongitudinalReport()) {
   if (!report.ready) throw new Error("长期报告数据尚未达到生成门槛。");
   return [
-    `# 日常与健身记录：${report.title}`,
+    `# WhatToDrill：${report.title}`,
     "",
     `周期：最近 ${report.period === "annual" ? "365" : "90"} 天`,
     report.summary,
@@ -3895,7 +4256,7 @@ function retentionAction(text, index) {
 
 function buildWeeklyReportText(review = buildRetentionReview()) {
   return [
-    `# 日常与健身记录周报`,
+    `# WhatToDrill 周报`,
     "",
     `范围：${review.rangeLabel}`,
     `可信度：${review.confidenceLabel}`,
@@ -3992,7 +4353,7 @@ function syncPrimarySupportFields(settings, partners) {
 }
 
 function saveSupportPartners(partners) {
-  state.settings = normalizeSettings(syncPrimarySupportFields(state.settings, partners));
+  state.settings = normalizeSettings(syncPrimarySupportFields(state.settings, partners), state.templates);
   persistState();
   renderSupportAgreement();
 }
@@ -4621,28 +4982,51 @@ function renderDailyCoach() {
   if (!coach) return;
   const nextPlan = state.nextWorkoutPlan?.status !== "superseded" ? state.nextWorkoutPlan : null;
   const hasDraft = Boolean(activeWorkoutSession);
+  if (hasDraft) {
+    const progress = WorkoutSessionModel.progress(activeWorkoutSession);
+    coach.innerHTML = `
+      <div class="daily-coach-main">
+        <span class="coach-status normal">训练草稿已保留</span>
+        <div>
+          <h2>继续未完成的训练</h2>
+          <p class="muted">${escapeHtml(activeWorkoutSession.title)} · 已完成 ${progress.completed}/${progress.total} 组</p>
+        </div>
+      </div>
+      <div class="daily-coach-body">
+        <article class="coach-decision">
+          <span>回到刚才的位置</span>
+          <strong>${escapeHtml(activeWorkoutSession.title)}</strong>
+          <small>未完成内容仍保存在这台设备。</small>
+        </article>
+        <div class="coach-actions">
+          <button id="continuePreviousWorkoutBtn" type="button">继续训练</button>
+          <button id="showExtendedDailyBtn" class="text-button" type="button">先调整今天的状态</button>
+        </div>
+      </div>
+    `;
+    return;
+  }
   if (nextPlan) {
-    const actionLabel = nextPlan.status === "started" && hasDraft ? "继续上次训练" : "开始训练";
-    const actionId = nextPlan.status === "started" && hasDraft ? "continuePreviousWorkoutBtn" : "startNextWorkoutBtn";
+    const actionLabel = nextPlan.status === "suggested" ? "确认并开始" : "开始训练";
+    const actionId = "startNextWorkoutBtn";
     const adjustments = nextPlan.adjustments.map(item => `<li>${escapeHtml(item)}</li>`).join("");
     const reasons = nextPlan.reasons.map(item => `<li>${escapeHtml(item)}</li>`).join("");
     coach.innerHTML = `
       <div class="daily-coach-main">
-        <span class="coach-status normal">根据上次训练生成</span>
+        <span class="coach-status normal">${nextPlan.status === "suggested" ? "等待你确认" : "已确认计划"}</span>
         <div>
           <h2>下一次训练</h2>
-          <p class="muted">不需要重新选动作；按上次完成情况，已经为你安排好了下一步。</p>
+          <p class="muted">先按训练顺序决定练哪一套，再参考同一训练日的历史表现调整。</p>
         </div>
       </div>
       <div class="daily-coach-body next-workout-card">
         <article class="coach-decision">
           <span>预计 ${escapeHtml(nextPlan.scheduledFor)} · ${nextPlan.exercises.length} 个动作</span>
           <strong>${escapeHtml(nextPlan.title)}</strong>
-          <small>${escapeHtml(nextPlan.adjustments[0] || "按上次训练继续")}</small>
+          <small>${escapeHtml(nextPlan.adjustments[0] || "按当前训练顺序继续")}</small>
         </article>
         <div class="coach-actions">
           <button id="${actionId}" type="button">${actionLabel}</button>
-          ${hasDraft && actionId !== "continuePreviousWorkoutBtn" ? '<button id="continuePreviousWorkoutBtn" class="ghost-button" type="button">继续上次训练</button>' : ""}
           <button id="showExtendedDailyBtn" class="text-button" type="button">先调整今天的状态</button>
         </div>
         <details class="coach-reasons" open>
@@ -4652,7 +5036,6 @@ function renderDailyCoach() {
           <ul>${reasons}</ul>
         </details>
       </div>
-      ${patternProgressMarkup()}
     `;
     return;
   }
@@ -4683,7 +5066,6 @@ function renderDailyCoach() {
         ${recommendation.caution ? `<p class="coach-caution">${escapeHtml(recommendation.caution)}</p>` : ""}
       </details>
     </div>
-    ${patternProgressMarkup()}
   `;
 }
 
@@ -4706,7 +5088,7 @@ function buildDailyCoachRecommendation() {
   const reasons = [];
   let statusKey = "normal";
   let statusLabel = "正常练";
-  let template = pickBeginnerTemplate("normal", latestWorkout);
+  let template = pickRotationTemplate();
   let summary = "今天适合做一次稳定的新手训练，重点是动作质量和完成感。";
   let intensityText = "稳稳完成，每组结束时保留约 2–3 次余力。";
   let caution = "";
@@ -4738,7 +5120,7 @@ function buildDailyCoachRecommendation() {
   } else if ((sleep !== null && sleep < 6 && soreness >= 4) || hardLast3.length >= 2 || (state.settings.conservativeMode && (sleep !== null && sleep < 6.5 || soreness >= 4))) {
     statusKey = "light";
     statusLabel = "轻量练";
-    template = pickBeginnerTemplate("light", latestWorkout);
+    template = pickRotationTemplate();
     summary = "今天适合保留训练习惯，但不要追求加量。";
     intensityText = "保持轻松，不做到力竭，动作慢一点。";
     if (sleep !== null && sleep < 6) reasons.push(`睡眠 ${formatMetric(sleep)}h，恢复基础偏弱。`);
@@ -4748,7 +5130,7 @@ function buildDailyCoachRecommendation() {
   } else if (energy >= 4 && pain <= 1 && (daysSinceLastWorkout === null || daysSinceLastWorkout >= 2)) {
     statusKey = "normal";
     statusLabel = "正常练";
-    template = pickBeginnerTemplate("normal", latestWorkout);
+    template = pickRotationTemplate();
     summary = "今天状态不错，适合做一次完整的新手训练。";
     intensityText = "稳稳完成，每组结束时保留约 2–3 次余力。";
     reasons.push(`精力 ${energy}/5，主观状态可承受训练。`);
@@ -4756,7 +5138,7 @@ function buildDailyCoachRecommendation() {
   } else {
     statusKey = "light";
     statusLabel = "轻量练";
-    template = pickBeginnerTemplate("light", latestWorkout);
+    template = pickRotationTemplate();
     summary = "今天建议稳一点，用中低强度训练保持节奏。";
     intensityText = "保持轻松，不做到力竭，结束时应该还有余力。";
     reasons.push("当前状态没有明显红灯，但也不需要硬推强度。");
@@ -4779,6 +5161,11 @@ function buildDailyCoachRecommendation() {
     intensityText,
     durationText: `${template.duration} 分钟`
   };
+}
+
+function pickRotationTemplate() {
+  const resolved = TrainingRotationModel.resolveNextDay(state.settings.trainingRotation, getAllTemplates());
+  return resolved.template || beginnerTemplates.find(item => item.id === "beginner_full_body");
 }
 
 function pickBeginnerTemplate(mode, latestWorkout = null) {
@@ -5582,7 +5969,7 @@ function exportData() {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `habit-fitness-backup-${today()}.json`;
+  link.download = `what-to-drill-backup-${today()}.json`;
   link.click();
   URL.revokeObjectURL(url);
   renderDataHealth();
@@ -5603,7 +5990,7 @@ function exportCsvSummary() {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `habit-fitness-summary-${today()}.csv`;
+  link.download = `what-to-drill-summary-${today()}.csv`;
   link.click();
   URL.revokeObjectURL(url);
   showToast("CSV 汇总已导出");
@@ -5655,7 +6042,7 @@ async function exportWeeklyReport() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `habit-fitness-weekly-report-${today()}.md`;
+    link.download = `what-to-drill-weekly-report-${today()}.md`;
     link.click();
     URL.revokeObjectURL(url);
     showToast("周报已导出");
@@ -5676,7 +6063,7 @@ async function exportPersonalProgressReport() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `habit-fitness-progress-report-${today()}.md`;
+    link.download = `what-to-drill-progress-report-${today()}.md`;
     link.click();
     URL.revokeObjectURL(url);
     showToast("阶段报告已导出");
@@ -5706,7 +6093,7 @@ async function exportProLongitudinalReport() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `habit-fitness-pro-${report.period === "annual" ? "annual" : "90-day"}-report-${today()}.md`;
+    link.download = `what-to-drill-${report.period === "annual" ? "annual" : "90-day"}-report-${today()}.md`;
     link.click();
     URL.revokeObjectURL(url);
     showToast("长期报告已导出");
@@ -6164,7 +6551,7 @@ function normalizeImportedState(imported) {
     exercises: mergeDefaultExercises(imported.exercises),
     templates: Array.isArray(imported.templates) ? imported.templates : [],
     adviceHistory: Array.isArray(imported.adviceHistory) ? imported.adviceHistory : [],
-    settings: normalizeSettings(imported.settings),
+    settings: normalizeSettings(imported.settings, imported.templates),
     nextWorkoutPlan: normalizeNextWorkoutPlan(imported.nextWorkoutPlan)
   };
 }
@@ -6749,6 +7136,20 @@ function bindActions() {
     if (event.target === $("focusedFinishDialog")) closeFocusedFinishDialog();
   });
   $("closeNextWorkoutResultBtn").addEventListener("click", closeNextWorkoutResult);
+  $("nextWorkoutResultDialog").addEventListener("change", event => {
+    if (event.target.id === "nextWorkoutDaySelect") changeSuggestedRotationDay(event.target.value);
+  });
+  $("nextWorkoutResultDialog").addEventListener("click", event => {
+    if (event.target.closest("#confirmNextWorkoutBtn")) {
+      confirmSuggestedNextWorkout();
+      return;
+    }
+    if (event.target.closest("#makeNextWorkoutRecoveryBtn")) {
+      makeSuggestedWorkoutRecovery();
+      return;
+    }
+    if (event.target.closest("#selfDecideNextWorkoutBtn")) chooseNextWorkoutMyself();
+  });
   $("nextWorkoutResultDialog").addEventListener("click", event => {
     if (event.target === $("nextWorkoutResultDialog")) closeNextWorkoutResult();
   });
@@ -6790,6 +7191,18 @@ function bindActions() {
   $("loadTemplateBtn").addEventListener("click", loadTemplate);
   $("addLibraryExerciseBtn").addEventListener("click", addLibraryExercise);
   $("savePreferencesBtn").addEventListener("click", savePreferences);
+  $("trainingRotationMode").addEventListener("change", () => renderTrainingRotationEditor());
+  $("customRotationEditor").addEventListener("click", handleRotationEditorClick);
+  $("customRotationEditor").addEventListener("input", () => renderTrainingRotationSummary("custom", collectRotationDays()));
+  $("customRotationEditor").addEventListener("change", event => {
+    if (event.target.matches(".rotation-template")) {
+      const row = event.target.closest(".rotation-day-row");
+      const label = row.querySelector(".rotation-label");
+      const template = getAllTemplates().find(item => item.id === event.target.value);
+      if (!label.value.trim() && template) label.value = template.name;
+    }
+    renderTrainingRotationSummary("custom", collectRotationDays());
+  });
   $("installAppBtn").addEventListener("click", installApp);
   $("reminderStatus").addEventListener("click", event => {
     if (event.target.closest("#requestNotificationBtn")) requestNotificationPermission();
@@ -6838,9 +7251,15 @@ function bindActions() {
   });
   $("templateList").addEventListener("click", event => {
     if (!event.target.classList.contains("delete-template")) return;
-    state.templates = state.templates.filter(item => item.id !== event.target.dataset.id);
+    const deletedId = event.target.dataset.id;
+    state.templates = state.templates.filter(item => item.id !== deletedId);
+    state.settings = normalizeSettings(state.settings, state.templates);
+    if (state.nextWorkoutPlan?.sourceTemplateId === deletedId) {
+      state.nextWorkoutPlan.status = "superseded";
+      state.nextWorkoutPlan.reasons = ["原训练模板已删除，请重新确认训练顺序。"];
+    }
     saveState();
-    showToast("模板已删除");
+    showToast(state.settings.trainingRotation.issue ? "模板已删除，训练顺序已回退到全身循环" : "模板已删除");
   });
   $("focusStrip").addEventListener("click", event => {
     const card = event.target.closest(".focus-card");
@@ -6895,6 +7314,22 @@ function bindActions() {
   $("personalProgressReport").addEventListener("click", event => {
     if (event.target.closest("#exportPersonalProgressReportBtn")) exportPersonalProgressReport();
     if (event.target.closest("#applyWeeklyTargetCalibrationBtn")) applyWeeklyTargetCalibration();
+  });
+  $("insights").addEventListener("click", event => {
+    if (event.target.closest("#startFromProgressBtn")) {
+      startDailyCoachWorkout();
+      return;
+    }
+    if (event.target.closest("#openNextPlanFromProgressBtn")) {
+      const plan = state.nextWorkoutPlan;
+      if (plan?.status === "suggested") {
+        const source = sourceWorkoutForNextPlan();
+        if (source) showNextWorkoutResult(source, plan);
+        else startNextWorkoutPlan();
+      } else {
+        startNextWorkoutPlan();
+      }
+    }
   });
   $("proLongitudinalReport").addEventListener("click", event => {
     const periodButton = event.target.closest("[data-pro-report-period]");

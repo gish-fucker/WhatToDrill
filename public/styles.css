@@ -2111,6 +2111,57 @@ input[type="checkbox"] {
   cursor: pointer;
 }
 
+.next-plan-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.next-plan-controls label {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.next-plan-decision-actions {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.progress-entry-state {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.progress-entry-state[hidden] {
+  display: none;
+}
+
+.progress-entry-state h3,
+.progress-entry-state p {
+  margin: 0;
+}
+
+.progress-next-plan {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.progress-next-plan span,
+.progress-next-plan small {
+  color: var(--muted);
+}
+
 .next-result-actions {
   grid-template-columns: minmax(0, 1fr);
   margin: 0;
@@ -3721,6 +3772,80 @@ input[type="checkbox"] {
   width: 100%;
 }
 
+.training-rotation-settings {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+  padding: 13px;
+  display: grid;
+  gap: 10px;
+}
+
+.training-rotation-settings > label {
+  display: grid;
+  gap: 6px;
+}
+
+.training-rotation-settings p {
+  margin: 0;
+}
+
+.rotation-summary {
+  color: var(--primary-strong);
+  font-weight: 800;
+}
+
+.custom-rotation-editor,
+.custom-rotation-days {
+  display: grid;
+  gap: 10px;
+}
+
+.custom-rotation-editor[hidden] {
+  display: none;
+}
+
+.rotation-day-row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1.2fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-soft);
+}
+
+.rotation-day-index {
+  align-self: center;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--primary-soft);
+  color: var(--primary-strong);
+  font-weight: 900;
+}
+
+.rotation-day-row label {
+  display: grid;
+  gap: 5px;
+}
+
+.rotation-day-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.preference-form .rotation-day-actions button {
+  grid-column: auto;
+  width: auto;
+  min-width: 44px;
+  padding-inline: 9px;
+}
+
 .reminder-settings {
   grid-column: 1 / -1;
   border: 1px solid var(--line);
@@ -4941,6 +5066,23 @@ input[type="checkbox"] {
   .focused-more-fields,
   .focused-set-actions {
     grid-template-columns: 1fr;
+  }
+
+  .next-plan-controls,
+  .rotation-day-row {
+    grid-template-columns: 1fr;
+  }
+
+  .rotation-day-index {
+    justify-self: start;
+  }
+
+  .rotation-day-actions {
+    justify-content: stretch;
+  }
+
+  .preference-form .rotation-day-actions button {
+    flex: 1;
   }
 
   .focused-set-actions {

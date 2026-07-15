@@ -4,12 +4,12 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#1f725f">
-    <meta name="description" content="日常与健身记录：你的训练与恢复助手，根据恢复状态安排适合今天的训练，并带你逐组完成。">
-    <title>日常与健身记录</title>
+    <meta name="description" content="WhatToDrill · 今天练什么：根据恢复状态安排下一次训练，并逐组记录表现。">
+    <title>WhatToDrill · 今天练什么</title>
     <link rel="icon" href="../app-icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="../app-icon-180.png" sizes="180x180">
     <link rel="manifest" href="../manifest.webmanifest">
-    <link rel="stylesheet" href="../styles.css?v=20260715-p2-patterns-v1">
+    <link rel="stylesheet" href="../styles.css?v=20260715-product-trust-v1">
   </head>
   <body class="app-initializing">
     <a class="skip-link" href="#mainContent">跳到主要内容</a>
@@ -17,8 +17,8 @@
       <div class="brand-block">
         <img class="brand-mark" src="../app-icon.svg" alt="" aria-hidden="true">
         <div>
-          <h1>日常与健身记录</h1>
-          <p class="app-tagline">你的训练与恢复助手</p>
+          <h1>WhatToDrill</h1>
+          <p class="app-tagline">今天练什么</p>
         </div>
       </div>
       <button id="openSettingsBtn" class="ghost-button settings-button" type="button">设置</button>
@@ -229,6 +229,8 @@
           <button id="generateAdviceBtn" type="button">生成建议</button>
         </div>
 
+        <section id="progressEmptyState" class="plain-panel progress-entry-state" aria-label="开始积累进步"></section>
+        <section id="progressEarlySummary" class="plain-panel progress-entry-state" aria-label="最近训练与下一步"></section>
         <section id="readinessPanel" class="readiness-panel" aria-label="状态评分"></section>
         <section id="retentionInsights" class="retention-insights" aria-label="复盘中心"></section>
         <section id="personalTrainingPatterns" class="personal-training-patterns" aria-label="个人训练规律"></section>
@@ -237,7 +239,7 @@
         <section id="weeklyReview" class="weekly-review" aria-label="本周回顾"></section>
         <div id="summaryGrid" class="summary-grid"></div>
         <section id="exerciseProgress" class="exercise-progress" aria-label="动作进步"></section>
-        <section class="plain-panel trend-panel">
+        <section id="recentTrendsPanel" class="plain-panel trend-panel">
           <div class="panel-heading">
             <div>
               <p class="eyebrow">Trends</p>
@@ -248,7 +250,7 @@
           <div id="trendGrid" class="trend-grid"></div>
         </section>
         <div class="insight-layout">
-          <section class="plain-panel advice-panel">
+          <section id="progressAdvicePanel" class="plain-panel advice-panel">
             <div class="panel-heading">
               <div>
                 <p class="eyebrow">Coach</p>
@@ -258,7 +260,7 @@
             </div>
             <div id="adviceOutput" class="advice-output">保存几条记录后，这里会生成更有用的建议。</div>
           </section>
-          <section class="plain-panel history-panel">
+          <section id="progressHistoryPanel" class="plain-panel history-panel">
             <div class="panel-heading">
               <div>
                 <p class="eyebrow">Timeline</p>
@@ -356,6 +358,24 @@
                 每周训练目标
                 <input id="weeklyWorkoutTarget" type="number" min="1" max="6" step="1">
               </label>
+              <fieldset id="trainingRotationFieldset" class="training-rotation-settings wide">
+                <legend>训练顺序</legend>
+                <p class="muted">系统先决定下一套练什么，再参考这套训练上一次的表现调整重量和次数。</p>
+                <label>
+                  轮换方式
+                  <select id="trainingRotationMode">
+                    <option value="full_body">全身循环</option>
+                    <option value="upper_lower">上下肢轮换</option>
+                    <option value="custom">自定义顺序</option>
+                  </select>
+                </label>
+                <p id="trainingRotationSummary" class="rotation-summary"></p>
+                <div id="customRotationEditor" class="custom-rotation-editor" hidden>
+                  <div id="customRotationDays" class="custom-rotation-days"></div>
+                  <button id="addRotationDayBtn" class="ghost-button" type="button">添加训练日</button>
+                </div>
+                <p id="trainingRotationError" class="field-error" role="alert" hidden></p>
+              </fieldset>
               <fieldset class="planned-workout-days wide">
                 <legend>每周计划训练日</legend>
                 <p class="muted">可不选；选中后，训练提醒只会在计划日触发。</p>
@@ -551,7 +571,6 @@
                 <span>每月 <strong id="accountQuotaLimit">0</strong></span>
               </div>
               <p id="accountQuotaReset" class="muted"></p>
-              <p class="account-plan-note">付费方案尚未开放</p>
             </div>
             <p id="accountFeedback" class="account-feedback" role="status" aria-live="polite"></p>
             <p class="account-boundary">无需登录即可使用本地记录、导出和安全提示。登录或退出都不会上传、删除或改写当前设备的数据。</p>
@@ -772,7 +791,7 @@
     <dialog id="nextWorkoutResultDialog" class="confirm-dialog next-workout-result-dialog" aria-labelledby="nextWorkoutResultTitle">
       <div id="nextWorkoutResultContent" class="confirm-dialog-body"></div>
       <div class="confirm-dialog-actions next-result-actions">
-        <button id="closeNextWorkoutResultBtn" type="button">知道了</button>
+        <button id="closeNextWorkoutResultBtn" class="ghost-button" type="button">稍后确认</button>
       </div>
     </dialog>
 
@@ -958,6 +977,7 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script src="../workout-session-model.js?v=20260715-p0-session-v1"></script>
-    <script src="../app.js?v=20260715-p2-patterns-v1"></script>
+    <script src="../training-rotation-model.js?v=20260715-training-rotation-v1"></script>
+    <script src="../app.js?v=20260715-product-trust-v1"></script>
   </body>
 </html>

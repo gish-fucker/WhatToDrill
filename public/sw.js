@@ -1,4 +1,4 @@
-const CACHE_NAME = "habit-fitness-shell-v20260715-p2-patterns-v1";
+const CACHE_NAME = "what-to-drill-shell-v20260715-product-trust-v1";
 const LANDING_INDEX = new URL("index.html", self.registration.scope).toString();
 const APP_INDEX = new URL("app/index.html", self.registration.scope).toString();
 const APP_PATH = new URL("app/", self.registration.scope).pathname;
@@ -9,9 +9,10 @@ const APP_SHELL = [
   "app/index.html",
   "privacy.html",
   "terms.html",
-  "styles.css?v=20260715-p2-patterns-v1",
-  "app.js?v=20260715-p2-patterns-v1",
+  "styles.css?v=20260715-product-trust-v1",
+  "app.js?v=20260715-product-trust-v1",
   "workout-session-model.js?v=20260715-p0-session-v1",
+  "training-rotation-model.js?v=20260715-training-rotation-v1",
   "app-icon.svg",
   "app-icon-180.png",
   "app-icon-192.png",
