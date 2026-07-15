@@ -30,10 +30,16 @@
 npm start
 ```
 
-默认地址：
+默认落地页：
 
 ```text
 http://localhost:5173
+```
+
+训练应用入口：
+
+```text
+http://localhost:5173/app/
 ```
 
 ## 公开地址
@@ -42,7 +48,11 @@ http://localhost:5173
 
 <https://gish-fucker.github.io/Daily-Workout-Record/>
 
-该地址提供完整的本地记录、训练、复盘、导出、安装和离线能力，数据仍保存在当前浏览器。GitHub Pages 是静态托管，不提供云端 AI、账号、同步或支付；需要云端建议时应使用下述 Node.js/Render 部署。
+根地址是面向首次用户的产品介绍页；训练应用可直接访问：
+
+<https://gish-fucker.github.io/Daily-Workout-Record/app/>
+
+应用提供完整的本地记录、训练、复盘、导出、安装和离线能力，数据仍保存在当前浏览器。GitHub Pages 是静态托管，不提供云端 AI、账号、同步或支付；需要云端建议时应使用下述 Node.js/Render 部署。
 
 若需要使用云端 AI 建议，可在 PowerShell 中配置：
 

@@ -8,6 +8,7 @@ const chromePort = Number(process.env.SMOKE_CHROME_PORT || 9240);
 const authPort = Number(process.env.SMOKE_AUTH_PORT || 5184);
 const unconfiguredPort = Number(process.env.SMOKE_UNCONFIGURED_PORT || 5185);
 const baseUrl = `http://localhost:${appPort}`;
+const appUrl = `${baseUrl}/app/`;
 const chromePath = process.env.CHROME_PATH || "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 const outputDir = resolve("output", "playwright");
 const profileDir = resolve(outputDir, "smoke-profile");
@@ -270,7 +271,7 @@ async function run() {
     "--disable-default-apps",
     "--disable-gpu",
     "--window-size=1440,1100",
-    baseUrl
+    appUrl
   ], {
     stdio: "ignore",
     windowsHide: true
@@ -280,6 +281,9 @@ async function run() {
   try {
     await waitForHttp(baseUrl);
     const indexResponse = await fetch(baseUrl);
+    const landingHtml = await indexResponse.text();
+    const appResponse = await fetch(appUrl);
+    const appHtml = await appResponse.text();
     const privacyResponse = await fetch(`${baseUrl}/privacy.html`);
     const termsResponse = await fetch(`${baseUrl}/terms.html`);
     const serviceWorkerResponse = await fetch(`${baseUrl}/sw.js`);
@@ -428,6 +432,9 @@ async function run() {
       requestId: healthResponse.headers.get("x-request-id"),
       health: healthPayload,
       indexCache: indexResponse.headers.get("cache-control"),
+      landingReady: landingHtml.includes("今天练什么，直接告诉你") && landingHtml.includes('href="./app/"'),
+      appStatus: appResponse.status,
+      appReady: appHtml.includes('id="mainContent"') && appHtml.includes('../app.js'),
       privacyStatus: privacyResponse.status,
       privacyCache: privacyResponse.headers.get("cache-control"),
       termsStatus: termsResponse.status,
@@ -435,7 +442,7 @@ async function run() {
       updateMessageHandler: serviceWorkerSource.includes("SKIP_WAITING"),
       iconCacheEntries: Object.keys(iconChecks).every(name => serviceWorkerSource.includes(name)),
       scopeAwareShell: serviceWorkerSource.includes("self.registration.scope") && serviceWorkerSource.includes("cache.put(request"),
-      relativeWorkerRegistration: appSource.includes('serviceWorker.register("./sw.js")'),
+      relativeWorkerRegistration: appSource.includes('serviceWorker.register("../sw.js")'),
       manifestIcons: manifest.icons,
       manifestId: manifest.id,
       manifestStartUrl: manifest.start_url,
@@ -480,14 +487,16 @@ async function run() {
     assert(Number.isInteger(serverHttp.health.uptimeSeconds) && serverHttp.health.uptimeSeconds >= 0, "Health response should expose a valid uptime.");
     assert(serverHttp.health.openaiConfigured === false && serverHttp.health.accountConfigured === true && serverHttp.health.entitlementConfigured === false && serverHttp.health.aiAccessMode === "deployment_shared" && serverHttp.health.model === "gpt-5-mini", "Health response should expose non-secret service configuration state.");
     assert(serverHttp.indexCache === "no-cache", "HTML should revalidate instead of using a stale shell.");
+    assert(serverHttp.landingReady, "Root should serve the beginner landing page with an app entry.");
+    assert(serverHttp.appStatus === 200 && serverHttp.appReady, "The app route should serve the application shell with parent-relative assets.");
     assert(serverHttp.privacyStatus === 200 && serverHttp.termsStatus === 200, "Legal pages should be served as public product pages.");
     assert(serverHttp.privacyCache === "no-cache", "Privacy policy should revalidate so users receive policy updates.");
     assert(serverHttp.termsCsp?.includes("frame-ancestors 'none'"), "Legal pages should receive the same security headers as the app.");
     assert(serverHttp.updateMessageHandler, "Service worker should support user-confirmed activation.");
     assert(serverHttp.iconCacheEntries, "PWA app shell should cache every raster install icon.");
     assert(serverHttp.scopeAwareShell && serverHttp.relativeWorkerRegistration, "PWA registration and shell caching should follow the actual deployment scope.");
-    assert(serverHttp.manifestId === "./" && serverHttp.manifestStartUrl === "./" && serverHttp.manifestScope === "./" && serverHttp.manifestIcons.every(icon => icon.src.startsWith("./")), "Manifest URLs should stay relative to the deployment location.");
-    assert(serverHttp.subpathManifest.id === "/Daily-Workout-Record/" && serverHttp.subpathManifest.startUrl === "/Daily-Workout-Record/" && serverHttp.subpathManifest.scope === "/Daily-Workout-Record/" && serverHttp.subpathManifest.icons.every(path => path.startsWith("/Daily-Workout-Record/")), "Manifest URLs should resolve inside a GitHub Pages project subpath.");
+    assert(serverHttp.manifestId === "./app/" && serverHttp.manifestStartUrl === "./app/" && serverHttp.manifestScope === "./" && serverHttp.manifestIcons.every(icon => icon.src.startsWith("./")), "Manifest URLs should keep the app start route and deployment-relative scope.");
+    assert(serverHttp.subpathManifest.id === "/Daily-Workout-Record/app/" && serverHttp.subpathManifest.startUrl === "/Daily-Workout-Record/app/" && serverHttp.subpathManifest.scope === "/Daily-Workout-Record/" && serverHttp.subpathManifest.icons.every(path => path.startsWith("/Daily-Workout-Record/")), "Manifest URLs should resolve the app inside a GitHub Pages project subpath.");
     assert(serverHttp.manifestIcons.some(icon => icon.sizes === "192x192" && icon.purpose === "any"), "Manifest should declare a standard 192px icon.");
     assert(serverHttp.manifestIcons.some(icon => icon.sizes === "512x512" && icon.purpose === "any"), "Manifest should declare a standard 512px icon.");
     assert(serverHttp.manifestIcons.some(icon => icon.sizes === "512x512" && icon.purpose === "maskable"), "Manifest should declare a separate maskable icon.");
@@ -526,7 +535,7 @@ async function run() {
     await cdp.send("Runtime.enable");
     await cdp.send("Network.enable");
     await cdp.send("Network.clearBrowserCookies");
-    await navigate(cdp, baseUrl);
+    await navigate(cdp, appUrl);
 
     await cdp.send("Emulation.setDeviceMetricsOverride", {
       width: 1440,
@@ -985,7 +994,7 @@ async function run() {
     });
     {
       const loaded = cdp.waitFor("Page.loadEventFired").catch(() => null);
-      await cdp.send("Page.navigate", { url: baseUrl });
+    await cdp.send("Page.navigate", { url: appUrl });
       await loaded;
       await delay(500);
     }
@@ -2425,7 +2434,7 @@ async function run() {
     assert(termsPage.text.includes("90 天和年度纵向报告") && termsPage.text.includes("权益到期不会锁住"), "Terms should explain Pro report scope and expiry behavior.");
     assert(!termsPage.overflow, "Terms desktop layout should not overflow.");
 
-    await navigate(cdp, baseUrl);
+    await navigate(cdp, appUrl);
 
     await cdp.send("Emulation.setDeviceMetricsOverride", {
       width: 390,
@@ -2484,7 +2493,7 @@ async function run() {
     assert(mobilePrivacy.heading === "隐私政策", "Mobile privacy policy should render.");
     assert(!mobilePrivacy.overflow, "Mobile privacy policy should not overflow.");
 
-    await navigate(cdp, baseUrl);
+    await navigate(cdp, appUrl);
     await evaluate(cdp, `document.querySelector('[data-tab="insights"]').click(); window.scrollTo(0, 0);`);
     await delay(250);
     const mobileInsights = await evaluate(cdp, `(() => ({

@@ -20,6 +20,225 @@
   --radius: 8px;
 }
 
+body.landing-page {
+  min-height: 100vh;
+  margin: 0;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  background:
+    radial-gradient(circle at 82% 12%, rgba(31, 114, 95, 0.12), transparent 32%),
+    linear-gradient(180deg, #fbfcfa 0%, var(--bg) 100%);
+  color: var(--text);
+}
+
+.landing-header,
+.landing-main,
+.landing-footer {
+  width: min(1180px, calc(100% - 48px));
+  margin-inline: auto;
+}
+
+.landing-header {
+  min-height: 84px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.landing-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.landing-brand img {
+  width: 40px;
+  height: 40px;
+}
+
+.landing-login-link,
+.landing-primary-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 46px;
+  border-radius: var(--radius);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.landing-login-link {
+  padding: 0 18px;
+  border: 1px solid var(--line-strong);
+  color: var(--primary-strong);
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.landing-main {
+  display: grid;
+  align-items: center;
+  padding: 72px 0 88px;
+}
+
+.landing-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(360px, 0.75fr);
+  gap: clamp(56px, 8vw, 112px);
+  align-items: center;
+}
+
+.landing-kicker {
+  margin: 0 0 16px;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.landing-hero h1 {
+  max-width: 760px;
+  margin: 0;
+  font-size: clamp(44px, 6vw, 76px);
+  line-height: 1.05;
+  letter-spacing: -0.055em;
+}
+
+.landing-lead {
+  max-width: 650px;
+  margin: 26px 0 0;
+  color: var(--muted);
+  font-size: clamp(18px, 2vw, 22px);
+  line-height: 1.75;
+}
+
+.landing-primary-action {
+  min-width: 210px;
+  margin-top: 36px;
+  padding: 0 28px;
+  background: var(--primary);
+  color: #fff;
+  box-shadow: var(--shadow-soft);
+}
+
+.landing-primary-action:hover {
+  background: var(--primary-strong);
+}
+
+.landing-trust {
+  margin: 16px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.landing-steps {
+  margin: 0;
+  padding: 8px;
+  list-style: none;
+  border: 1px solid rgba(203, 214, 208, 0.82);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: var(--shadow);
+}
+
+.landing-steps li {
+  display: grid;
+  grid-template-columns: 42px 1fr;
+  gap: 16px;
+  padding: 24px;
+}
+
+.landing-steps li + li {
+  border-top: 1px solid var(--line);
+}
+
+.landing-steps li > span {
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.landing-steps strong {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 18px;
+}
+
+.landing-steps p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.landing-footer {
+  min-height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.landing-footer nav {
+  display: flex;
+  gap: 20px;
+}
+
+.landing-footer a {
+  color: inherit;
+}
+
+@media (max-width: 760px) {
+  .landing-header,
+  .landing-main,
+  .landing-footer {
+    width: min(100% - 32px, 1180px);
+  }
+
+  .landing-header {
+    min-height: 72px;
+  }
+
+  .landing-login-link {
+    min-height: 42px;
+    padding: 0 14px;
+  }
+
+  .landing-main {
+    align-items: start;
+    padding: 48px 0 64px;
+  }
+
+  .landing-hero {
+    grid-template-columns: 1fr;
+    gap: 44px;
+  }
+
+  .landing-hero h1 {
+    font-size: clamp(40px, 13vw, 58px);
+  }
+
+  .landing-primary-action {
+    width: 100%;
+  }
+
+  .landing-steps li {
+    padding: 20px 16px;
+  }
+
+  .landing-footer {
+    padding: 20px 0 28px;
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
 .progress-value-0 { --progress: 0%; --score: 0%; --bar: 0%; }
 .progress-value-5 { --progress: 5%; --score: 5%; --bar: 5%; }
 .progress-value-10 { --progress: 10%; --score: 10%; --bar: 10%; }

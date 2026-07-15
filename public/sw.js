@@ -1,12 +1,17 @@
-const CACHE_NAME = "habit-fitness-shell-v20260714-commercial-ux";
-const APP_INDEX = new URL("index.html", self.registration.scope).toString();
+const CACHE_NAME = "habit-fitness-shell-v20260715-p0-routing";
+const LANDING_INDEX = new URL("index.html", self.registration.scope).toString();
+const APP_INDEX = new URL("app/index.html", self.registration.scope).toString();
+const APP_PATH = new URL("app/", self.registration.scope).pathname;
 const APP_SHELL = [
   "./",
   "index.html",
+  "app/",
+  "app/index.html",
   "privacy.html",
   "terms.html",
-  "styles.css?v=20260714-commercial-ux-v1",
+  "styles.css?v=20260715-p0-routing-v1",
   "app.js?v=20260714-commercial-ux-v1",
+  "workout-session-model.js?v=20260715-p0-session-v1",
   "app-icon.svg",
   "app-icon-180.png",
   "app-icon-192.png",
@@ -50,7 +55,12 @@ self.addEventListener("fetch", event => {
           }
           return response;
         })
-        .catch(async () => (await caches.match(request)) || caches.match(APP_INDEX))
+        .catch(async () => {
+          const cachedRequest = await caches.match(request);
+          if (cachedRequest) return cachedRequest;
+          const isAppNavigation = url.pathname === APP_PATH.slice(0, -1) || url.pathname.startsWith(APP_PATH);
+          return caches.match(isAppNavigation ? APP_INDEX : LANDING_INDEX);
+        })
     );
     return;
   }

@@ -717,7 +717,12 @@ async function handleStatic(req, res) {
   const url = new URL(req.url, "http://localhost");
   let requestedPath;
   try {
-    requestedPath = url.pathname === "/" ? "/index.html" : decodeURIComponent(url.pathname);
+    const decodedPath = decodeURIComponent(url.pathname);
+    requestedPath = decodedPath === "/"
+      ? "/index.html"
+      : decodedPath === "/app" || decodedPath === "/app/"
+        ? "/app/index.html"
+        : decodedPath;
   } catch {
     res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
     res.end("Bad request");
