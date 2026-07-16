@@ -9,7 +9,7 @@
     <link rel="icon" href="../app-icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="../app-icon-180.png" sizes="180x180">
     <link rel="manifest" href="../manifest.webmanifest">
-    <link rel="stylesheet" href="../styles.css?v=20260716-workout-companion-v1">
+    <link rel="stylesheet" href="../styles.css?v=20260716-first-workout-v2">
   </head>
   <body class="app-initializing">
     <a class="skip-link" href="#mainContent">跳到主要内容</a>
@@ -352,6 +352,24 @@
                   <option value="gym">健身房</option>
                   <option value="home">居家</option>
                   <option value="mixed">都可以</option>
+                </select>
+              </label>
+              <label>
+                可用器械
+                <select id="availableEquipment">
+                  <option value="">尚未选择</option>
+                  <option value="bodyweight">无器械</option>
+                  <option value="dumbbells">哑铃</option>
+                  <option value="machines">固定器械</option>
+                  <option value="free_weights">自由重量</option>
+                </select>
+              </label>
+              <label>
+                训练经验
+                <select id="experienceLevel">
+                  <option value="">尚未选择</option>
+                  <option value="beginner">刚开始</option>
+                  <option value="experienced">已训练一段时间</option>
                 </select>
               </label>
               <label>
@@ -735,6 +753,50 @@
       </form>
     </dialog>
 
+    <dialog id="firstWorkoutSetupDialog" class="confirm-dialog first-workout-setup-dialog" aria-labelledby="firstWorkoutSetupTitle" aria-describedby="firstWorkoutSetupDescription">
+      <form id="firstWorkoutSetupForm" class="confirm-dialog-body">
+        <p class="eyebrow">约 10 秒</p>
+        <h2 id="firstWorkoutSetupTitle">第一套训练，按你的条件来</h2>
+        <p id="firstWorkoutSetupDescription">不需要注册。先确认今天能用什么，再进入疼痛安全确认。</p>
+        <div class="first-workout-questions">
+          <fieldset class="readiness-question">
+            <legend>今天在哪里练、能用什么？</legend>
+            <div class="readiness-options first-workout-condition-options">
+              <label><input type="radio" name="firstWorkoutCondition" value="bodyweight"><span><strong>居家</strong><small>无器械</small></span></label>
+              <label><input type="radio" name="firstWorkoutCondition" value="dumbbells"><span><strong>居家或健身房</strong><small>有哑铃</small></span></label>
+              <label><input type="radio" name="firstWorkoutCondition" value="machines"><span><strong>健身房</strong><small>固定器械</small></span></label>
+              <label><input type="radio" name="firstWorkoutCondition" value="free_weights"><span><strong>健身房</strong><small>自由重量</small></span></label>
+            </div>
+          </fieldset>
+          <div class="first-workout-compact-row">
+            <fieldset class="readiness-question">
+              <legend>训练经验</legend>
+              <div class="readiness-options">
+                <label><input type="radio" name="firstWorkoutExperience" value="beginner"><span>刚开始</span></label>
+                <label><input type="radio" name="firstWorkoutExperience" value="experienced"><span>练过一段时间</span></label>
+              </div>
+            </fieldset>
+            <fieldset class="readiness-question">
+              <legend>目前更想要</legend>
+              <div class="readiness-options first-workout-goal-options">
+                <label><input type="radio" name="firstWorkoutGoal" value="general"><span>保持活动</span></label>
+                <label><input type="radio" name="firstWorkoutGoal" value="muscle_gain"><span>增肌</span></label>
+                <label><input type="radio" name="firstWorkoutGoal" value="fat_loss"><span>减脂</span></label>
+                <label><input type="radio" name="firstWorkoutGoal" value="strength"><span>力量</span></label>
+                <label><input type="radio" name="firstWorkoutGoal" value="recovery"><span>恢复优先</span></label>
+              </div>
+            </fieldset>
+          </div>
+        </div>
+        <p id="firstWorkoutSetupError" class="field-error" role="alert" tabindex="-1" hidden>请选择今天的训练条件。</p>
+        <p class="first-workout-safety-note">若有刺痛、关节痛或影响活动的疼痛，下一步会优先改成恢复方案。</p>
+        <div class="confirm-dialog-actions">
+          <button id="cancelFirstWorkoutSetupBtn" class="ghost-button" type="button">暂不开始</button>
+          <button type="submit">继续</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog id="painGateDialog" class="confirm-dialog pain-gate-dialog" aria-labelledby="painGateTitle" aria-describedby="painGateDescription">
       <div class="confirm-dialog-body">
         <p class="eyebrow">开始前确认</p>
@@ -976,8 +1038,8 @@
     </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="../workout-session-model.js?v=20260716-workout-companion-v1"></script>
-    <script src="../training-rotation-model.js?v=20260716-workout-companion-v1"></script>
-    <script src="../app.js?v=20260716-workout-companion-v1"></script>
+    <script src="../workout-session-model.js?v=20260716-first-workout-v2"></script>
+    <script src="../training-rotation-model.js?v=20260716-first-workout-v2"></script>
+    <script src="../app.js?v=20260716-first-workout-v2"></script>
   </body>
 </html>

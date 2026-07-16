@@ -4573,6 +4573,54 @@ input[type="checkbox"] {
   width: min(680px, calc(100vw - 32px));
 }
 
+.first-workout-setup-dialog {
+  width: min(760px, calc(100vw - 24px));
+}
+
+.first-workout-questions {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.first-workout-condition-options {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.first-workout-condition-options span {
+  flex-direction: column;
+  gap: 2px;
+  text-align: center;
+}
+
+.first-workout-condition-options strong,
+.first-workout-condition-options small {
+  display: block;
+}
+
+.first-workout-condition-options small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.first-workout-compact-row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 12px;
+}
+
+.first-workout-goal-options {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.first-workout-safety-note,
+.coach-setup-note {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .readiness-questions {
   display: grid;
   gap: 14px;
@@ -5252,5 +5300,25 @@ input[type="checkbox"] {
 
   .settings-data-actions button {
     width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .first-workout-setup-dialog .confirm-dialog-body {
+    padding: 18px;
+  }
+
+  .first-workout-condition-options,
+  .first-workout-goal-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .first-workout-compact-row {
+    grid-template-columns: 1fr;
+  }
+
+  .first-workout-setup-dialog .readiness-options span {
+    min-height: 46px;
+    padding: 7px 8px;
   }
 }

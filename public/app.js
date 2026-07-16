@@ -1,6 +1,6 @@
 const STORAGE_KEY = "habit_fitness_app_v1";
 const WORKOUT_DRAFT_KEY = "habit_fitness_workout_draft_v1";
-const APP_VERSION = "1.20.0";
+const APP_VERSION = "1.21.0";
 const CLOUD_ADVICE_CONSENT_VERSION = 1;
 const BACKUP_SCHEMA_VERSION = 1;
 const MAX_WORKOUT_CSV_BYTES = 5 * 1024 * 1024;
@@ -16,6 +16,10 @@ const defaultSettings = {
   trainingRotation: TrainingRotationModel.defaultRotation(),
   trainingGoal: "general",
   preferredEnvironment: "gym",
+  availableEquipment: "",
+  experienceLevel: "",
+  starterTemplateId: "",
+  firstWorkoutSetupCompletedAt: "",
   conservativeMode: false,
   dailyReminderEnabled: false,
   dailyReminderTime: "20:30",
@@ -55,9 +59,69 @@ const defaultExercises = [
   { name: "动态拉伸", category: "恢复", lastUsed: "" },
   { name: "髋部活动", category: "恢复", lastUsed: "" },
   { name: "平板支撑", category: "核心", lastUsed: "" }
+  ,{ name: "椅子深蹲", category: "力量", lastUsed: "" }
+  ,{ name: "墙壁俯卧撑", category: "力量", lastUsed: "" }
+  ,{ name: "鸟狗式", category: "核心", lastUsed: "" }
+  ,{ name: "高脚杯深蹲", category: "力量", lastUsed: "" }
+  ,{ name: "哑铃地板卧推", category: "力量", lastUsed: "" }
+  ,{ name: "单臂哑铃划船", category: "力量", lastUsed: "" }
+  ,{ name: "器械推胸", category: "力量", lastUsed: "" }
+  ,{ name: "哑铃卧推", category: "力量", lastUsed: "" }
 ];
 
 const beginnerTemplates = [
+  {
+    id: "starter_home_bodyweight",
+    name: "居家无器械全身",
+    duration: 24,
+    sessionRpe: 5,
+    environment: "居家 · 无器械",
+    exercises: [
+      { name: "椅子深蹲", metric: "reps", sets: beginnerSets(2, "", 10, 5, "臀部轻触稳固椅面后站起") },
+      { name: "墙壁俯卧撑", metric: "reps", sets: beginnerSets(2, "", 10, 5, "身体保持一条直线") },
+      { name: "臀桥", metric: "reps", sets: beginnerSets(2, "", 12, 5, "顶端停一秒，不要憋气") },
+      { name: "鸟狗式", metric: "reps", sets: beginnerSets(2, "", 8, 5, "左右交替，骨盆保持稳定") }
+    ]
+  },
+  {
+    id: "starter_dumbbell_full_body",
+    name: "哑铃全身",
+    duration: 28,
+    sessionRpe: 6,
+    environment: "居家或健身房 · 哑铃",
+    exercises: [
+      { name: "高脚杯深蹲", metric: "reps", sets: beginnerSets(3, "", 10, 6, "先用能稳定完成的轻重量") },
+      { name: "哑铃地板卧推", metric: "reps", sets: beginnerSets(3, "", 10, 6, "手肘轻触地面后平稳推起") },
+      { name: "单臂哑铃划船", metric: "reps", sets: beginnerSets(3, "", 10, 6, "每侧完成目标次数") },
+      { name: "罗马尼亚硬拉", metric: "reps", sets: beginnerSets(2, "", 10, 6, "髋部向后，背部保持中立") }
+    ]
+  },
+  {
+    id: "starter_gym_machines",
+    name: "健身房器械入门",
+    duration: 30,
+    sessionRpe: 6,
+    environment: "健身房 · 固定器械",
+    exercises: [
+      { name: "腿举", metric: "reps", sets: beginnerSets(3, "", 10, 6, "先调好座椅，膝盖方向稳定") },
+      { name: "器械推胸", metric: "reps", sets: beginnerSets(3, "", 10, 6, "肩膀放松，控制回程") },
+      { name: "高位下拉", metric: "reps", sets: beginnerSets(3, "", 10, 6, "把手拉向锁骨，避免后仰借力") },
+      { name: "坐姿划船", metric: "reps", sets: beginnerSets(2, "", 10, 6, "肩胛向后收，不耸肩") }
+    ]
+  },
+  {
+    id: "starter_free_weights",
+    name: "自由重量基础",
+    duration: 32,
+    sessionRpe: 6,
+    environment: "健身房 · 自由重量",
+    exercises: [
+      { name: "高脚杯深蹲", metric: "reps", sets: beginnerSets(3, "", 8, 6, "先稳定动作，再逐步加重") },
+      { name: "哑铃卧推", metric: "reps", sets: beginnerSets(3, "", 8, 6, "使用能完全控制的重量") },
+      { name: "单臂哑铃划船", metric: "reps", sets: beginnerSets(3, "", 10, 6, "每侧完成目标次数") },
+      { name: "罗马尼亚硬拉", metric: "reps", sets: beginnerSets(3, "", 8, 6, "背部保持中立，髋部向后") }
+    ]
+  },
   {
     id: "beginner_full_body",
     name: "全身入门",
@@ -417,6 +481,14 @@ function sanitizeReminderTime(value, fallback) {
 function normalizeSettings(settings = {}, customTemplates = []) {
   const goalIds = ["general", "fat_loss", "muscle_gain", "strength", "recovery"];
   const environmentIds = ["gym", "home", "mixed"];
+  const equipmentIds = ["bodyweight", "dumbbells", "machines", "free_weights"];
+  const experienceIds = ["beginner", "experienced"];
+  const starterTemplateIds = [
+    "starter_home_bodyweight",
+    "starter_dumbbell_full_body",
+    "starter_gym_machines",
+    "starter_free_weights"
+  ];
   const supportRoles = ["family", "friend", "coach"];
   const supportCadences = ["twice_weekly", "weekly", "biweekly"];
   const supportStyles = ["check_in", "activity", "accountability"];
@@ -435,6 +507,12 @@ function normalizeSettings(settings = {}, customTemplates = []) {
     ]),
     trainingGoal: goalIds.includes(settings.trainingGoal) ? settings.trainingGoal : defaultSettings.trainingGoal,
     preferredEnvironment: environmentIds.includes(settings.preferredEnvironment) ? settings.preferredEnvironment : defaultSettings.preferredEnvironment,
+    availableEquipment: equipmentIds.includes(settings.availableEquipment) ? settings.availableEquipment : "",
+    experienceLevel: experienceIds.includes(settings.experienceLevel) ? settings.experienceLevel : "",
+    starterTemplateId: starterTemplateIds.includes(settings.starterTemplateId) ? settings.starterTemplateId : "",
+    firstWorkoutSetupCompletedAt: Number.isFinite(Date.parse(settings.firstWorkoutSetupCompletedAt))
+      ? new Date(settings.firstWorkoutSetupCompletedAt).toISOString()
+      : "",
     conservativeMode: Boolean(settings.conservativeMode),
     dailyReminderEnabled: Boolean(settings.dailyReminderEnabled),
     dailyReminderTime: sanitizeReminderTime(settings.dailyReminderTime ?? defaultSettings.dailyReminderTime, defaultSettings.dailyReminderTime),
@@ -1304,12 +1382,7 @@ function buildNextWorkoutPlan(workout, options = {}) {
   const recovery = recoveryForNextWorkout(workout.date);
   const templates = getAllTemplates();
   const rotation = TrainingRotationModel.normalizeRotation(state.settings.trainingRotation, templates);
-  const requestedDay = options.rotationDayId
-    ? rotation.days.find(day => day.id === options.rotationDayId)
-    : null;
-  const resolved = requestedDay
-    ? { rotation, day: requestedDay, template: templates.find(template => template.id === requestedDay.templateId) || null }
-    : TrainingRotationModel.resolveNextDay(rotation, templates);
+  const resolved = resolveTrainingDay(rotation, templates, options.rotationDayId);
   const day = resolved.day;
   const template = resolved.template;
   if (!day || !template) return null;
@@ -1543,7 +1616,84 @@ function getAllTemplates() {
   ];
 }
 
+function starterProfileConsistency(settings = state.settings) {
+  const equipment = settings.availableEquipment;
+  const expectedTemplateId = starterTemplateIdForEquipment(equipment);
+  const hasStarterFields = [
+    settings.availableEquipment,
+    settings.experienceLevel,
+    settings.starterTemplateId,
+    settings.firstWorkoutSetupCompletedAt
+  ].some(Boolean);
+  if (!hasStarterFields) return { status: "legacy", templateId: "" };
+  const environmentMatches = equipment === "bodyweight"
+    ? settings.preferredEnvironment === "home"
+    : equipment === "dumbbells"
+      ? settings.preferredEnvironment === "mixed"
+      : ["machines", "free_weights"].includes(equipment) && settings.preferredEnvironment === "gym";
+  const valid = Boolean(settings.firstWorkoutSetupCompletedAt)
+    && Boolean(expectedTemplateId)
+    && settings.starterTemplateId === expectedTemplateId
+    && environmentMatches
+    && ["beginner", "experienced"].includes(settings.experienceLevel)
+    && ["general", "fat_loss", "muscle_gain", "strength", "recovery"].includes(settings.trainingGoal);
+  return {
+    status: valid ? "valid" : "invalid",
+    templateId: valid ? expectedTemplateId : ""
+  };
+}
+
+function needsFirstWorkoutSetup() {
+  const profile = starterProfileConsistency();
+  if (profile.status === "valid") return false;
+  if (profile.status === "legacy" && state.workouts.length > 0) return false;
+  return true;
+}
+
+function starterTemplateForSettings(templates = getAllTemplates()) {
+  const profile = starterProfileConsistency();
+  if (profile.status !== "valid") return null;
+  return templates.find(template => template.id === profile.templateId) || null;
+}
+
+function starterTemplateIdForEquipment(equipment) {
+  return {
+    bodyweight: "starter_home_bodyweight",
+    dumbbells: "starter_dumbbell_full_body",
+    machines: "starter_gym_machines",
+    free_weights: "starter_free_weights"
+  }[equipment] || "";
+}
+
+function resolveTrainingDay(rotation = state.settings.trainingRotation, templates = getAllTemplates(), requestedDayId = "") {
+  const normalized = TrainingRotationModel.normalizeRotation(rotation, templates);
+  const resolved = TrainingRotationModel.resolveNextDay(normalized, templates);
+  const requestedDay = requestedDayId
+    ? normalized.days.find(day => day.id === requestedDayId)
+    : null;
+  const day = requestedDay || resolved.day;
+  const profileTemplate = normalized.mode === "full_body" ? starterTemplateForSettings(templates) : null;
+  if (profileTemplate && day?.id === "rotation_full_body") {
+    return {
+      rotation: normalized,
+      day: { ...day, templateId: profileTemplate.id, label: profileTemplate.name },
+      template: profileTemplate,
+      isBaseline: true
+    };
+  }
+  return {
+    rotation: normalized,
+    day,
+    template: templates.find(template => template.id === day?.templateId) || null,
+    isBaseline: true
+  };
+}
+
 function startDailyCoachWorkout(options = {}) {
+  if (!options.skipFirstWorkoutSetup && needsFirstWorkoutSetup()) {
+    openFirstWorkoutSetup();
+    return;
+  }
   const daily = getDailyDraft();
   const todayLog = state.dailyLogs.find(item => item.date === daily.date);
   const hasPainState = todayLog && Number.isFinite(Number(todayLog.pain));
@@ -1553,7 +1703,7 @@ function startDailyCoachWorkout(options = {}) {
   }
 
   const recommendation = buildDailyCoachRecommendation();
-  const resolvedRotation = TrainingRotationModel.resolveNextDay(state.settings.trainingRotation, getAllTemplates());
+  const resolvedRotation = resolveTrainingDay(state.settings.trainingRotation, getAllTemplates());
   const followsRotation = resolvedRotation.template?.id === recommendation.template.id;
   const sessionTemplate = followsRotation ? {
     ...recommendation.template,
@@ -2290,6 +2440,59 @@ function openPainGate() {
   $("noPainBtn").focus();
 }
 
+function firstWorkoutChoice(name, value) {
+  const input = document.querySelector(`input[name="${name}"][value="${value}"]`);
+  if (input) input.checked = true;
+}
+
+function openFirstWorkoutSetup() {
+  const form = $("firstWorkoutSetupForm");
+  form.reset();
+  $("firstWorkoutSetupError").hidden = true;
+  firstWorkoutChoice("firstWorkoutExperience", state.settings.experienceLevel || "beginner");
+  firstWorkoutChoice("firstWorkoutGoal", state.settings.trainingGoal || "general");
+  const dialog = $("firstWorkoutSetupDialog");
+  if (typeof dialog.showModal === "function") dialog.showModal();
+  else dialog.setAttribute("open", "");
+  form.querySelector('input[name="firstWorkoutCondition"]')?.focus();
+}
+
+function closeFirstWorkoutSetup() {
+  closeInputDialog("firstWorkoutSetupDialog");
+}
+
+function saveFirstWorkoutSetup(event) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  const condition = form.get("firstWorkoutCondition");
+  const experienceLevel = form.get("firstWorkoutExperience");
+  const trainingGoal = form.get("firstWorkoutGoal");
+  const conditionMap = {
+    bodyweight: { preferredEnvironment: "home", availableEquipment: "bodyweight", starterTemplateId: "starter_home_bodyweight" },
+    dumbbells: { preferredEnvironment: "mixed", availableEquipment: "dumbbells", starterTemplateId: "starter_dumbbell_full_body" },
+    machines: { preferredEnvironment: "gym", availableEquipment: "machines", starterTemplateId: "starter_gym_machines" },
+    free_weights: { preferredEnvironment: "gym", availableEquipment: "free_weights", starterTemplateId: "starter_free_weights" }
+  };
+  const selected = conditionMap[condition];
+  if (!selected || !["beginner", "experienced"].includes(experienceLevel) || !["general", "fat_loss", "muscle_gain", "strength", "recovery"].includes(trainingGoal)) {
+    const error = $("firstWorkoutSetupError");
+    error.hidden = false;
+    error.focus();
+    return;
+  }
+  state.settings = normalizeSettings({
+    ...state.settings,
+    ...selected,
+    experienceLevel,
+    trainingGoal,
+    firstWorkoutSetupCompletedAt: new Date().toISOString()
+  }, state.templates);
+  persistState();
+  closeFirstWorkoutSetup();
+  renderAll();
+  startDailyCoachWorkout({ skipFirstWorkoutSetup: true });
+}
+
 function closePainGate() {
   closeInputDialog("painGateDialog");
 }
@@ -2655,6 +2858,8 @@ function renderLibrary() {
   $("templateSelect").innerHTML = allTemplates.length
     ? allTemplates.map(template => `<option value="${template.id}">${template.builtIn ? "新手 · " : ""}${escapeHtml(template.name)}</option>`).join("")
     : `<option value="">暂无模板</option>`;
+  const defaultTemplateId = state.settings.starterTemplateId || "beginner_full_body";
+  if (allTemplates.some(template => template.id === defaultTemplateId)) $("templateSelect").value = defaultTemplateId;
 
   renderPreferences();
   renderDataHealth();
@@ -2665,6 +2870,8 @@ function renderPreferences() {
   if (!$("preferenceForm")) return;
   $("trainingGoal").value = state.settings.trainingGoal;
   $("preferredEnvironment").value = state.settings.preferredEnvironment;
+  $("availableEquipment").value = state.settings.availableEquipment;
+  $("experienceLevel").value = state.settings.experienceLevel;
   $("weeklyWorkoutTarget").value = state.settings.weeklyWorkoutTarget;
   $("trainingRotationMode").value = state.settings.trainingRotation.mode;
   renderTrainingRotationEditor(state.settings.trainingRotation.days);
@@ -2729,8 +2936,11 @@ function collectRotationDays() {
 
 function renderTrainingRotationSummary(mode, days) {
   const labels = days.map(day => day.label).join(" → ");
+  const fullBodyTemplate = starterTemplateForSettings();
   const descriptions = {
-    full_body: "适合每周 1–2 次：每次回到同一套全身训练。",
+    full_body: fullBodyTemplate
+      ? `适合每周 1–2 次：每次回到「${fullBodyTemplate.name}」。`
+      : "适合每周 1–2 次：每次回到同一套全身训练。",
     upper_lower: "适合每周 2–4 次：上肢和下肢依次轮换。",
     custom: labels ? `当前顺序：${labels}` : "添加 2–6 个训练日，建立自己的顺序。"
   };
@@ -2760,7 +2970,8 @@ function addRotationDay() {
     setFieldError("trainingRotationError", "最多设置 6 个训练日。");
     return;
   }
-  const template = getAllTemplates().find(item => item.id !== "beginner_recovery");
+  const template = getAllTemplates().find(item => item.id === "beginner_full_body")
+    || getAllTemplates().find(item => item.id !== "beginner_recovery");
   if (!template) {
     setFieldError("trainingRotationError", "请先创建一个可用训练模板。");
     return;
@@ -2801,8 +3012,19 @@ function savePreferences() {
   const changedRhythm = normalizedPlanDays.join(",") !== state.settings.plannedWorkoutDays.join(",");
   const previousRotationSignature = JSON.stringify({
     mode: state.settings.trainingRotation.mode,
-    days: state.settings.trainingRotation.days.map(day => [day.templateId, day.label])
+    days: state.settings.trainingRotation.days.map(day => [day.templateId, day.label]),
+    starterTemplateId: state.settings.starterTemplateId
   });
+  const availableEquipment = $("availableEquipment").value;
+  const experienceLevel = $("experienceLevel").value;
+  const selectedEnvironment = $("preferredEnvironment").value;
+  const preferredEnvironment = availableEquipment === "bodyweight"
+    ? "home"
+    : availableEquipment === "dumbbells"
+      ? "mixed"
+    : ["machines", "free_weights"].includes(availableEquipment)
+      ? "gym"
+      : selectedEnvironment;
   const rotationMode = $("trainingRotationMode").value;
   const rotationDays = rotationMode === "custom" ? collectRotationDays() : [];
   if (rotationMode === "custom" && rotationDays.length < 2) {
@@ -2813,7 +3035,13 @@ function savePreferences() {
   state.settings = normalizeSettings({
     ...state.settings,
     trainingGoal: $("trainingGoal").value,
-    preferredEnvironment: $("preferredEnvironment").value,
+    preferredEnvironment,
+    availableEquipment,
+    experienceLevel,
+    starterTemplateId: starterTemplateIdForEquipment(availableEquipment),
+    firstWorkoutSetupCompletedAt: availableEquipment && experienceLevel
+      ? state.settings.firstWorkoutSetupCompletedAt || new Date().toISOString()
+      : "",
     weeklyWorkoutTarget: $("weeklyWorkoutTarget").value,
     plannedWorkoutDays: normalizedPlanDays,
     weeklyRhythmHistory: changedRhythm
@@ -2834,7 +3062,8 @@ function savePreferences() {
   }, state.templates);
   const nextRotationSignature = JSON.stringify({
     mode: state.settings.trainingRotation.mode,
-    days: state.settings.trainingRotation.days.map(day => [day.templateId, day.label])
+    days: state.settings.trainingRotation.days.map(day => [day.templateId, day.label]),
+    starterTemplateId: state.settings.starterTemplateId
   });
   if (previousRotationSignature !== nextRotationSignature && state.nextWorkoutPlan?.status !== "started") {
     const sourceWorkout = sourceWorkoutForNextPlan() || state.workouts.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
@@ -5217,6 +5446,30 @@ function renderDailyCoach() {
     `;
     return;
   }
+  if (needsFirstWorkoutSetup()) {
+    coach.innerHTML = `
+      <div class="daily-coach-main">
+        <span class="coach-status starter">首次训练</span>
+        <div>
+          <h2>先选适合你的训练条件</h2>
+          <p class="muted">用几秒确认场地、器械和经验，避免给你不适用的动作。</p>
+        </div>
+      </div>
+      <div class="daily-coach-body">
+        <article class="coach-decision">
+          <span>无需账号 · 约 25–35 分钟</span>
+          <strong>为你匹配第一套训练</strong>
+          <small>居家无器械、哑铃、固定器械和自由重量均可选择。</small>
+        </article>
+        <div class="coach-actions">
+          <button id="startCoachWorkoutBtn" type="button">选择条件并开始</button>
+          <button id="showExtendedDailyBtn" class="text-button" type="button">先调整今天的状态</button>
+        </div>
+        <p class="coach-setup-note">开始前仍会确认异常疼痛；有疼痛时，恢复方案优先。</p>
+      </div>
+    `;
+    return;
+  }
   if (nextPlan) {
     const actionLabel = nextPlan.status === "suggested" ? "确认并开始" : "开始训练";
     const actionId = "startNextWorkoutBtn";
@@ -5301,13 +5554,17 @@ function buildDailyCoachRecommendation() {
   let statusLabel = "正常练";
   let template = pickRotationTemplate();
   let summary = "今天适合做一次稳定的新手训练，重点是动作质量和完成感。";
-  let intensityText = "稳稳完成，每组结束时保留约 2–3 次余力。";
+  let intensityText = state.settings.experienceLevel === "experienced"
+    ? "先用比平时保守一档的重量校准记录，再按完成感调整。"
+    : "稳稳完成，每组结束时保留约 2–3 次余力。";
   let caution = "";
 
   if (!hasSavedReadiness && daily.pain < 4) {
     reasons.push("今天还没有保存状态，因此先使用安全、均衡的新手默认方案。");
-    reasons.push("这套训练覆盖全身，不要求你先理解复杂的训练术语。");
-    reasons.push("如果今天状态特殊，可以先调整状态再开始。");
+    reasons.push(state.settings.experienceLevel === "experienced"
+      ? "你已训练过一段时间，第一轮先用熟悉的轻重量校准后续建议。"
+      : "你刚开始训练，这套方案会用少量基础动作建立完成感。");
+    reasons.push(`当前目标：${goalLabel()}；第一套训练先建立与目标一致的基础节奏。`);
     return {
       statusKey: "starter",
       statusLabel: "新手默认方案",
@@ -5358,6 +5615,7 @@ function buildDailyCoachRecommendation() {
   if (water < waterTarget * 0.75) reasons.push(`饮水 ${water} ml 低于目标 ${waterTarget} ml，训练前先补一次水。`);
   if (state.settings.trainingGoal !== "general") reasons.push(`当前目标：${goalLabel()}，建议会优先考虑这个方向。`);
   if (state.settings.preferredEnvironment !== "gym") reasons.push(`训练环境偏好：${environmentLabel()}。`);
+  if (state.settings.experienceLevel === "experienced") reasons.push("你已训练过一段时间，建议从保守一档的熟悉重量开始校准。");
   if (!recentWorkouts.length) reasons.push("还没有训练历史，系统先推荐新手友好的基础模板。");
   if (hardWorkouts.length && statusKey !== "recovery") reasons.push(`最近 7 天有 ${hardWorkouts.length} 次高 RPE 训练，今天不建议冲极限。`);
   if (!reasons.length) reasons.push("睡眠、疼痛和训练间隔没有明显风险信号。");
@@ -5375,7 +5633,7 @@ function buildDailyCoachRecommendation() {
 }
 
 function pickRotationTemplate() {
-  const resolved = TrainingRotationModel.resolveNextDay(state.settings.trainingRotation, getAllTemplates());
+  const resolved = resolveTrainingDay(state.settings.trainingRotation, getAllTemplates());
   return resolved.template || beginnerTemplates.find(item => item.id === "beginner_full_body");
 }
 
@@ -7329,6 +7587,11 @@ function bindActions() {
   $("openExtendedDailyBtn").addEventListener("click", openExtendedDailyFromReadiness);
   $("quickReadinessDialog").addEventListener("click", event => {
     if (event.target === $("quickReadinessDialog")) closeQuickReadiness();
+  });
+  $("firstWorkoutSetupForm").addEventListener("submit", saveFirstWorkoutSetup);
+  $("cancelFirstWorkoutSetupBtn").addEventListener("click", closeFirstWorkoutSetup);
+  $("firstWorkoutSetupDialog").addEventListener("click", event => {
+    if (event.target === $("firstWorkoutSetupDialog")) closeFirstWorkoutSetup();
   });
   $("noPainBtn").addEventListener("click", () => answerPainGate(false));
   $("hasPainBtn").addEventListener("click", () => answerPainGate(true));

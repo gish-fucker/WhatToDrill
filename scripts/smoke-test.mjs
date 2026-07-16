@@ -251,7 +251,7 @@ async function run() {
       ...process.env,
       HOST: "127.0.0.1",
       PORT: String(appPort),
-      APP_VERSION: "1.18.0",
+      APP_VERSION: "1.21.0",
       OPENAI_API_KEY: "",
       ADVICE_RATE_LIMIT: "10",
       ACCOUNT_RATE_LIMIT: "5",
@@ -483,7 +483,7 @@ async function run() {
     assert(serverHttp.csp?.includes("frame-ancestors 'none'"), "Static responses should include a restrictive CSP.");
     assert(serverHttp.frameOptions === "DENY", "Static responses should prevent framing.");
     assert(/^[0-9a-f-]{36}$/i.test(serverHttp.requestId), "API responses should expose a generated request ID.");
-    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.18.0", "Health response should expose status and release version.");
+    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.21.0", "Health response should expose status and release version.");
     assert(Number.isInteger(serverHttp.health.uptimeSeconds) && serverHttp.health.uptimeSeconds >= 0, "Health response should expose a valid uptime.");
     assert(serverHttp.health.openaiConfigured === false && serverHttp.health.accountConfigured === true && serverHttp.health.entitlementConfigured === false && serverHttp.health.aiAccessMode === "deployment_shared" && serverHttp.health.model === "gpt-5-mini", "Health response should expose non-secret service configuration state.");
     assert(serverHttp.indexCache === "no-cache", "HTML should revalidate instead of using a stale shell.");
@@ -620,8 +620,8 @@ async function run() {
     assert(todayCheck.recentIncludesToday === 1, "Recent filters should include local today.");
     assert(todayCheck.title === "WhatToDrill · 今天练什么", "The application should use the approved product name.");
     assert(!todayCheck.firstUseText.includes("Personal log") && !todayCheck.firstUseText.includes("Daily Coach"), "The first-use surface should not expose legacy English headings.");
-    assert(todayCheck.coachStatus === "新手默认方案", "Empty daily coach should clearly identify the default beginner plan.");
-    assert(todayCheck.coachTitle === "全身入门", "Empty daily coach should recommend full-body beginner template.");
+    assert(todayCheck.coachStatus === "首次训练", "Empty daily coach should identify the one-time training setup.");
+    assert(todayCheck.coachTitle === "为你匹配第一套训练", "Empty daily coach should not assume gym access before setup.");
     assert(todayCheck.primaryStartButtons.length === 1 && todayCheck.primaryStartButtons[0] === "startCoachWorkoutBtn", `The first-use home should expose one visually primary start action: ${JSON.stringify(todayCheck.primaryStartButtons)}.`);
     assert(todayCheck.headerTechnicalAbsent && todayCheck.settingsStatusPresent, "Normal first-use home should keep technical controls out of the header and preserve them in settings.");
     assert(!todayCheck.onboardingVisible && todayCheck.extendedDailyHidden && todayCheck.weeklyTargetHidden && todayCheck.supportAgreementHidden, "First-use home should hide onboarding, extended records, weekly targets, and support agreements.");
@@ -986,6 +986,13 @@ async function run() {
     await navigate(cdp, `${baseUrl}/privacy.html`);
     const onlinePrivacyBeforeOffline = await evaluate(cdp, `document.querySelector("h1")?.textContent`);
     assert(onlinePrivacyBeforeOffline === "隐私政策", "Privacy policy should load before testing navigation cache isolation.");
+    await evaluate(cdp, `(() => {
+      const previous = localStorage.getItem(${JSON.stringify(storageKey)});
+      if (previous === null) localStorage.removeItem("smoke_offline_previous_state");
+      else localStorage.setItem("smoke_offline_previous_state", previous);
+      localStorage.removeItem(${JSON.stringify(storageKey)});
+      localStorage.removeItem(${JSON.stringify(workoutDraftKey)});
+    })()`);
 
     await cdp.send("Network.enable");
     await cdp.send("Network.emulateNetworkConditions", {
@@ -1015,18 +1022,50 @@ async function run() {
     assert(offlineLoad.hasApp, "Offline reload should render the app shell.");
     assert(offlineLoad.noticeVisible && offlineLoad.noticeText.includes("仍可以训练和记录"), `Offline mode should show one concise global notice while keeping local recording available: ${JSON.stringify(offlineLoad)}.`);
     assert(!offlineLoad.overflow, "Offline app shell should not overflow.");
+    const offlineFirstSetup = await evaluate(cdp, `(() => {
+      document.querySelector("#startCoachWorkoutBtn").click();
+      document.querySelector('input[name="firstWorkoutCondition"][value="dumbbells"]').click();
+      document.querySelector('input[name="firstWorkoutExperience"][value="beginner"]').click();
+      document.querySelector('input[name="firstWorkoutGoal"][value="general"]').click();
+      document.querySelector("#firstWorkoutSetupForm").requestSubmit();
+      const setupPersisted = JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)}));
+      document.querySelector("#hasPainBtn").click();
+      return {
+        setupPersisted: setupPersisted.settings.starterTemplateId,
+        setupEnvironment: setupPersisted.settings.preferredEnvironment,
+        profileStatus: starterProfileConsistency(setupPersisted.settings).status,
+        workoutTitle: document.querySelector("#workoutTitle").value,
+        pain: state.dailyLogs.find(log => log.date === today())?.pain,
+        setupClosed: !document.querySelector("#firstWorkoutSetupDialog").open
+      };
+    })()`);
+    assert(offlineFirstSetup.setupPersisted === "starter_dumbbell_full_body" && offlineFirstSetup.setupEnvironment === "mixed" && offlineFirstSetup.profileStatus === "valid" && offlineFirstSetup.setupClosed, `Offline users should be able to complete and persist first-workout setup: ${JSON.stringify(offlineFirstSetup)}.`);
+    assert(offlineFirstSetup.pain === 4 && offlineFirstSetup.workoutTitle === "恢复拉伸", `Pain should override the selected starter template even when setup is completed offline: ${JSON.stringify(offlineFirstSetup)}.`);
     await cdp.send("Network.emulateNetworkConditions", {
       offline: false,
       latency: 0,
       downloadThroughput: -1,
       uploadThroughput: -1
     });
+    await evaluate(cdp, `(() => {
+      const previous = localStorage.getItem("smoke_offline_previous_state");
+      if (previous === null) localStorage.removeItem(${JSON.stringify(storageKey)});
+      else localStorage.setItem(${JSON.stringify(storageKey)}, previous);
+      localStorage.removeItem("smoke_offline_previous_state");
+      activeWorkoutSession = null;
+      clearWorkoutDraft();
+    })()`);
     {
       const loaded = cdp.waitFor("Page.loadEventFired").catch(() => null);
       await cdp.send("Page.reload", { ignoreCache: false });
       await loaded;
       await delay(500);
     }
+    await evaluate(cdp, `(() => {
+      activeWorkoutSession = null;
+      clearWorkoutDraft();
+      renderAll();
+    })()`);
 
     const settingsEntry = await evaluate(cdp, `(() => {
       document.querySelector("#openSettingsBtn").click();
@@ -1041,7 +1080,7 @@ async function run() {
       document.querySelector("#showExtendedDailyBtn").click();
       return {
         open: document.querySelector("#quickReadinessDialog").open,
-        questions: document.querySelectorAll(".readiness-question").length,
+        questions: document.querySelectorAll("#quickReadinessDialog .readiness-question").length,
         focusedName: document.activeElement?.name
       };
     })()`);
@@ -1069,7 +1108,7 @@ async function run() {
     }))()`);
     assert(afterDailySave.dailyLogs === 1, "Saving daily state should create the first daily log.");
     assert(afterDailySave.hidden, "Saving a daily log should hide onboarding.");
-    assert(afterDailySave.coachStatus === "已根据今天状态调整", "Saved daily state should be reflected in the decision label.");
+    assert(afterDailySave.coachStatus === "首次训练", `Saving readiness alone should not bypass the required first-workout profile: ${JSON.stringify(afterDailySave)}.`);
 
     const quickReadiness = await evaluate(cdp, `(() => {
       document.querySelector("#showExtendedDailyBtn").click();
@@ -1090,7 +1129,7 @@ async function run() {
       };
     })()`);
     assert(!quickReadiness.open && quickReadiness.sleep === 8 && quickReadiness.energy === 4 && quickReadiness.soreness === 1 && quickReadiness.pain === 0, "Quick readiness choices should map to the existing daily-state values.");
-    assert(quickReadiness.readinessComplete && quickReadiness.label === "已根据今天状态调整", "Completing readiness should update and label the plan.");
+    assert(quickReadiness.readinessComplete && quickReadiness.label === "首次训练", "Completing readiness should preserve the required first-workout setup step.");
 
     await evaluate(cdp, `document.querySelector('[data-tab="insights"]').click()`);
     await delay(150);
@@ -1173,18 +1212,206 @@ async function run() {
     const freshStart = await evaluate(cdp, `(() => ({
       hasStart: Boolean(document.querySelector("#startCoachWorkoutBtn")),
       coachText: document.querySelector("#dailyCoach")?.innerText,
+      starterTemplates: ["starter_home_bodyweight", "starter_dumbbell_full_body", "starter_gym_machines", "starter_free_weights"].map(id => beginnerTemplates.find(template => template.id === id)?.name),
       storage: localStorage.getItem(${JSON.stringify(storageKey)}),
       draft: localStorage.getItem(${JSON.stringify(workoutDraftKey)}),
       initializing: document.body.classList.contains("app-initializing")
     }))()`);
     assert(freshStart.hasStart, `Fresh state should restore the daily coach start action: ${JSON.stringify(freshStart)}.`);
+    assert(freshStart.starterTemplates.every(Boolean), `All four equipment-compatible starter templates should exist: ${JSON.stringify(freshStart.starterTemplates)}.`);
+    const starterProfileRules = await evaluate(cdp, `(() => {
+      const snapshot = JSON.parse(JSON.stringify(state));
+      const templates = getAllTemplates();
+      const mapping = ["bodyweight", "dumbbells", "machines", "free_weights"]
+        .map(equipment => [equipment, starterTemplateIdForEquipment(equipment)]);
+      const legacyImported = normalizeImportedState({
+        workouts: [{ id: "legacy-workout", date: today(), title: "旧训练", exercises: [] }],
+        settings: { trainingRotation: TrainingRotationModel.defaultRotation() }
+      });
+      Object.assign(state, legacyImported);
+      const legacy = {
+        status: starterProfileConsistency(state.settings).status,
+        needsSetup: needsFirstWorkoutSetup(),
+        templateId: resolveTrainingDay(state.settings.trainingRotation, getAllTemplates()).template?.id
+      };
+      const contradictoryImported = normalizeImportedState({
+        workouts: [{ id: "imported-workout", date: today(), title: "导入训练", exercises: [] }],
+        settings: {
+          trainingRotation: TrainingRotationModel.defaultRotation(),
+          preferredEnvironment: "gym",
+          availableEquipment: "machines",
+          experienceLevel: "beginner",
+          starterTemplateId: "starter_home_bodyweight",
+          firstWorkoutSetupCompletedAt: new Date().toISOString()
+        }
+      });
+      Object.assign(state, contradictoryImported);
+      const contradictory = {
+        status: starterProfileConsistency(state.settings).status,
+        needsSetup: needsFirstWorkoutSetup(),
+        starterIgnored: starterTemplateForSettings(getAllTemplates()) === null,
+        resolvedTemplateId: resolveTrainingDay(state.settings.trainingRotation, getAllTemplates()).template?.id
+      };
+      state.settings = normalizeSettings({
+        ...state.settings,
+        preferredEnvironment: "mixed",
+        availableEquipment: "dumbbells",
+        experienceLevel: "experienced",
+        starterTemplateId: "starter_dumbbell_full_body",
+        firstWorkoutSetupCompletedAt: new Date().toISOString()
+      }, state.templates);
+      const fullBody = resolveTrainingDay(TrainingRotationModel.defaultRotation(), getAllTemplates()).template?.id;
+      const upperLower = resolveTrainingDay({ mode: "upper_lower", currentIndex: 0 }, getAllTemplates()).template?.id;
+      const custom = resolveTrainingDay({
+        mode: "custom",
+        currentIndex: 0,
+        days: [
+          { id: "custom_recovery", templateId: "beginner_recovery", label: "恢复" },
+          { id: "custom_full", templateId: "beginner_full_body", label: "全身" }
+        ]
+      }, getAllTemplates()).template?.id;
+      Object.assign(state, snapshot);
+      renderAll();
+      return { mapping, legacy, contradictory, fullBody, upperLower, custom };
+    })()`);
+    assert(JSON.stringify(starterProfileRules.mapping) === JSON.stringify([
+      ["bodyweight", "starter_home_bodyweight"],
+      ["dumbbells", "starter_dumbbell_full_body"],
+      ["machines", "starter_gym_machines"],
+      ["free_weights", "starter_free_weights"]
+    ]), `Every equipment choice should map to exactly one starter template: ${JSON.stringify(starterProfileRules.mapping)}.`);
+    assert(starterProfileRules.legacy.status === "legacy" && !starterProfileRules.legacy.needsSetup && starterProfileRules.legacy.templateId === "beginner_full_body", `A historical user with no starter fields should keep legacy behavior without interruption: ${JSON.stringify(starterProfileRules.legacy)}.`);
+    assert(starterProfileRules.contradictory.status === "invalid" && starterProfileRules.contradictory.needsSetup && starterProfileRules.contradictory.starterIgnored && starterProfileRules.contradictory.resolvedTemplateId === "beginner_full_body", `Contradictory imported starter fields must request setup and never drive the wrong template: ${JSON.stringify(starterProfileRules.contradictory)}.`);
+    assert(starterProfileRules.fullBody === "starter_dumbbell_full_body" && starterProfileRules.upperLower === "beginner_upper" && starterProfileRules.custom === "beginner_recovery", `Only full-body rotation should adopt the valid starter profile: ${JSON.stringify(starterProfileRules)}.`);
+
+    const submittedStarterProfiles = await evaluate(cdp, `(() => {
+      const cases = [
+        { equipment: "bodyweight", environment: "home", templateId: "starter_home_bodyweight", title: "居家无器械全身" },
+        { equipment: "dumbbells", environment: "mixed", templateId: "starter_dumbbell_full_body", title: "哑铃全身" },
+        { equipment: "machines", environment: "gym", templateId: "starter_gym_machines", title: "健身房器械入门" },
+        { equipment: "free_weights", environment: "gym", templateId: "starter_free_weights", title: "自由重量基础" }
+      ];
+      const results = cases.map(testCase => {
+        Object.assign(state, normalizeImportedState({}));
+        activeWorkoutSession = null;
+        clearWorkoutDraft();
+        renderAll();
+        startDailyCoachWorkout();
+        document.querySelector('input[name="firstWorkoutCondition"][value="' + testCase.equipment + '"]').click();
+        document.querySelector('input[name="firstWorkoutExperience"][value="experienced"]').click();
+        document.querySelector('input[name="firstWorkoutGoal"][value="strength"]').click();
+        document.querySelector("#firstWorkoutSetupForm").requestSubmit();
+        const persisted = JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)})).settings;
+        const painGateOpen = document.querySelector("#painGateDialog").open;
+        answerPainGate(false);
+        const result = {
+          ...testCase,
+          persistedEnvironment: persisted.preferredEnvironment,
+          persistedEquipment: persisted.availableEquipment,
+          persistedExperience: persisted.experienceLevel,
+          persistedGoal: persisted.trainingGoal,
+          persistedTemplateId: persisted.starterTemplateId,
+          profileStatus: starterProfileConsistency(persisted).status,
+          painGateOpen,
+          startedTitle: activeWorkoutSession?.title
+        };
+        activeWorkoutSession = null;
+        clearWorkoutDraft();
+        return result;
+      });
+      Object.assign(state, normalizeImportedState({}));
+      activeWorkoutSession = null;
+      clearWorkoutDraft();
+      renderAll();
+      return results;
+    })()`);
+    assert(submittedStarterProfiles.every(item => item.persistedEquipment === item.equipment && item.persistedEnvironment === item.environment && item.persistedTemplateId === item.templateId && item.persistedExperience === "experienced" && item.persistedGoal === "strength" && item.profileStatus === "valid" && item.painGateOpen && item.startedTitle === item.title), `Each real setup form submission should persist and start its matching template: ${JSON.stringify(submittedStarterProfiles)}.`);
+
+    const recoveryStarterGoal = await evaluate(cdp, `(() => {
+      Object.assign(state, normalizeImportedState({}));
+      renderAll();
+      startDailyCoachWorkout();
+      document.querySelector('input[name="firstWorkoutCondition"][value="bodyweight"]').click();
+      document.querySelector('input[name="firstWorkoutExperience"][value="beginner"]').click();
+      document.querySelector('input[name="firstWorkoutGoal"][value="recovery"]').click();
+      document.querySelector("#firstWorkoutSetupForm").requestSubmit();
+      const result = {
+        goal: state.settings.trainingGoal,
+        profileStatus: starterProfileConsistency(state.settings).status,
+        needsSetup: needsFirstWorkoutSetup(),
+        painGateOpen: document.querySelector("#painGateDialog").open
+      };
+      closePainGate();
+      Object.assign(state, normalizeImportedState({}));
+      persistState();
+      renderAll();
+      return result;
+    })()`);
+    assert(recoveryStarterGoal.goal === "recovery" && recoveryStarterGoal.profileStatus === "valid" && !recoveryStarterGoal.needsSetup && recoveryStarterGoal.painGateOpen, `Recovery-first users should complete setup while retaining the pain safety gate: ${JSON.stringify(recoveryStarterGoal)}.`);
+
+    const atomicPreference = await evaluate(cdp, `(() => {
+      const snapshot = JSON.parse(JSON.stringify(state));
+      activateTab("mine", { scroll: false });
+      renderPreferences();
+      document.querySelector("#preferredEnvironment").value = "home";
+      document.querySelector("#availableEquipment").value = "dumbbells";
+      document.querySelector("#experienceLevel").value = "experienced";
+      document.querySelector("#trainingRotationMode").value = "full_body";
+      savePreferences();
+      const result = {
+        environment: state.settings.preferredEnvironment,
+        equipment: state.settings.availableEquipment,
+        experience: state.settings.experienceLevel,
+        starterTemplateId: state.settings.starterTemplateId,
+        completed: Boolean(state.settings.firstWorkoutSetupCompletedAt),
+        status: starterProfileConsistency(state.settings).status
+      };
+      Object.assign(state, snapshot);
+      persistState();
+      renderAll();
+      activateTab("today", { scroll: false });
+      return result;
+    })()`);
+    assert(atomicPreference.environment === "mixed" && atomicPreference.equipment === "dumbbells" && atomicPreference.experience === "experienced" && atomicPreference.starterTemplateId === "starter_dumbbell_full_body" && atomicPreference.completed && atomicPreference.status === "valid", `Saving preferences should update the starter profile atomically and keep dumbbell copy consistent with mixed locations: ${JSON.stringify(atomicPreference)}.`);
     await evaluate(cdp, `document.querySelector("#startCoachWorkoutBtn").click()`);
+    const firstWorkoutSetup = await evaluate(cdp, `(() => ({
+      open: document.querySelector("#firstWorkoutSetupDialog").open,
+      focusedName: document.activeElement?.name,
+      conditions: document.querySelectorAll('input[name="firstWorkoutCondition"]').length,
+      experiences: document.querySelectorAll('input[name="firstWorkoutExperience"]').length,
+      goals: document.querySelectorAll('input[name="firstWorkoutGoal"]').length,
+      painGateClosed: !document.querySelector("#painGateDialog").open
+    }))()`);
+    assert(firstWorkoutSetup.open && firstWorkoutSetup.focusedName === "firstWorkoutCondition" && firstWorkoutSetup.conditions === 4 && firstWorkoutSetup.experiences === 2 && firstWorkoutSetup.goals === 5 && firstWorkoutSetup.painGateClosed, `First start should collect a compact environment profile before pain: ${JSON.stringify(firstWorkoutSetup)}.`);
+    await evaluate(cdp, `(() => {
+      document.querySelector('input[name="firstWorkoutCondition"][value="bodyweight"]').click();
+      document.querySelector('input[name="firstWorkoutExperience"][value="experienced"]').click();
+      document.querySelector('input[name="firstWorkoutGoal"][value="muscle_gain"]').click();
+      document.querySelector("#firstWorkoutSetupForm").requestSubmit();
+    })()`);
     const painGate = await evaluate(cdp, `(() => ({
       open: document.querySelector("#painGateDialog").open,
       focused: document.activeElement?.id,
-      activeTab: document.querySelector(".tab.active")?.dataset.tab
+      activeTab: document.querySelector(".tab.active")?.dataset.tab,
+      setupClosed: !document.querySelector("#firstWorkoutSetupDialog").open,
+      equipment: state.settings.availableEquipment,
+      environment: state.settings.preferredEnvironment,
+      experience: state.settings.experienceLevel,
+      goal: state.settings.trainingGoal,
+      starterTemplateId: state.settings.starterTemplateId
     }))()`);
-    assert(painGate.open && painGate.focused === "noPainBtn" && painGate.activeTab === "today", "Missing pain data should open one focused binary safety gate before training.");
+    assert(painGate.open && painGate.focused === "noPainBtn" && painGate.activeTab === "today" && painGate.setupClosed, "Completing setup should still open the focused binary pain gate.");
+    assert(painGate.equipment === "bodyweight" && painGate.environment === "home" && painGate.experience === "experienced" && painGate.goal === "muscle_gain" && painGate.starterTemplateId === "starter_home_bodyweight", `First-workout choices should persist compatibly: ${JSON.stringify(painGate)}.`);
+    await evaluate(cdp, `closePainGate()`);
+    await reload(cdp);
+    const refreshedSetup = await evaluate(cdp, `(() => ({
+      needsSetup: needsFirstWorkoutSetup(),
+      setupOpen: document.querySelector("#firstWorkoutSetupDialog").open,
+      equipment: state.settings.availableEquipment,
+      starterTemplateId: state.settings.starterTemplateId
+    }))()`);
+    assert(!refreshedSetup.needsSetup && !refreshedSetup.setupOpen && refreshedSetup.equipment === "bodyweight" && refreshedSetup.starterTemplateId === "starter_home_bodyweight", `Refreshing a valid first-workout profile should not repeat setup: ${JSON.stringify(refreshedSetup)}.`);
+    await evaluate(cdp, `startDailyCoachWorkout()`);
     await evaluate(cdp, `document.querySelector("#noPainBtn").click()`);
     await delay(300);
     const loadedWorkout = await evaluate(cdp, `(() => ({
@@ -1201,11 +1428,11 @@ async function run() {
       currentStatus: activeWorkoutSession?.exercises[0]?.sets[0]?.status
     }))()`);
     assert(loadedWorkout.activeTab === "workout", "Coach start should activate workout tab.");
-    assert(loadedWorkout.title === "全身入门", "Coach start should prefill a clean workout title.");
+    assert(loadedWorkout.title === "居家无器械全身", "Coach start should load the selected compatible template.");
     assert(loadedWorkout.progress === "0", "Loaded template should start at 0 percent complete.");
-    assert(loadedWorkout.sets === "0/11", "Loaded beginner template should expose 11 planned sets.");
+    assert(loadedWorkout.sets === "0/8", "Loaded home template should expose eight planned sets.");
     assert(loadedWorkout.collectedSets === 0, "Template cues should not count as completed workout sets.");
-    assert(loadedWorkout.focusedVisible && loadedWorkout.currentExercise === "腿举" && loadedWorkout.currentSetText.includes("第 1 组 / 共 3 组") && loadedWorkout.currentSetText.includes("完成这组"), "Coach start should focus the first planned set and its explicit completion action.");
+    assert(loadedWorkout.focusedVisible && loadedWorkout.currentExercise === "椅子深蹲" && loadedWorkout.currentSetText.includes("第 1 组 / 共 2 组") && loadedWorkout.currentSetText.includes("完成这组"), "Coach start should focus the first compatible planned set.");
     assert(loadedWorkout.legacyHidden && loadedWorkout.sessionVersion === 3 && loadedWorkout.currentStatus === "pending", "Focused training should hide the legacy editor and keep the set explicitly pending.");
 
     const emptyFinish = await evaluate(cdp, `(() => {
@@ -1249,7 +1476,7 @@ async function run() {
         quickControls: ["decreaseFocusedPrimaryBtn", "increaseFocusedPrimaryBtn", "decreaseFocusedWeightBtn", "increaseFocusedWeightBtn", "extendFocusedRestBtn", "resetFocusedRestBtn", "skipFocusedRestBtn"].every(id => Boolean(document.getElementById(id)))
       };
     })()`);
-    assert(completedFocusedSet.completed === 1 && completedFocusedSet.currentExercise === "腿举" && completedFocusedSet.undoVisible && completedFocusedSet.firstStatus === "completed", "Completing a set should advance, update progress, and expose undo.");
+    assert(completedFocusedSet.completed === 1 && completedFocusedSet.currentExercise === "椅子深蹲" && completedFocusedSet.undoVisible && completedFocusedSet.firstStatus === "completed", "Completing a set should advance, update progress, and expose undo.");
     assert(completedFocusedSet.restTime === "01:30" && completedFocusedSet.restContext.includes("下一组") && completedFocusedSet.inheritedWeight === "42.5" && completedFocusedSet.quickControls, `A completed set should start guided rest, preserve weight, and expose quick controls: ${JSON.stringify(completedFocusedSet)}.`);
     const adjustedFocusedSet = await evaluate(cdp, `(() => {
       document.querySelector("#increaseFocusedPrimaryBtn").click();
@@ -1326,7 +1553,7 @@ async function run() {
       renderFocusedWorkoutSession();
       return { afterComplete, afterUndo };
     })()`);
-    assert(exerciseTransitionAndUndo.afterComplete.transitionKind === "exercise" && exerciseTransitionAndUndo.afterComplete.currentExercise === "卧推" && exerciseTransitionAndUndo.afterComplete.context.includes("下一动作：卧推") && exerciseTransitionAndUndo.afterComplete.restVisible && exerciseTransitionAndUndo.afterComplete.undoVisible, `Completing an exercise's last set should foreground the next exercise: ${JSON.stringify(exerciseTransitionAndUndo.afterComplete)}.`);
+    assert(exerciseTransitionAndUndo.afterComplete.transitionKind === "exercise" && exerciseTransitionAndUndo.afterComplete.currentExercise === "墙壁俯卧撑" && exerciseTransitionAndUndo.afterComplete.context.includes("下一动作：墙壁俯卧撑") && exerciseTransitionAndUndo.afterComplete.restVisible && exerciseTransitionAndUndo.afterComplete.undoVisible, `Completing an exercise's last set should foreground the next exercise: ${JSON.stringify(exerciseTransitionAndUndo.afterComplete)}.`);
     assert(exerciseTransitionAndUndo.afterUndo.status === "pending" && exerciseTransitionAndUndo.afterUndo.currentSetId === exerciseTransitionAndUndo.afterUndo.expectedSetId && exerciseTransitionAndUndo.afterUndo.rest === null && exerciseTransitionAndUndo.afterUndo.transition === null && !exerciseTransitionAndUndo.afterUndo.restVisible && exerciseTransitionAndUndo.afterUndo.storedRest === null, `Undo should return to the completed set and clear companion rest consistently: ${JSON.stringify(exerciseTransitionAndUndo.afterUndo)}.`);
 
     const optionalWorkoutApis = await evaluate(cdp, `(async () => {
@@ -1428,7 +1655,7 @@ async function run() {
       saveState();
       return result;
     })()`);
-    assert(focusedFinish.pendingPrompt.title.includes("10 组") && focusedFinish.pendingPrompt.pendingVisible, "Ending early should disclose the remaining set count before summary.");
+    assert(/还有 \d+ 组未处理/.test(focusedFinish.pendingPrompt.title) && focusedFinish.pendingPrompt.pendingVisible, "Ending early should disclose the remaining set count before summary.");
     assert(focusedFinish.summary.visible && focusedFinish.summary.metrics.includes("完成 1 组") && !focusedFinish.summary.preselected && focusedFinish.requiredError, "Summary should show automatic duration and require an unselected plain-language feeling.");
     assert(focusedFinish.workouts === 1 && focusedFinish.savedSets === 1 && focusedFinish.savedReps === 9 && focusedFinish.savedRpe === 6, "Focused save should materialize only the explicitly completed set and map the overall feeling.");
     assert(!focusedFinish.activeSession && focusedFinish.draftRemoved && focusedFinish.activeTabAfterClose === "today", "Successful save should clear the session only after history is written and return to today.");
@@ -1438,11 +1665,19 @@ async function run() {
       const snapshot = JSON.parse(JSON.stringify(state));
       const date = today();
       const baseWorkout = {
-        id: "rule-workout", date, title: "规则训练", sessionRpe: 4, feeling: "easy", sourceTemplateId: "beginner_full_body",
+        id: "rule-workout", date, title: "规则训练", sessionRpe: 4, feeling: "easy", sourceTemplateId: "starter_gym_machines",
         completionSummary: { completed: 2, skipped: 0, pending: 0 },
         exercises: [{ name: "腿举", sets: [{ weight: 20, reps: 8, rpe: 4, note: "" }, { weight: 20, reps: 8, rpe: 4, note: "" }] }]
       };
-      state.settings.trainingRotation = TrainingRotationModel.defaultRotation();
+      state.settings = normalizeSettings({
+        ...state.settings,
+        preferredEnvironment: "gym",
+        availableEquipment: "machines",
+        experienceLevel: "beginner",
+        starterTemplateId: "starter_gym_machines",
+        firstWorkoutSetupCompletedAt: new Date().toISOString(),
+        trainingRotation: TrainingRotationModel.defaultRotation()
+      }, state.templates);
       state.workouts = [baseWorkout];
       state.dailyLogs = [{ id: "rule-good", date, sleepHours: 7.5, energy: 4, soreness: 1, pain: 0 }];
       const easy = buildNextWorkoutPlan(baseWorkout);
@@ -1597,8 +1832,8 @@ async function run() {
       sets: Array.from(document.querySelectorAll(".execution-stat strong")).map(el => el.textContent)[1],
       collectedSets: collectWorkoutExercises().reduce((sum, exercise) => sum + exercise.sets.length, 0)
     }))()`);
-    assert(oneSetProgress.progress === "9", "One completed set should make 1/11 progress.");
-    assert(oneSetProgress.sets === "1/11", "Execution panel should show one completed set.");
+    assert(oneSetProgress.progress === "13", "One completed set should make 1/8 progress for the selected home starter.");
+    assert(oneSetProgress.sets === "1/8", "Execution panel should show one completed set for the selected home starter.");
     assert(oneSetProgress.collectedSets === 1, "Only one real set should be collected for saving.");
 
     await evaluate(cdp, `document.querySelector("#finishWorkoutBtn").click()`);
@@ -1745,7 +1980,7 @@ async function run() {
     })()`);
     assert(!previousSetHistory.before.hidden && previousSetHistory.before.button, "A repeated exercise should expose its latest history.");
     assert(previousSetHistory.before.text.includes(previousSetHistory.today) && previousSetHistory.before.text.includes("1 组"), "Exercise history should show the latest date and set count.");
-    assert(previousSetHistory.weight === "20" && previousSetHistory.reps === "10" && previousSetHistory.rpe === "6", "Reuse should fill weight, reps, and RPE from the latest exercise.");
+    assert(previousSetHistory.weight === "20" && previousSetHistory.reps === "10" && previousSetHistory.rpe === "5", "Reuse should fill weight, reps, and RPE from the latest selected starter exercise.");
     assert(previousSetHistory.sets === 1 && previousSetHistory.collectedSets === 1, "Reuse should copy exactly the saved sets into the active workout.");
     assert(previousSetHistory.toast.includes("上次训练数据"), "Reuse should confirm what was filled.");
     assert(!previousSetHistory.overflow, "Exercise history should not overflow the workout layout.");
@@ -2844,6 +3079,8 @@ async function run() {
           dailyLogs: state.dailyLogs.length,
           workouts: state.workouts.length,
           storageRemoved: localStorage.getItem(${JSON.stringify(storageKey)}) === null,
+          needsFirstWorkoutSetup: needsFirstWorkoutSetup(),
+          hasSetupAction: Boolean(document.querySelector("#startCoachWorkoutBtn")),
           toast: document.querySelector("#toast")?.textContent
         }
       };
@@ -2855,6 +3092,7 @@ async function run() {
     assert(!dataReset.afterConfirm.open, "Confirm should close the clear data dialog.");
     assert(dataReset.afterConfirm.dailyLogs === 0 && dataReset.afterConfirm.workouts === 0, "Confirm should reset local records.");
     assert(dataReset.afterConfirm.storageRemoved, "Confirm should remove the persisted local state.");
+    assert(dataReset.afterConfirm.needsFirstWorkoutSetup && dataReset.afterConfirm.hasSetupAction, "Clearing all data should require first-workout setup again.");
     assert(dataReset.afterConfirm.toast.includes("所有本地数据已清空"), "Confirm should explain that local data was cleared.");
 
     await evaluate(cdp, `activateTab("help"); window.scrollTo(0, 0);`);
@@ -2971,7 +3209,7 @@ async function run() {
         overflow: document.documentElement.scrollWidth > innerWidth
       };
     })()`);
-    assert(updateFlow.version.includes("v1.20.0"), "Help should display the current semantic app version.");
+    assert(updateFlow.version.includes("v1.21.0"), "Help should display the current semantic app version.");
     assert(updateFlow.shown && updateFlow.dismissed, "App update banner should be visible and dismissible.");
     assert(updateFlow.message?.type === "SKIP_WAITING" && updateFlow.buttonText === "更新中", "Confirmed update should activate the waiting service worker with clear feedback.");
     assert(!updateFlow.overflow, "Update banner should not cause desktop overflow.");
@@ -3011,8 +3249,39 @@ async function run() {
       mobile: true
     });
     await reload(cdp);
+    const mobileFirstSetup = await evaluate(cdp, `(() => {
+      const snapshot = JSON.parse(JSON.stringify(state));
+      Object.assign(state, normalizeImportedState({}));
+      renderAll();
+      document.querySelector("#startCoachWorkoutBtn").click();
+      const dialog = document.querySelector("#firstWorkoutSetupDialog");
+      const bounds = dialog.getBoundingClientRect();
+      const targets = [
+        ...dialog.querySelectorAll(".readiness-options span"),
+        ...dialog.querySelectorAll(".confirm-dialog-actions button")
+      ].map(element => element.getBoundingClientRect().height);
+      dialog.scrollTop = dialog.scrollHeight;
+      const result = {
+        open: dialog.open,
+        focusedName: document.activeElement?.name,
+        width: bounds.width,
+        viewportWidth: innerWidth,
+        overflow: document.documentElement.scrollWidth > innerWidth,
+        bottomReachable: dialog.scrollTop + dialog.clientHeight >= dialog.scrollHeight - 1,
+        targets
+      };
+      closeFirstWorkoutSetup();
+      Object.assign(state, snapshot);
+      persistState();
+      renderAll();
+      return result;
+    })()`);
+    assert(mobileFirstSetup.open && mobileFirstSetup.focusedName === "firstWorkoutCondition", `The 390px setup dialog should open with reachable keyboard focus: ${JSON.stringify(mobileFirstSetup)}.`);
+    assert(mobileFirstSetup.width <= mobileFirstSetup.viewportWidth - 24 && !mobileFirstSetup.overflow && mobileFirstSetup.bottomReachable, `The 390px setup dialog should fit horizontally and scroll to all content: ${JSON.stringify(mobileFirstSetup)}.`);
+    assert(mobileFirstSetup.targets.every(height => height >= 44), `Every setup choice and action should provide a 44px mobile touch target: ${JSON.stringify(mobileFirstSetup.targets)}.`);
     await evaluate(cdp, `(() => {
-      startFocusedWorkoutSession(beginnerTemplates[0], beginnerTemplates[0].name);
+      const mobileTemplate = beginnerTemplates.find(template => template.id === "beginner_full_body");
+      startFocusedWorkoutSession(mobileTemplate, mobileTemplate.name);
       activateTab("workout", { scroll: false });
       document.querySelector("#completeFocusedSetBtn").click();
       window.scrollTo(0, 0);
