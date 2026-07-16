@@ -1879,6 +1879,113 @@ input[type="checkbox"] {
   appearance: none;
 }
 
+.focused-rest-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  padding: 16px 18px;
+  border: 1px solid #cdded6;
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, var(--primary-soft) 0%, #f6faf8 100%);
+}
+
+.focused-rest-status {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 3px 12px;
+  min-width: 0;
+}
+
+.focused-rest-status span {
+  color: var(--primary-strong);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.focused-rest-status strong {
+  justify-self: end;
+  color: var(--primary-strong);
+  font-size: clamp(28px, 5vw, 38px);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+}
+
+.focused-rest-status p {
+  grid-column: 1 / -1;
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.focused-rest-actions {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  gap: 8px;
+}
+
+.focused-rest-actions button {
+  min-width: 88px;
+  min-height: 44px;
+  padding-inline: 12px;
+}
+
+.focused-value-stepper {
+  display: grid;
+  grid-template-columns: minmax(64px, auto) minmax(0, 1fr) minmax(64px, auto);
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+}
+
+.focused-value-stepper button {
+  min-width: 64px;
+  min-height: 44px;
+  padding-inline: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.focused-value-stepper input {
+  width: 100%;
+  min-width: 0;
+}
+
+.exercise-transition {
+  min-width: 0;
+  border-left: 4px solid var(--accent);
+  background: linear-gradient(135deg, #fff8ef 0%, #fffdf9 100%);
+}
+
+.exercise-transition:not(.focused-rest-panel) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border-top: 1px solid #eadcc8;
+  border-right: 1px solid #eadcc8;
+  border-bottom: 1px solid #eadcc8;
+  border-radius: var(--radius);
+}
+
+.exercise-transition > span {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.exercise-transition > strong {
+  min-width: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
 .completion-only-cue {
   grid-column: 1 / -1;
   margin: 0;
@@ -5066,6 +5173,48 @@ input[type="checkbox"] {
   .focused-more-fields,
   .focused-set-actions {
     grid-template-columns: 1fr;
+  }
+
+  .focused-rest-panel {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    padding: 14px;
+  }
+
+  .focused-rest-actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .focused-rest-actions button {
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    padding-inline: 5px;
+    font-size: 13px;
+  }
+
+  .focused-value-stepper {
+    grid-template-columns: 64px minmax(0, 1fr) 64px;
+    gap: 6px;
+  }
+
+  .focused-value-stepper button {
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    padding-inline: 4px;
+  }
+
+  .exercise-transition:not(.focused-rest-panel) {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+    padding: 13px 14px;
+  }
+
+  .exercise-transition > strong {
+    text-align: left;
   }
 
   .next-plan-controls,

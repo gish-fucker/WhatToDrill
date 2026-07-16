@@ -130,11 +130,20 @@ assert.equal(model.remainingRestSeconds(extended, "2026-07-16T10:00:30.000Z"), 9
 const reset = model.resetRest(extended, "2026-07-16T10:01:00.000Z");
 assert.equal(model.remainingRestSeconds(reset, "2026-07-16T10:01:00.000Z"), 90);
 assert.equal(model.clearRest(reset).companion.rest, null);
+const revived = model.adjustRest(companion, 30, "2026-07-16T10:02:00.000Z");
+assert.equal(model.remainingRestSeconds(revived, "2026-07-16T10:02:00.000Z"), 30, "Adding time after expiry should start from now.");
 
 const movedExercise = model.completeSet(companion, companionSecond, { weight: 45, reps: 8 }, { now: "2026-07-16T10:02:00.000Z" });
 assert.equal(movedExercise.currentSetId, companionThird);
 assert.equal(movedExercise.companion.transition.kind, "exercise", "The final set of an exercise should announce the next exercise.");
 assert.equal(model.prefillCurrentWeight(movedExercise).exercises[1].sets[0].actual.weight, null, "Weights must not carry across exercises.");
+const existingActual = model.updateActual(companion, companionSecond, { weight: 47.5 });
+assert.equal(model.prefillCurrentWeight(existingActual).exercises[0].sets[1].actual.weight, 47.5, "Weight inheritance must not overwrite an existing actual value.");
+let skippedWeight = model.createSession({ exercises: [{ name: "硬拉", sets: [
+  { target: { weight: 60, reps: 5 } }, { target: { weight: 65, reps: 5 } }
+] }] }, { idFactory, startedAt: companionNow });
+skippedWeight = model.skipSet(model.updateActual(skippedWeight, skippedWeight.exercises[0].sets[0].id, { weight: 70 }), skippedWeight.exercises[0].sets[0].id);
+assert.equal(model.prefillCurrentWeight(skippedWeight).exercises[0].sets[1].actual.weight, null, "Skipped sets must not supply inherited weight.");
 const finishedCompanion = model.completeSet(movedExercise, companionThird, { weight: 35, reps: 10 }, { now: "2026-07-16T10:04:00.000Z" });
 assert.equal(finishedCompanion.companion.rest, null, "The final pending set should not start rest.");
 assert.equal(finishedCompanion.companion.transition, null);
@@ -148,5 +157,10 @@ assert.equal(manuallySelected.companion.transition, null, "Manual selection shou
 const v2Draft = model.migrateDraft({ ...companion, version: 2, companion: undefined }, { idFactory, startedAt: companionNow });
 assert.equal(v2Draft.version, 3);
 assert.deepEqual(v2Draft.companion, { rest: null, transition: null });
+const corruptCompanion = model.createSession({
+  ...companion,
+  companion: { rest: { sourceSetId: "missing", startedAt: "bad", endsAt: "bad" }, transition: { sourceSetId: "missing", targetSetId: companionThird, kind: "exercise" } }
+}, { idFactory, startedAt: companionNow });
+assert.deepEqual(corruptCompanion.companion, { rest: null, transition: null }, "Invalid restored companion references must be discarded.");
 
 console.log("Workout session model tests passed.");

@@ -1,6 +1,6 @@
 const STORAGE_KEY = "habit_fitness_app_v1";
 const WORKOUT_DRAFT_KEY = "habit_fitness_workout_draft_v1";
-const APP_VERSION = "1.19.0";
+const APP_VERSION = "1.20.0";
 const CLOUD_ADVICE_CONSENT_VERSION = 1;
 const BACKUP_SCHEMA_VERSION = 1;
 const MAX_WORKOUT_CSV_BYTES = 5 * 1024 * 1024;
@@ -119,6 +119,12 @@ let reminderTimer = null;
 let installPromptEvent = null;
 let lastStorageIssue = "";
 let workoutDraftTimer = null;
+let focusedRestTimer = null;
+let lastRestAlertKey = "";
+let workoutWakeLock = null;
+let workoutWakeLockRequest = null;
+let workoutWakeLockGeneration = 0;
+let focusedSetCompletionLocked = false;
 let editingWorkoutId = null;
 let pendingWorkoutDeleteId = null;
 let pendingDailyDeleteDate = null;
@@ -345,6 +351,7 @@ function activateTab(tabId, options = {}) {
   });
   if (mineOverview) mineOverview.hidden = isMineView;
   if (options.scroll !== false) panel.scrollIntoView({ behavior: preferredScrollBehavior(), block: "start" });
+  syncWorkoutWakeLock();
 }
 
 function bindRanges() {
@@ -982,9 +989,11 @@ function scheduleWorkoutDraftSave() {
 
 function clearWorkoutDraft() {
   window.clearTimeout(workoutDraftTimer);
+  stopFocusedRestTicker();
   workoutDraftTimer = null;
   activeWorkoutSession = null;
   lastCompletedSetId = null;
+  releaseWorkoutWakeLock();
   try {
     localStorage.removeItem(WORKOUT_DRAFT_KEY);
   } catch {
@@ -999,16 +1008,19 @@ function restoreWorkoutDraft() {
     const draft = JSON.parse(raw);
     const savedAt = Date.parse(draft.savedAt);
     const expired = !Number.isFinite(savedAt) || Date.now() - savedAt > 14 * 86400000;
-    if (![1, WorkoutSessionModel.VERSION].includes(draft.version) || expired || !Array.isArray(draft.exercises)) {
+    if (![1, 2, WorkoutSessionModel.VERSION].includes(draft.version) || expired || !Array.isArray(draft.exercises)) {
       localStorage.removeItem(WORKOUT_DRAFT_KEY);
       return false;
     }
 
-    if (draft.version === WorkoutSessionModel.VERSION) {
+    if ([2, WorkoutSessionModel.VERSION].includes(draft.version)) {
       activeWorkoutSession = WorkoutSessionModel.migrateDraft(draft);
       activeWorkoutSession.rotationDayId = typeof draft.rotationDayId === "string" ? draft.rotationDayId : "";
       activeWorkoutSession.sourceTemplateId = typeof draft.sourceTemplateId === "string" ? draft.sourceTemplateId : activeWorkoutSession.templateId || "";
       activeWorkoutSession.nextPlanId = typeof draft.nextPlanId === "string" ? draft.nextPlanId : "";
+      lastCompletedSetId = activeWorkoutSession.companion?.transition?.sourceSetId
+        || activeWorkoutSession.companion?.rest?.sourceSetId
+        || null;
       const legacyExercises = activeWorkoutSession.exercises.map(exercise => ({
         name: exercise.name,
         sets: exercise.sets.map(set => ({
@@ -1691,6 +1703,140 @@ function setStatusLabel(status) {
   return "○ 待完成";
 }
 
+function formatRestTime(seconds) {
+  const safe = Math.max(0, Math.floor(Number(seconds) || 0));
+  return `${String(Math.floor(safe / 60)).padStart(2, "0")}:${String(safe % 60).padStart(2, "0")}`;
+}
+
+function focusedTransitionEntry() {
+  const targetSetId = activeWorkoutSession?.companion?.transition?.targetSetId;
+  return workoutSessionEntries().find(item => item.set.id === targetSetId) || null;
+}
+
+function focusedCompanionMarkup() {
+  const companion = activeWorkoutSession?.companion;
+  const target = focusedTransitionEntry();
+  if (!companion || !target) return "";
+  const kind = companion.transition?.kind === "exercise" ? "exercise" : "set";
+  const context = kind === "exercise"
+    ? `下一动作：${target.exercise.name} · ${focusedTargetText(target.set)}`
+    : `下一组：${target.exercise.name} · 第 ${target.setIndex + 1} 组`;
+  if (!companion.rest) {
+    return kind === "exercise" ? `
+      <section class="exercise-transition" aria-label="下一个动作">
+        <span>接下来</span><strong>${escapeHtml(context)}</strong>
+      </section>
+    ` : "";
+  }
+  const remaining = WorkoutSessionModel.remainingRestSeconds(activeWorkoutSession);
+  return `
+    <section class="focused-rest-panel ${kind === "exercise" ? "exercise-transition" : ""}" aria-label="组间休息">
+      <div class="focused-rest-status">
+        <span id="focusedRestLabel">${remaining ? "休息中" : "休息完成，可以继续"}</span>
+        <strong id="focusedRestTime">${formatRestTime(remaining)}</strong>
+        <p id="focusedRestContext">${escapeHtml(context)}</p>
+      </div>
+      <div class="focused-rest-actions">
+        <button id="extendFocusedRestBtn" class="ghost-button" type="button">+30 秒</button>
+        <button id="resetFocusedRestBtn" class="ghost-button" type="button">重新计时</button>
+        <button id="skipFocusedRestBtn" class="ghost-button" type="button">跳过休息</button>
+      </div>
+    </section>
+  `;
+}
+
+function refreshFocusedRestDisplay() {
+  const time = $("focusedRestTime");
+  const label = $("focusedRestLabel");
+  if (!time || !label || !activeWorkoutSession?.companion?.rest) return;
+  const remaining = WorkoutSessionModel.remainingRestSeconds(activeWorkoutSession);
+  time.textContent = formatRestTime(remaining);
+  label.textContent = remaining ? "休息中" : "休息完成，可以继续";
+}
+
+function stopFocusedRestTicker() {
+  if (focusedRestTimer) window.clearInterval(focusedRestTimer);
+  focusedRestTimer = null;
+}
+
+function startFocusedRestTicker() {
+  stopFocusedRestTicker();
+  refreshFocusedRestDisplay();
+  if (!activeWorkoutSession?.companion?.rest || !WorkoutSessionModel.remainingRestSeconds(activeWorkoutSession)) return;
+  let previous = WorkoutSessionModel.remainingRestSeconds(activeWorkoutSession);
+  focusedRestTimer = window.setInterval(() => {
+    refreshFocusedRestDisplay();
+    const remaining = WorkoutSessionModel.remainingRestSeconds(activeWorkoutSession);
+    if (previous > 0 && remaining === 0) {
+      const alertKey = activeWorkoutSession?.companion?.rest?.endsAt || "";
+      if (document.visibilityState === "visible" && alertKey && lastRestAlertKey !== alertKey) {
+        lastRestAlertKey = alertKey;
+        vibrateWorkout([45, 50, 45]);
+      }
+      stopFocusedRestTicker();
+      activeWorkoutSession = WorkoutSessionModel.clearRest(activeWorkoutSession);
+      persistWorkoutDraft();
+      showToast("休息结束，可以继续");
+      renderFocusedWorkoutSession();
+      return;
+    }
+    previous = remaining;
+  }, 250);
+}
+
+function vibrateWorkout(pattern) {
+  try {
+    navigator.vibrate?.(pattern);
+  } catch {
+    // Optional device feedback must never interrupt recording.
+  }
+}
+
+async function releaseWorkoutWakeLock() {
+  workoutWakeLockGeneration += 1;
+  const lock = workoutWakeLock;
+  workoutWakeLock = null;
+  if (lock && !lock.released) {
+    try {
+      await lock.release();
+    } catch {
+      // Browsers may revoke the lock independently.
+    }
+  }
+}
+
+async function syncWorkoutWakeLock() {
+  const shouldHold = Boolean(activeWorkoutSession)
+    && document.visibilityState === "visible"
+    && $("workout")?.classList.contains("active");
+  if (!shouldHold || !navigator.wakeLock?.request) {
+    await releaseWorkoutWakeLock();
+    return;
+  }
+  if (workoutWakeLock || workoutWakeLockRequest) return;
+  const generation = workoutWakeLockGeneration;
+  workoutWakeLockRequest = navigator.wakeLock.request("screen");
+  try {
+    const acquired = await workoutWakeLockRequest;
+    const stillNeeded = generation === workoutWakeLockGeneration
+      && Boolean(activeWorkoutSession)
+      && document.visibilityState === "visible"
+      && $("workout")?.classList.contains("active");
+    if (!stillNeeded) {
+      try { await acquired.release(); } catch {}
+      return;
+    }
+    workoutWakeLock = acquired;
+    acquired.addEventListener?.("release", () => {
+      if (workoutWakeLock === acquired) workoutWakeLock = null;
+    });
+  } catch {
+    workoutWakeLock = null;
+  } finally {
+    workoutWakeLockRequest = null;
+  }
+}
+
 function renderFocusedWorkoutSession() {
   const panel = $("focusedWorkoutSession");
   if (!panel) return;
@@ -1726,6 +1872,7 @@ function renderFocusedWorkoutSession() {
         <button id="requestFinishFocusedWorkoutBtn" class="text-button" type="button">结束训练</button>
       </div>
     </div>
+    ${current ? focusedCompanionMarkup() : ""}
     ${current ? focusedCurrentSetMarkup(current) : `
       <div class="focused-session-done">
         <strong>计划中的组已全部处理</strong>
@@ -1739,6 +1886,8 @@ function renderFocusedWorkoutSession() {
       <div class="focused-plan-list">${planRows}</div>
     </details>
   `;
+  startFocusedRestTicker();
+  syncWorkoutWakeLock();
 }
 
 function focusedCurrentSetMarkup({ exercise, set, setIndex }) {
@@ -1760,13 +1909,23 @@ function focusedCurrentSetMarkup({ exercise, set, setIndex }) {
         ${set.metric === "completion" ? `<p class="completion-only-cue">完成这段动作后直接确认即可。</p>` : `
           <label>
             实际${escapeHtml(workoutMetricLabel(set.metric))}
-            <input id="focusedPrimaryValue" type="number" min="0" step="${set.metric === "reps" ? "1" : "0.5"}" value="${escapeAttr(primaryValue)}" inputmode="decimal">
+            ${set.metric === "reps" ? `
+              <div class="focused-value-stepper">
+                <button id="decreaseFocusedPrimaryBtn" class="ghost-button" type="button" aria-label="次数减少 1">−1</button>
+                <input id="focusedPrimaryValue" type="number" min="0" step="1" value="${escapeAttr(primaryValue)}" inputmode="numeric">
+                <button id="increaseFocusedPrimaryBtn" class="ghost-button" type="button" aria-label="次数增加 1">+1</button>
+              </div>
+            ` : `<input id="focusedPrimaryValue" type="number" min="0" step="0.5" value="${escapeAttr(primaryValue)}" inputmode="decimal">`}
           </label>
         `}
         ${set.metric === "completion" ? "" : `
           <label>
             重量 kg（可不填）
-            <input id="focusedWeightValue" type="number" min="0" step="0.5" value="${escapeAttr(weightValue)}" inputmode="decimal">
+            <div class="focused-value-stepper">
+              <button id="decreaseFocusedWeightBtn" class="ghost-button" type="button" aria-label="重量减少 2.5 千克">−2.5</button>
+              <input id="focusedWeightValue" type="number" min="0" step="0.5" value="${escapeAttr(weightValue)}" inputmode="decimal">
+              <button id="increaseFocusedWeightBtn" class="ghost-button" type="button" aria-label="重量增加 2.5 千克">+2.5</button>
+            </div>
           </label>
         `}
       </div>
@@ -1785,6 +1944,45 @@ function focusedCurrentSetMarkup({ exercise, set, setIndex }) {
   `;
 }
 
+function adjustFocusedValue(inputId, delta) {
+  const input = $(inputId);
+  if (!input) return;
+  const currentSet = currentWorkoutSet()?.set;
+  const fallback = inputId === "focusedWeightValue"
+    ? currentSet?.actual.weight ?? currentSet?.target.weight ?? 0
+    : currentSet?.actual.reps ?? currentSet?.target.reps ?? 0;
+  const current = numberOrNull(input.value) ?? fallback;
+  const next = Math.max(0, Number((current + delta).toFixed(2)));
+  input.value = String(next);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function extendFocusedRest() {
+  if (!activeWorkoutSession?.companion?.rest) return;
+  activeWorkoutSession = WorkoutSessionModel.adjustRest(activeWorkoutSession, 30);
+  persistWorkoutDraft();
+  refreshFocusedRestDisplay();
+  startFocusedRestTicker();
+}
+
+function resetFocusedRest() {
+  if (!activeWorkoutSession?.companion?.rest) return;
+  activeWorkoutSession = WorkoutSessionModel.resetRest(activeWorkoutSession);
+  lastRestAlertKey = "";
+  persistWorkoutDraft();
+  refreshFocusedRestDisplay();
+  startFocusedRestTicker();
+}
+
+function skipFocusedRest() {
+  if (!activeWorkoutSession?.companion?.rest) return;
+  activeWorkoutSession = WorkoutSessionModel.clearRest(activeWorkoutSession);
+  stopFocusedRestTicker();
+  persistWorkoutDraft();
+  renderFocusedWorkoutSession();
+  $("focusedCurrentSet")?.focus();
+}
+
 function focusedActualPatch() {
   return {
     reps: numberOrNull($("focusedPrimaryValue")?.value),
@@ -1798,15 +1996,24 @@ function persistFocusedActual() {
   const current = currentWorkoutSet();
   if (!current) return;
   activeWorkoutSession = WorkoutSessionModel.updateActual(activeWorkoutSession, current.set.id, focusedActualPatch());
+  if (!activeWorkoutSession.companion?.rest && activeWorkoutSession.companion?.transition) {
+    activeWorkoutSession.companion.transition = null;
+  }
   persistWorkoutDraft();
 }
 
 function completeFocusedSet() {
+  if (focusedSetCompletionLocked) return;
   const current = currentWorkoutSet();
   if (!current) return;
+  focusedSetCompletionLocked = true;
+  window.setTimeout(() => { focusedSetCompletionLocked = false; }, 350);
   const completedId = current.set.id;
-  activeWorkoutSession = WorkoutSessionModel.completeSet(activeWorkoutSession, completedId, focusedActualPatch());
+  activeWorkoutSession = WorkoutSessionModel.completeSet(activeWorkoutSession, completedId, focusedActualPatch(), { now: new Date().toISOString() });
+  activeWorkoutSession = WorkoutSessionModel.prefillCurrentWeight(activeWorkoutSession);
   lastCompletedSetId = completedId;
+  lastRestAlertKey = "";
+  vibrateWorkout(35);
   persistWorkoutDraft();
   renderFocusedWorkoutSession();
   $("focusedCurrentSet")?.focus();
@@ -1817,6 +2024,7 @@ function skipFocusedSet() {
   const current = currentWorkoutSet();
   if (!current) return;
   activeWorkoutSession = WorkoutSessionModel.skipSet(activeWorkoutSession, current.set.id);
+  activeWorkoutSession = WorkoutSessionModel.prefillCurrentWeight(activeWorkoutSession);
   persistWorkoutDraft();
   renderFocusedWorkoutSession();
   $("focusedCurrentSet")?.focus();
@@ -1826,6 +2034,7 @@ function skipFocusedSet() {
 function undoFocusedSet() {
   if (!lastCompletedSetId || !activeWorkoutSession) return;
   activeWorkoutSession = WorkoutSessionModel.undoSet(activeWorkoutSession, lastCompletedSetId);
+  stopFocusedRestTicker();
   lastCompletedSetId = null;
   persistWorkoutDraft();
   renderFocusedWorkoutSession();
@@ -1835,6 +2044,8 @@ function undoFocusedSet() {
 
 function selectFocusedSet(setId) {
   activeWorkoutSession = WorkoutSessionModel.selectSet(activeWorkoutSession, setId);
+  activeWorkoutSession = WorkoutSessionModel.prefillCurrentWeight(activeWorkoutSession);
+  stopFocusedRestTicker();
   persistWorkoutDraft();
   renderFocusedWorkoutSession();
   $("focusedCurrentSet")?.focus();
@@ -7423,6 +7634,34 @@ function bindActions() {
     if (event.target.closest("#focusedCurrentSet")) persistFocusedActual();
   });
   $("focusedWorkoutSession").addEventListener("click", event => {
+    if (event.target.closest("#decreaseFocusedPrimaryBtn")) {
+      adjustFocusedValue("focusedPrimaryValue", -1);
+      return;
+    }
+    if (event.target.closest("#increaseFocusedPrimaryBtn")) {
+      adjustFocusedValue("focusedPrimaryValue", 1);
+      return;
+    }
+    if (event.target.closest("#decreaseFocusedWeightBtn")) {
+      adjustFocusedValue("focusedWeightValue", -2.5);
+      return;
+    }
+    if (event.target.closest("#increaseFocusedWeightBtn")) {
+      adjustFocusedValue("focusedWeightValue", 2.5);
+      return;
+    }
+    if (event.target.closest("#extendFocusedRestBtn")) {
+      extendFocusedRest();
+      return;
+    }
+    if (event.target.closest("#resetFocusedRestBtn")) {
+      resetFocusedRest();
+      return;
+    }
+    if (event.target.closest("#skipFocusedRestBtn")) {
+      skipFocusedRest();
+      return;
+    }
     if (event.target.closest("#requestFinishFocusedWorkoutBtn")) {
       openFocusedFinishDialog();
       return;
@@ -7460,7 +7699,16 @@ function bindActions() {
       scheduleWorkoutDraftSave();
     }
   });
-  window.addEventListener("beforeunload", persistWorkoutDraft);
+  window.addEventListener("beforeunload", () => {
+    stopFocusedRestTicker();
+    releaseWorkoutWakeLock();
+    persistWorkoutDraft();
+  });
+  document.addEventListener("visibilitychange", () => {
+    syncWorkoutWakeLock();
+    if (document.visibilityState === "visible") startFocusedRestTicker();
+    else stopFocusedRestTicker();
+  });
 }
 
 function renderWorkoutSurfaces() {

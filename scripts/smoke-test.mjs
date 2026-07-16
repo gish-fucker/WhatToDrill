@@ -1206,7 +1206,7 @@ async function run() {
     assert(loadedWorkout.sets === "0/11", "Loaded beginner template should expose 11 planned sets.");
     assert(loadedWorkout.collectedSets === 0, "Template cues should not count as completed workout sets.");
     assert(loadedWorkout.focusedVisible && loadedWorkout.currentExercise === "腿举" && loadedWorkout.currentSetText.includes("第 1 组 / 共 3 组") && loadedWorkout.currentSetText.includes("完成这组"), "Coach start should focus the first planned set and its explicit completion action.");
-    assert(loadedWorkout.legacyHidden && loadedWorkout.sessionVersion === 2 && loadedWorkout.currentStatus === "pending", "Focused training should hide the legacy editor and keep the set explicitly pending.");
+    assert(loadedWorkout.legacyHidden && loadedWorkout.sessionVersion === 3 && loadedWorkout.currentStatus === "pending", "Focused training should hide the legacy editor and keep the set explicitly pending.");
 
     const emptyFinish = await evaluate(cdp, `(() => {
       document.querySelector("#requestFinishFocusedWorkoutBtn").click();
@@ -1224,13 +1224,15 @@ async function run() {
     const typedPending = await evaluate(cdp, `(() => {
       document.querySelector("#focusedPrimaryValue").value = "9";
       document.querySelector("#focusedPrimaryValue").dispatchEvent(new Event("input", { bubbles: true }));
+      document.querySelector("#focusedWeightValue").value = "42.5";
+      document.querySelector("#focusedWeightValue").dispatchEvent(new Event("input", { bubbles: true }));
       return {
         status: activeWorkoutSession.exercises[0].sets[0].status,
         actual: activeWorkoutSession.exercises[0].sets[0].actual.reps,
         storedVersion: JSON.parse(localStorage.getItem(${JSON.stringify(workoutDraftKey)})).version
       };
     })()`);
-    assert(typedPending.status === "pending" && typedPending.actual === 9 && typedPending.storedVersion === 2, "Editing the current result should persist without implying completion.");
+    assert(typedPending.status === "pending" && typedPending.actual === 9 && typedPending.storedVersion === 3, "Editing the current result should persist without implying completion.");
 
     const completedFocusedSet = await evaluate(cdp, `(() => {
       const startedAt = activeWorkoutSession.startedAt;
@@ -1240,19 +1242,150 @@ async function run() {
         completed: WorkoutSessionModel.progress(activeWorkoutSession).completed,
         currentExercise: document.querySelector("#focusedCurrentSet h3")?.textContent,
         undoVisible: Boolean(document.querySelector("#undoFocusedSetBtn")),
-        firstStatus: activeWorkoutSession.exercises[0].sets[0].status
+        firstStatus: activeWorkoutSession.exercises[0].sets[0].status,
+        restTime: document.querySelector("#focusedRestTime")?.textContent,
+        restContext: document.querySelector("#focusedRestContext")?.textContent,
+        inheritedWeight: document.querySelector("#focusedWeightValue")?.value,
+        quickControls: ["decreaseFocusedPrimaryBtn", "increaseFocusedPrimaryBtn", "decreaseFocusedWeightBtn", "increaseFocusedWeightBtn", "extendFocusedRestBtn", "resetFocusedRestBtn", "skipFocusedRestBtn"].every(id => Boolean(document.getElementById(id)))
       };
     })()`);
     assert(completedFocusedSet.completed === 1 && completedFocusedSet.currentExercise === "腿举" && completedFocusedSet.undoVisible && completedFocusedSet.firstStatus === "completed", "Completing a set should advance, update progress, and expose undo.");
+    assert(completedFocusedSet.restTime === "01:30" && completedFocusedSet.restContext.includes("下一组") && completedFocusedSet.inheritedWeight === "42.5" && completedFocusedSet.quickControls, `A completed set should start guided rest, preserve weight, and expose quick controls: ${JSON.stringify(completedFocusedSet)}.`);
+    const adjustedFocusedSet = await evaluate(cdp, `(() => {
+      document.querySelector("#increaseFocusedPrimaryBtn").click();
+      document.querySelector("#decreaseFocusedPrimaryBtn").click();
+      document.querySelector("#increaseFocusedWeightBtn").click();
+      document.querySelector("#decreaseFocusedWeightBtn").click();
+      document.querySelector("#extendFocusedRestBtn").click();
+      const extended = document.querySelector("#focusedRestTime")?.textContent;
+      document.querySelector("#resetFocusedRestBtn").click();
+      const reset = document.querySelector("#focusedRestTime")?.textContent;
+      return { reps: document.querySelector("#focusedPrimaryValue").value, weight: document.querySelector("#focusedWeightValue").value, extended, reset };
+    })()`);
+    assert(adjustedFocusedSet.reps === "10" && adjustedFocusedSet.weight === "42.5" && adjustedFocusedSet.extended === "02:00" && adjustedFocusedSet.reset === "01:30", `Quick adjustments and rest controls should persist exact values: ${JSON.stringify(adjustedFocusedSet)}.`);
     await reload(cdp);
     const restoredFocusedSession = await evaluate(cdp, `(() => ({
       visible: !document.querySelector("#focusedWorkoutSession").hidden,
+      version: activeWorkoutSession?.version,
       startedAt: activeWorkoutSession?.startedAt,
       completed: WorkoutSessionModel.progress(activeWorkoutSession).completed,
       currentSetId: activeWorkoutSession?.currentSetId,
-      firstActual: activeWorkoutSession?.exercises[0]?.sets[0]?.actual?.reps
+      firstActual: activeWorkoutSession?.exercises[0]?.sets[0]?.actual?.reps,
+      restSourceSetId: activeWorkoutSession?.companion?.rest?.sourceSetId,
+      restRemaining: WorkoutSessionModel.remainingRestSeconds(activeWorkoutSession),
+      restVisible: Boolean(document.querySelector("#focusedRestTime")),
+      storedVersion: JSON.parse(localStorage.getItem(${JSON.stringify(workoutDraftKey)}))?.version
     }))()`);
     assert(restoredFocusedSession.visible && restoredFocusedSession.startedAt === completedFocusedSet.startedAt && restoredFocusedSession.completed === 1 && restoredFocusedSession.currentSetId && restoredFocusedSession.firstActual === 9, "Reload should restore focused progress, current set, actual input, and original start time.");
+    assert(restoredFocusedSession.version === 3 && restoredFocusedSession.storedVersion === 3 && restoredFocusedSession.restSourceSetId && restoredFocusedSession.restRemaining > 0 && restoredFocusedSession.restVisible, `Version 3 draft recovery should restore the active rest companion without resetting it: ${JSON.stringify(restoredFocusedSession)}.`);
+
+    const skippedFocusedRest = await evaluate(cdp, `(() => {
+      const currentSetId = activeWorkoutSession.currentSetId;
+      document.querySelector("#skipFocusedRestBtn").click();
+      return {
+        currentSetId: activeWorkoutSession.currentSetId,
+        rest: activeWorkoutSession.companion.rest,
+        restPanelVisible: Boolean(document.querySelector("#focusedRestTime")),
+        storedRest: JSON.parse(localStorage.getItem(${JSON.stringify(workoutDraftKey)}))?.companion?.rest
+      };
+    })()`);
+    assert(skippedFocusedRest.currentSetId === restoredFocusedSession.currentSetId && skippedFocusedRest.rest === null && !skippedFocusedRest.restPanelVisible && skippedFocusedRest.storedRest === null, `Skipping rest should keep the next set selected and clear rest from both UI and draft: ${JSON.stringify(skippedFocusedRest)}.`);
+
+    const exerciseTransitionAndUndo = await evaluate(cdp, `(() => {
+      const snapshot = structuredClone(activeWorkoutSession);
+      const previousLastCompletedSetId = lastCompletedSetId;
+      const firstExercise = activeWorkoutSession.exercises[0];
+      firstExercise.sets.forEach((set, index) => {
+        set.status = index < firstExercise.sets.length - 1 ? "completed" : "pending";
+      });
+      const lastSet = firstExercise.sets[firstExercise.sets.length - 1];
+      activeWorkoutSession.currentSetId = lastSet.id;
+      activeWorkoutSession.companion = { rest: null, transition: null };
+      renderFocusedWorkoutSession();
+      document.querySelector("#completeFocusedSetBtn").click();
+      const afterComplete = {
+        transitionKind: activeWorkoutSession.companion.transition?.kind,
+        currentExercise: document.querySelector("#focusedCurrentSet h3")?.textContent,
+        context: document.querySelector("#focusedRestContext")?.textContent,
+        restVisible: Boolean(document.querySelector("#focusedRestTime")),
+        undoVisible: Boolean(document.querySelector("#undoFocusedSetBtn"))
+      };
+      document.querySelector("#undoFocusedSetBtn").click();
+      const afterUndo = {
+        status: activeWorkoutSession.exercises[0].sets.at(-1).status,
+        currentSetId: activeWorkoutSession.currentSetId,
+        expectedSetId: lastSet.id,
+        rest: activeWorkoutSession.companion.rest,
+        transition: activeWorkoutSession.companion.transition,
+        restVisible: Boolean(document.querySelector("#focusedRestTime")),
+        storedRest: JSON.parse(localStorage.getItem(${JSON.stringify(workoutDraftKey)}))?.companion?.rest
+      };
+      activeWorkoutSession = snapshot;
+      lastCompletedSetId = previousLastCompletedSetId;
+      persistWorkoutDraft();
+      renderFocusedWorkoutSession();
+      return { afterComplete, afterUndo };
+    })()`);
+    assert(exerciseTransitionAndUndo.afterComplete.transitionKind === "exercise" && exerciseTransitionAndUndo.afterComplete.currentExercise === "卧推" && exerciseTransitionAndUndo.afterComplete.context.includes("下一动作：卧推") && exerciseTransitionAndUndo.afterComplete.restVisible && exerciseTransitionAndUndo.afterComplete.undoVisible, `Completing an exercise's last set should foreground the next exercise: ${JSON.stringify(exerciseTransitionAndUndo.afterComplete)}.`);
+    assert(exerciseTransitionAndUndo.afterUndo.status === "pending" && exerciseTransitionAndUndo.afterUndo.currentSetId === exerciseTransitionAndUndo.afterUndo.expectedSetId && exerciseTransitionAndUndo.afterUndo.rest === null && exerciseTransitionAndUndo.afterUndo.transition === null && !exerciseTransitionAndUndo.afterUndo.restVisible && exerciseTransitionAndUndo.afterUndo.storedRest === null, `Undo should return to the completed set and clear companion rest consistently: ${JSON.stringify(exerciseTransitionAndUndo.afterUndo)}.`);
+
+    const optionalWorkoutApis = await evaluate(cdp, `(async () => {
+      const vibrateDescriptor = Object.getOwnPropertyDescriptor(navigator, "vibrate");
+      const wakeLockDescriptor = Object.getOwnPropertyDescriptor(navigator, "wakeLock");
+      const vibrationPatterns = [];
+      const requests = [];
+      let releases = 0;
+      let missingApiError = "";
+      activateTab("today", { scroll: false });
+      await releaseWorkoutWakeLock();
+      workoutWakeLock = null;
+      workoutWakeLockRequest = null;
+      Object.defineProperty(navigator, "vibrate", {
+        configurable: true,
+        value: pattern => { vibrationPatterns.push(pattern); return true; }
+      });
+      Object.defineProperty(navigator, "wakeLock", {
+        configurable: true,
+        value: {
+          request: async type => {
+            requests.push(type);
+            return {
+              released: false,
+              addEventListener() {},
+              async release() { this.released = true; releases += 1; }
+            };
+          }
+        }
+      });
+      vibrateWorkout(35);
+      activateTab("workout", { scroll: false });
+      await syncWorkoutWakeLock();
+      activateTab("today", { scroll: false });
+      await Promise.resolve();
+      Object.defineProperty(navigator, "vibrate", { configurable: true, value: undefined });
+      Object.defineProperty(navigator, "wakeLock", { configurable: true, value: undefined });
+      try {
+        activateTab("workout", { scroll: false });
+        vibrateWorkout([45, 50, 45]);
+        await syncWorkoutWakeLock();
+      } catch (error) {
+        missingApiError = error?.message || String(error);
+      }
+      if (vibrateDescriptor) Object.defineProperty(navigator, "vibrate", vibrateDescriptor);
+      else delete navigator.vibrate;
+      if (wakeLockDescriptor) Object.defineProperty(navigator, "wakeLock", wakeLockDescriptor);
+      else delete navigator.wakeLock;
+      return {
+        vibrationPatterns,
+        requests,
+        releases,
+        missingApiError,
+        activeTab: document.querySelector(".tab.active")?.dataset.tab
+      };
+    })()`);
+    assert(optionalWorkoutApis.vibrationPatterns.length === 1 && optionalWorkoutApis.vibrationPatterns[0] === 35, `Supported vibration should receive the completion feedback pattern: ${JSON.stringify(optionalWorkoutApis)}.`);
+    assert(optionalWorkoutApis.requests.length === 1 && optionalWorkoutApis.requests[0] === "screen" && optionalWorkoutApis.releases === 1, `Wake lock should be acquired during visible training and released on tab exit: ${JSON.stringify(optionalWorkoutApis)}.`);
+    assert(!optionalWorkoutApis.missingApiError && optionalWorkoutApis.activeTab === "workout", `Missing vibration and wake lock APIs should degrade without interrupting training: ${JSON.stringify(optionalWorkoutApis)}.`);
 
     const focusedFinish = await evaluate(cdp, `(() => {
       document.querySelector("#requestFinishFocusedWorkoutBtn").click();
@@ -1341,7 +1474,7 @@ async function run() {
     assert(nextWorkoutRules.incomplete.exercises[0].sets[0].weight === 20 && nextWorkoutRules.incomplete.adjustments[0].includes("稳定完成"), "Incomplete sessions should hold the same-day load instead of progressing it.");
     assert(nextWorkoutRules.rotated.title === "下肢训练" && nextWorkoutRules.rotated.sourceComparableWorkoutId === "lower-history" && nextWorkoutRules.rotated.exercises[0].sets[0].weight === 35, "Rotation should choose the next training day and reuse that day's own history.");
 
-    const metricUi = await evaluate(cdp, `(() => {
+    const metricUi = await evaluate(cdp, `(async () => {
       const template = {
         id: "metric-ui",
         name: "计量测试",
@@ -1353,23 +1486,27 @@ async function run() {
       };
       startFocusedWorkoutSession(template, template.name);
       activateTab("workout", { scroll: false });
+      await new Promise(resolve => setTimeout(resolve, 400));
       const seconds = document.querySelector("#focusedCurrentSet").innerText;
       document.querySelector("#completeFocusedSetBtn").click();
+      await new Promise(resolve => setTimeout(resolve, 400));
       const minutes = document.querySelector("#focusedCurrentSet").innerText;
       document.querySelector("#completeFocusedSetBtn").click();
+      await new Promise(resolve => setTimeout(resolve, 400));
       const completion = {
         text: document.querySelector("#focusedCurrentSet").innerText,
         hasPrimary: Boolean(document.querySelector("#focusedPrimaryValue")),
         hasWeight: Boolean(document.querySelector("#focusedWeightValue"))
       };
       document.querySelector("#completeFocusedSetBtn").click();
+      await new Promise(resolve => setTimeout(resolve, 400));
       const statusText = document.querySelector(".focused-plan-list").textContent;
       const progress = WorkoutSessionModel.progress(activeWorkoutSession);
       clearWorkoutDraft();
       renderFocusedWorkoutSession();
       return { seconds, minutes, completion, statusText, progress };
     })()`);
-    assert(metricUi.seconds.includes("实际秒") && metricUi.minutes.includes("实际分钟"), "Focused UI should label second- and minute-based targets in plain language.");
+    assert(metricUi.seconds.includes("实际秒") && metricUi.minutes.includes("实际分钟"), `Focused UI should label second- and minute-based targets in plain language: ${JSON.stringify(metricUi)}.`);
     assert(metricUi.completion.text.includes("完成这段动作") && !metricUi.completion.hasPrimary && !metricUi.completion.hasWeight, "Completion-only sets should not ask for repetitions or weight.");
     assert(metricUi.progress.completed === 3 && metricUi.statusText.includes("✓ 已完成"), "Plan status should combine text, symbol, and color rather than color alone.");
 
@@ -2834,7 +2971,7 @@ async function run() {
         overflow: document.documentElement.scrollWidth > innerWidth
       };
     })()`);
-    assert(updateFlow.version.includes("v1.19.0"), "Help should display the current semantic app version.");
+    assert(updateFlow.version.includes("v1.20.0"), "Help should display the current semantic app version.");
     assert(updateFlow.shown && updateFlow.dismissed, "App update banner should be visible and dismissible.");
     assert(updateFlow.message?.type === "SKIP_WAITING" && updateFlow.buttonText === "更新中", "Confirmed update should activate the waiting service worker with clear feedback.");
     assert(!updateFlow.overflow, "Update banner should not cause desktop overflow.");
@@ -2874,16 +3011,44 @@ async function run() {
       mobile: true
     });
     await reload(cdp);
-    await evaluate(cdp, `document.querySelector('[data-tab="workout"]').click(); window.scrollTo(0, 0);`);
+    await evaluate(cdp, `(() => {
+      startFocusedWorkoutSession(beginnerTemplates[0], beginnerTemplates[0].name);
+      activateTab("workout", { scroll: false });
+      document.querySelector("#completeFocusedSetBtn").click();
+      window.scrollTo(0, 0);
+    })()`);
     await delay(250);
-    const mobile = await evaluate(cdp, `(() => ({
-      width: innerWidth,
-      scrollWidth: document.documentElement.scrollWidth,
-      overflow: document.documentElement.scrollWidth > innerWidth
-    }))()`);
+    const mobile = await evaluate(cdp, `(() => {
+      const companionControlIds = [
+        "decreaseFocusedPrimaryBtn",
+        "increaseFocusedPrimaryBtn",
+        "decreaseFocusedWeightBtn",
+        "increaseFocusedWeightBtn",
+        "extendFocusedRestBtn",
+        "resetFocusedRestBtn",
+        "skipFocusedRestBtn",
+        "completeFocusedSetBtn",
+        "skipFocusedSetBtn"
+      ];
+      const controls = companionControlIds.map(id => {
+        const element = document.getElementById(id);
+        return { id, present: Boolean(element), height: element?.getBoundingClientRect().height || 0 };
+      });
+      return {
+        width: innerWidth,
+        scrollWidth: document.documentElement.scrollWidth,
+        overflow: document.documentElement.scrollWidth > innerWidth,
+        controls,
+        restPanelWidth: document.querySelector(".focused-rest-panel")?.getBoundingClientRect().width || 0,
+        sessionWidth: document.querySelector("#focusedWorkoutSession")?.getBoundingClientRect().width || 0
+      };
+    })()`);
     assert(mobile.width === 390, "Mobile viewport should be active.");
     assert(!mobile.overflow, "Mobile workout layout should not overflow.");
+    assert(mobile.controls.every(control => control.present && control.height >= 44), `Mobile companion controls should all provide at least 44px touch targets: ${JSON.stringify(mobile.controls)}.`);
+    assert(mobile.restPanelWidth > 0 && mobile.restPanelWidth <= mobile.sessionWidth, `Mobile rest companion should fit inside the focused workout surface: ${JSON.stringify(mobile)}.`);
     await screenshot(cdp, "smoke-mobile.png");
+    await evaluate(cdp, `clearWorkoutDraft(); renderFocusedWorkoutSession();`);
 
     await evaluate(cdp, `activateTab("help"); window.scrollTo(0, 0);`);
     await delay(200);

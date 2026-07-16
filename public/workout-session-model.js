@@ -117,8 +117,20 @@
       companion: normalizeCompanion(plan.companion),
       exercises
     };
-    if (!flattenSets(session).some(set => set.id === session.currentSetId)) {
+    const selectedSet = flattenSets(session).find(set => set.id === session.currentSetId);
+    if (!selectedSet || (selectedSet.status !== "pending" && firstPendingSetId(session))) {
       session.currentSetId = firstPendingSetId(session) || flattenSets(session)[0]?.id || null;
+    }
+    const source = findSet(session, session.companion.transition?.sourceSetId);
+    const target = findSet(session, session.companion.transition?.targetSetId);
+    const restStart = Date.parse(session.companion.rest?.startedAt);
+    const restEnd = Date.parse(session.companion.rest?.endsAt);
+    const companionValid = source?.set.status === "completed"
+      && target?.set.status === "pending"
+      && target.set.id === session.currentSetId;
+    if (!companionValid) session.companion = emptyCompanion();
+    else if (session.companion.rest && (!Number.isFinite(restStart) || !Number.isFinite(restEnd) || restEnd < restStart)) {
+      session.companion.rest = null;
     }
     return session;
   }
@@ -157,6 +169,7 @@
   }
 
   function completeSet(session, setId, patch, options = {}) {
+    if (findSet(session, setId)?.set.status !== "pending") return clone(session);
     const next = updateSet(session, setId, (set, _exercise, draft) => {
       if (patch) set.actual = normalizeValues({ ...set.actual, ...patch });
       set.status = "completed";
@@ -218,13 +231,14 @@
       : 0;
   }
 
-  function adjustRest(session, deltaSeconds) {
+  function adjustRest(session, deltaSeconds, now = new Date().toISOString()) {
     const next = clone(session);
     next.companion = normalizeCompanion(next.companion);
     const end = Date.parse(next.companion.rest?.endsAt);
+    const current = Date.parse(now);
     const delta = Number(deltaSeconds);
-    if (Number.isFinite(end) && Number.isFinite(delta)) {
-      next.companion.rest.endsAt = new Date(end + delta * 1000).toISOString();
+    if (Number.isFinite(end) && Number.isFinite(current) && Number.isFinite(delta)) {
+      next.companion.rest.endsAt = new Date(Math.max(end, current) + delta * 1000).toISOString();
     }
     return next;
   }
