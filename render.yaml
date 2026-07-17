@@ -20,7 +20,26 @@ services:
         value: 10
       - key: ACCOUNT_RATE_LIMIT
         value: 5
+      - key: CLOUD_SYNC_IP_RATE_LIMIT
+        value: 60
+      - key: CLOUD_SYNC_ACCOUNT_RATE_LIMIT
+        value: 30
+      - key: CLOUD_SYNC_RATE_WINDOW_MS
+        value: 60000
+      - key: ENTITLEMENTS_ENABLED
+        value: 0
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
       - key: UPSTREAM_TIMEOUT_MS
         value: 20000
       - key: TRUST_PROXY
+        value: 1
+      # Render must sanitize or append forwarding headers; one trusted proxy is
+      # expected between the public client and this service. Keep TRUST_PROXY=0
+      # on platforms where that behavior cannot be verified.
+      - key: TRUST_PROXY_HOPS
         value: 1

@@ -190,6 +190,7 @@ const app = spawn(process.execPath, ["server.js"], {
     SUPABASE_URL: backendUrl,
     SUPABASE_ANON_KEY: "test-anon-key",
     SUPABASE_SERVICE_ROLE_KEY: "test-service-role",
+    ENTITLEMENTS_ENABLED: "1",
     FREE_AI_ADVICE_LIMIT: "3",
     PRO_AI_ADVICE_LIMIT: "100"
   },
@@ -259,7 +260,8 @@ try {
       PORT: String(partialPort),
       SUPABASE_URL: "",
       SUPABASE_ANON_KEY: "",
-      SUPABASE_SERVICE_ROLE_KEY: "orphaned-service-role"
+      SUPABASE_SERVICE_ROLE_KEY: "orphaned-service-role",
+      ENTITLEMENTS_ENABLED: "1"
     },
     stdio: "ignore",
     windowsHide: true

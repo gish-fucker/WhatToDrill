@@ -1,6 +1,7 @@
 import http from "node:http";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { isIP } from "node:net";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -10,6 +11,14 @@ import {
   releaseAdviceQuota,
   reserveAdviceQuota
 } from "./server/entitlements.js";
+import {
+  CLOUD_SYNC_LIMITS,
+  CloudSyncError,
+  deleteSyncState,
+  getSyncState,
+  loadCloudSyncConfig,
+  putSyncState
+} from "./server/cloud-sync.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = join(__dirname, "public");
@@ -22,12 +31,25 @@ const adviceRateLimit = parseIntegerEnv("ADVICE_RATE_LIMIT", 10, 1, 1_000);
 const adviceRateWindowMs = 60_000;
 const accountRateLimit = parseIntegerEnv("ACCOUNT_RATE_LIMIT", 5, 1, 100);
 const accountRateWindowMs = 10 * 60_000;
+const cloudSyncIpRateLimit = parseIntegerEnv("CLOUD_SYNC_IP_RATE_LIMIT", 60, 1, 10_000);
+const cloudSyncAccountRateLimit = parseIntegerEnv("CLOUD_SYNC_ACCOUNT_RATE_LIMIT", 30, 1, 10_000);
+const cloudSyncRateWindowMs = parseIntegerEnv("CLOUD_SYNC_RATE_WINDOW_MS", 60_000, 1_000, 3_600_000);
 const trustProxy = process.env.TRUST_PROXY === "1";
+const trustProxyHops = trustProxy ? parseIntegerEnv("TRUST_PROXY_HOPS", 1, 1, 16) : 0;
+const cloudSyncRawLimits = Object.freeze({
+  PUT: CLOUD_SYNC_LIMITS.maxEnvelopeBytes,
+  DELETE: 256
+});
 const startedAt = Date.now();
 const adviceRequests = new Map();
 const accountRequests = new Map();
+const cloudSyncIpRequests = new Map();
+const cloudSyncAccountRequests = new Map();
 const accountAuth = loadAccountAuthConfig();
-const entitlementConfig = loadEntitlementConfig(accountAuth, upstreamTimeoutMs);
+const entitlementConfig = process.env.ENTITLEMENTS_ENABLED === "1"
+  ? loadEntitlementConfig(accountAuth, upstreamTimeoutMs)
+  : null;
+const cloudSyncConfig = loadCloudSyncConfig(accountAuth, upstreamTimeoutMs);
 const openaiResponsesUrl = loadOpenAiResponsesUrl();
 setInterval(() => {
   const cutoff = Date.now() - adviceRateWindowMs;
@@ -41,6 +63,14 @@ setInterval(() => {
     const recent = timestamps.filter(timestamp => timestamp > accountCutoff);
     if (recent.length) accountRequests.set(key, recent);
     else accountRequests.delete(key);
+  });
+  const cloudSyncCutoff = Date.now() - cloudSyncRateWindowMs;
+  [cloudSyncIpRequests, cloudSyncAccountRequests].forEach(requests => {
+    requests.forEach((timestamps, key) => {
+      const recent = timestamps.filter(timestamp => timestamp > cloudSyncCutoff);
+      if (recent.length) requests.set(key, recent);
+      else requests.delete(key);
+    });
   });
 }, adviceRateWindowMs).unref();
 
@@ -114,12 +144,25 @@ function writeLog(event, details = {}) {
 }
 
 function getClientId(req) {
-  if (trustProxy) {
-    const forwarded = req.headers["x-forwarded-for"];
-    const firstAddress = Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(",")[0];
-    if (firstAddress?.trim()) return firstAddress.trim();
-  }
-  return req.socket.remoteAddress || "unknown";
+  const forwardedAddress = getTrustedProxyValue(req, "x-forwarded-for");
+  if (forwardedAddress && isIP(forwardedAddress)) return forwardedAddress;
+  const remoteAddress = req.socket.remoteAddress || "";
+  return isIP(remoteAddress) ? remoteAddress : "unknown";
+}
+
+function getTrustedProxyValue(req, headerName) {
+  if (!trustProxy) return "";
+  const raw = req.headers[headerName];
+  if (typeof raw !== "string") return "";
+  const values = raw.split(",").map(value => value.trim());
+  if (values.length < trustProxyHops || values.some(value => !value)) return "";
+  return values[values.length - trustProxyHops];
+}
+
+function getRequestProtocol(req) {
+  const forwardedProtocol = getTrustedProxyValue(req, "x-forwarded-proto").toLowerCase();
+  if (["http", "https"].includes(forwardedProtocol)) return forwardedProtocol;
+  return req.socket.encrypted ? "https" : "http";
 }
 
 function sendJson(res, status, payload) {
@@ -168,9 +211,53 @@ function isSameOriginRequest(req) {
   if (req.headers["sec-fetch-site"] === "cross-site") return false;
   const origin = req.headers.origin;
   if (!origin) return true;
-  const forwardedProtocol = trustProxy ? String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() : "";
-  const protocol = forwardedProtocol || (req.socket.encrypted ? "https" : "http");
-  return origin === `${protocol}://${req.headers.host}`;
+  return origin === `${getRequestProtocol(req)}://${req.headers.host}`;
+}
+
+function isStrictSameOriginRequest(req) {
+  const fetchSite = req.headers["sec-fetch-site"];
+  if (fetchSite !== undefined && !["same-origin", "none"].includes(String(fetchSite).toLowerCase())) {
+    return false;
+  }
+  const origin = req.headers.origin;
+  if (origin === undefined) return true;
+  if (Array.isArray(origin) || typeof origin !== "string") return false;
+  return origin === `${getRequestProtocol(req)}://${req.headers.host}`;
+}
+
+function allowRateLimitedRequest(requests, key, limit, req, res) {
+  const now = Date.now();
+  const recent = (requests.get(key) || []).filter(timestamp => now - timestamp < cloudSyncRateWindowMs);
+  if (recent.length >= limit) {
+    const retryAfterSeconds = Math.max(1, Math.ceil((cloudSyncRateWindowMs - (now - recent[0])) / 1000));
+    requests.set(key, recent);
+    res.setHeader("retry-after", String(retryAfterSeconds));
+    sendJson(res, 429, { error: "Too many cloud sync requests. Please try again later.", code: "RATE_LIMITED" });
+    return false;
+  }
+  recent.push(now);
+  requests.set(key, recent);
+  return true;
+}
+
+function allowCloudSyncIpRequest(req, res) {
+  return allowRateLimitedRequest(
+    cloudSyncIpRequests,
+    `${getClientId(req)}:${req.method}`,
+    cloudSyncIpRateLimit,
+    req,
+    res
+  );
+}
+
+function allowCloudSyncAccountRequest(req, res, userId) {
+  return allowRateLimitedRequest(
+    cloudSyncAccountRequests,
+    `${userId}:${req.method}`,
+    cloudSyncAccountRateLimit,
+    req,
+    res
+  );
 }
 
 function readBody(req) {
@@ -200,6 +287,143 @@ function readBody(req) {
   });
 }
 
+function readBoundedBody(req, maximumBytes) {
+  return new Promise((resolveBody, rejectBody) => {
+    const declaredLength = req.headers["content-length"];
+    if (declaredLength !== undefined) {
+      const rawLength = Array.isArray(declaredLength) ? "" : String(declaredLength);
+      if (!/^\d+$/.test(rawLength)) {
+        const error = new Error("Request body length is invalid.");
+        error.code = "INVALID_LENGTH";
+        rejectBody(error);
+        return;
+      }
+      const parsedLength = Number(rawLength);
+      if (!Number.isSafeInteger(parsedLength) || parsedLength > maximumBytes) {
+        const error = new Error("Request body is too large.");
+        error.code = "BODY_TOO_LARGE";
+        rejectBody(error);
+        req.resume();
+        return;
+      }
+    }
+
+    const chunks = [];
+    let byteLength = 0;
+    let settled = false;
+    const rejectOnce = (error) => {
+      if (settled) return;
+      settled = true;
+      rejectBody(error);
+    };
+    req.on("data", chunk => {
+      if (settled) return;
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      byteLength += bytes.byteLength;
+      if (byteLength > maximumBytes) {
+        const error = new Error("Request body is too large.");
+        error.code = "BODY_TOO_LARGE";
+        rejectOnce(error);
+        return;
+      }
+      chunks.push(bytes);
+    });
+    req.on("aborted", () => {
+      const error = new Error("Request body could not be read.");
+      error.code = "READ_FAILED";
+      rejectOnce(error);
+    });
+    req.on("error", () => {
+      const error = new Error("Request body could not be read.");
+      error.code = "READ_FAILED";
+      rejectOnce(error);
+    });
+    req.on("end", () => {
+      if (settled) return;
+      settled = true;
+      resolveBody(Buffer.concat(chunks, byteLength).toString("utf8"));
+    });
+  });
+}
+
+function drainRequest(req) {
+  try {
+    req.resume();
+  } catch {
+    // Draining is best-effort after rejecting request framing.
+  }
+}
+
+function rejectCloudSyncHeaders(req, res, status, error, code) {
+  drainRequest(req);
+  sendJson(res, status, { error, code });
+  return false;
+}
+
+function precheckCloudSyncHeaders(req, res) {
+  const rawContentLength = req.headers["content-length"];
+  const hasContentLength = rawContentLength !== undefined;
+  const hasTransferEncoding = req.headers["transfer-encoding"] !== undefined;
+  let contentLength = null;
+  if (hasContentLength) {
+    if (Array.isArray(rawContentLength) || !/^\d+$/.test(String(rawContentLength))) {
+      return rejectCloudSyncHeaders(req, res, 400, "Request body length is invalid.", "INVALID_REQUEST");
+    }
+    contentLength = Number(rawContentLength);
+    if (!Number.isSafeInteger(contentLength)) {
+      return rejectCloudSyncHeaders(req, res, 400, "Request body length is invalid.", "INVALID_REQUEST");
+    }
+  }
+
+  if (req.method === "GET") {
+    if (hasTransferEncoding || (contentLength !== null && contentLength > 0)) {
+      return rejectCloudSyncHeaders(req, res, 400, "GET cloud sync requests cannot include a body.", "BODY_NOT_ALLOWED");
+    }
+    return true;
+  }
+
+  if (hasContentLength && hasTransferEncoding) {
+    return rejectCloudSyncHeaders(req, res, 400, "Conflicting request body framing is not allowed.", "INVALID_REQUEST_FRAMING");
+  }
+  if (!/^application\/json(?:\s*;|$)/i.test(String(req.headers["content-type"] || ""))) {
+    return rejectCloudSyncHeaders(req, res, 400, "Request body must use application/json.", "INVALID_CONTENT_TYPE");
+  }
+  const maximumBytes = cloudSyncRawLimits[req.method];
+  if (contentLength !== null && contentLength > maximumBytes) {
+    return rejectCloudSyncHeaders(req, res, 413, "The cloud sync request is too large.", "SYNC_ENVELOPE_TOO_LARGE");
+  }
+  return true;
+}
+
+function sendCloudSyncReadError(res, error) {
+  if (error.code === "BODY_TOO_LARGE") {
+    sendJson(res, 413, { error: "The cloud sync request is too large.", code: "SYNC_ENVELOPE_TOO_LARGE" });
+  } else if (error.code === "INVALID_LENGTH") {
+    sendJson(res, 400, { error: "Request body length is invalid.", code: "INVALID_REQUEST" });
+  } else {
+    sendJson(res, 400, { error: "Unable to read request body.", code: "REQUEST_READ_FAILED" });
+  }
+}
+
+function parseCloudSyncJson(raw, res) {
+  if (!raw) {
+    sendJson(res, 400, { error: "Request body is required.", code: "JSON_BODY_REQUIRED" });
+    return { ok: false };
+  }
+  let value;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    sendJson(res, 400, { error: "Request body must be valid JSON.", code: "INVALID_JSON" });
+    return { ok: false };
+  }
+  if (value === null) {
+    sendJson(res, 400, { error: "Request body must be a JSON object.", code: "JSON_BODY_REQUIRED" });
+    return { ok: false };
+  }
+  return { ok: true, value };
+}
+
 function parseCookies(req) {
   return String(req.headers.cookie || "").split(";").reduce((cookies, part) => {
     const separator = part.indexOf("=");
@@ -215,8 +439,7 @@ function parseCookies(req) {
 }
 
 function isSecureRequest(req) {
-  if (trustProxy) return String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() === "https";
-  return Boolean(req.socket.encrypted);
+  return getRequestProtocol(req) === "https";
 }
 
 function serializeCookie(name, value, req, maxAge) {
@@ -377,6 +600,75 @@ async function handleAccountEntitlements(req, res) {
     sendJson(res, 200, await getAccountEntitlement(entitlementConfig, resolution.user.id));
   } catch (error) {
     sendJson(res, error.name === "AbortError" ? 504 : 503, { error: "Entitlement service is temporarily unavailable.", code: "ENTITLEMENT_UNAVAILABLE" });
+  }
+}
+
+function sendCloudSyncError(res, error) {
+  if (error instanceof CloudSyncError) {
+    sendJson(res, error.status, {
+      error: error.message,
+      code: error.code,
+      ...(error.status === 409 && error.conflict ? { conflict: error.conflict } : {})
+    });
+    return;
+  }
+  sendJson(res, 500, { error: "Unable to complete cloud sync.", code: "CLOUD_SYNC_ERROR" });
+}
+
+async function handleCloudSyncState(req, res) {
+  if (!isStrictSameOriginRequest(req)) {
+    drainRequest(req);
+    sendJson(res, 403, { error: "Cross-origin cloud sync requests are not allowed.", code: "CROSS_ORIGIN_REQUEST" });
+    return;
+  }
+  if (!precheckCloudSyncHeaders(req, res)) return;
+  if (!allowCloudSyncIpRequest(req, res)) {
+    drainRequest(req);
+    return;
+  }
+
+  let rawBody = "";
+  if (req.method !== "GET") {
+    try {
+      rawBody = await readBoundedBody(req, cloudSyncRawLimits[req.method]);
+    } catch (error) {
+      sendCloudSyncReadError(res, error);
+      return;
+    }
+  }
+
+  const resolution = await resolveAccountUser(req);
+  applyAccountResolutionCookies(req, res, resolution);
+  if (resolution.unavailable) {
+    drainRequest(req);
+    sendJson(res, resolution.statusCode, { error: "Account service is temporarily unavailable.", code: "ACCOUNT_UNAVAILABLE" });
+    return;
+  }
+  if (!resolution.signedIn) {
+    drainRequest(req);
+    sendJson(res, 401, { error: "Sign in to use cloud backup.", code: "ACCOUNT_REQUIRED" });
+    return;
+  }
+  if (!allowCloudSyncAccountRequest(req, res, resolution.user.id)) {
+    drainRequest(req);
+    return;
+  }
+
+  try {
+    if (req.method === "GET") {
+      sendJson(res, 200, await getSyncState(cloudSyncConfig, resolution.user.id));
+      return;
+    }
+
+    const parsed = parseCloudSyncJson(rawBody, res);
+    if (!parsed.ok) return;
+    if (req.method === "PUT") {
+      sendJson(res, 200, await putSyncState(cloudSyncConfig, resolution.user.id, parsed.value));
+      return;
+    }
+    sendJson(res, 200, await deleteSyncState(cloudSyncConfig, resolution.user.id, parsed.value));
+  } catch (error) {
+    sendCloudSyncError(res, error);
   }
 }
 
@@ -780,6 +1072,7 @@ const server = http.createServer(async (req, res) => {
       openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
       accountConfigured: Boolean(accountAuth),
       entitlementConfigured: Boolean(entitlementConfig),
+      cloudSyncConfigured: cloudSyncConfig.configured,
       aiAccessMode: entitlementConfig ? "account_quota" : "deployment_shared",
       model: process.env.OPENAI_MODEL || "gpt-5-mini"
     });
@@ -814,6 +1107,17 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "POST" && pathname === "/api/account/signout") {
     await handleAccountSignout(req, res);
+    return;
+  }
+
+  if (pathname === "/api/account/sync-state") {
+    if (!["GET", "PUT", "DELETE"].includes(req.method)) {
+      drainRequest(req);
+      res.setHeader("allow", "GET, PUT, DELETE");
+      sendJson(res, 405, { error: "Method not allowed.", code: "METHOD_NOT_ALLOWED" });
+      return;
+    }
+    await handleCloudSyncState(req, res);
     return;
   }
 

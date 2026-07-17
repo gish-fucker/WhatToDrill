@@ -1,12 +1,16 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { createServer } from "node:http";
+import { createHash } from "node:crypto";
+import { createServer, request as httpRequest } from "node:http";
+import { connect as connectSocket } from "node:net";
 import { resolve } from "node:path";
+import { CLOUD_SYNC_LIMITS, canonicalizeSyncPayload } from "../server/cloud-sync.js";
 
 const appPort = Number(process.env.SMOKE_APP_PORT || 5183);
 const chromePort = Number(process.env.SMOKE_CHROME_PORT || 9240);
 const authPort = Number(process.env.SMOKE_AUTH_PORT || 5184);
 const unconfiguredPort = Number(process.env.SMOKE_UNCONFIGURED_PORT || 5185);
+const cloudUnconfiguredPort = Number(process.env.SMOKE_CLOUD_UNCONFIGURED_PORT || 5186);
 const baseUrl = `http://localhost:${appPort}`;
 const appUrl = `${baseUrl}/app/`;
 const chromePath = process.env.CHROME_PATH || "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
@@ -14,7 +18,12 @@ const outputDir = resolve("output", "playwright");
 const profileDir = resolve(outputDir, "smoke-profile");
 const storageKey = "habit_fitness_app_v1";
 const workoutDraftKey = "habit_fitness_workout_draft_v1";
-const fakeAccountUser = { id: "smoke-user-1", email: "smoke@example.com" };
+const fakeAccountUser = { id: "11111111-1111-4111-8111-111111111111", email: "smoke@example.com" };
+const deleteSyncEnvelopeBytes = 256;
+
+function checksumPayload(payload) {
+  return createHash("sha256").update(canonicalizeSyncPayload(payload), "utf8").digest("hex");
+}
 
 function sendFakeAuthJson(res, status, payload) {
   res.writeHead(status, { "content-type": "application/json" });
@@ -22,18 +31,98 @@ function sendFakeAuthJson(res, status, payload) {
 }
 
 async function readFakeAuthBody(req) {
-  let body = "";
-  for await (const chunk of req) body += chunk;
+  const chunks = [];
+  for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  const body = Buffer.concat(chunks).toString("utf8");
   return JSON.parse(body || "{}");
 }
 
-function createFakeAccountProvider(calls) {
+function createFakeAccountProvider(calls, cloud) {
   return createServer(async (req, res) => {
     const url = new URL(req.url, `http://127.0.0.1:${authPort}`);
     const authorization = String(req.headers.authorization || "");
+    const isRpc = req.method === "POST" && url.pathname.startsWith("/rest/v1/rpc/");
     calls.push({ method: req.method, path: url.pathname, query: url.search, authorization });
-    if (req.headers.apikey !== "smoke-anon-key") {
+    if (req.headers.apikey !== (isRpc ? "smoke-service-role" : "smoke-anon-key")) {
       sendFakeAuthJson(res, 401, { error: "missing api key" });
+      return;
+    }
+    if (isRpc) {
+      if (authorization !== "Bearer smoke-service-role") {
+        sendFakeAuthJson(res, 401, { error: "invalid service role" });
+        return;
+      }
+      const body = await readFakeAuthBody(req);
+      cloud.calls.push({ path: url.pathname, body });
+      if (cloud.mode === "timeout") return;
+      if (cloud.mode === "failure") {
+        sendFakeAuthJson(res, 500, { message: "PRIVATE_UPSTREAM_MESSAGE" });
+        return;
+      }
+      if (cloud.mode === "malformed") {
+        sendFakeAuthJson(res, 200, { unexpected: "PRIVATE_UPSTREAM_MESSAGE" });
+        return;
+      }
+      if (body.p_user_id !== fakeAccountUser.id) {
+        sendFakeAuthJson(res, 400, { message: "wrong user" });
+        return;
+      }
+      const now = new Date().toISOString();
+      if (url.pathname === "/rest/v1/rpc/get_cloud_sync_state") {
+        sendFakeAuthJson(res, 200, cloud.exists ? {
+          ok: true,
+          exists: true,
+          revision: cloud.revision,
+          schemaVersion: cloud.schemaVersion,
+          checksum: cloud.checksum,
+          payload: cloud.payload,
+          updatedAt: cloud.updatedAt
+        } : { ok: true, exists: false, revision: cloud.revision });
+        return;
+      }
+      if (url.pathname === "/rest/v1/rpc/put_cloud_sync_state") {
+        if (body.p_base_revision !== cloud.revision) {
+          sendFakeAuthJson(res, 200, {
+            ok: false,
+            conflict: { revision: cloud.revision, exists: cloud.exists, checksum: cloud.exists ? cloud.checksum : null }
+          });
+          return;
+        }
+        cloud.revision += 1;
+        cloud.exists = true;
+        cloud.schemaVersion = body.p_schema_version;
+        cloud.checksum = body.p_checksum;
+        cloud.payload = body.p_payload;
+        cloud.updatedAt = now;
+        sendFakeAuthJson(res, 200, {
+          ok: true,
+          exists: true,
+          revision: cloud.revision,
+          schemaVersion: cloud.schemaVersion,
+          checksum: cloud.checksum,
+          payload: cloud.payload,
+          updatedAt: cloud.updatedAt
+        });
+        return;
+      }
+      if (url.pathname === "/rest/v1/rpc/delete_cloud_sync_state") {
+        if (body.p_base_revision !== cloud.revision) {
+          sendFakeAuthJson(res, 200, {
+            ok: false,
+            conflict: { revision: cloud.revision, exists: cloud.exists, checksum: cloud.exists ? cloud.checksum : null }
+          });
+          return;
+        }
+        cloud.revision += 1;
+        cloud.exists = false;
+        cloud.schemaVersion = null;
+        cloud.checksum = null;
+        cloud.payload = null;
+        cloud.updatedAt = now;
+        sendFakeAuthJson(res, 200, { ok: true, exists: false, revision: cloud.revision, deletedAt: now });
+        return;
+      }
+      sendFakeAuthJson(res, 404, { error: "not found" });
       return;
     }
     if (req.method === "POST" && url.pathname === "/auth/v1/otp") {
@@ -171,6 +260,74 @@ async function getJson(url) {
   return response.json();
 }
 
+function rawHttpRequest(url, { method, headers = {}, body = "" }) {
+  return new Promise((resolveRequest, rejectRequest) => {
+    const target = new URL(url);
+    const req = httpRequest({
+      hostname: target.hostname,
+      port: target.port,
+      path: `${target.pathname}${target.search}`,
+      method,
+      headers
+    }, res => {
+      const chunks = [];
+      res.on("data", chunk => chunks.push(chunk));
+      res.on("end", () => resolveRequest({
+        status: res.statusCode,
+        headers: res.headers,
+        text: Buffer.concat(chunks).toString("utf8")
+      }));
+    });
+    req.on("error", rejectRequest);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+function rawSocketRequest(port, parts) {
+  return new Promise((resolveRequest, rejectRequest) => {
+    const socket = connectSocket({ host: "127.0.0.1", port });
+    const responseChunks = [];
+    const timeout = setTimeout(() => {
+      socket.destroy(new Error("Raw HTTP request timed out."));
+    }, 10_000);
+    socket.on("connect", () => {
+      for (const part of parts) socket.write(part);
+    });
+    socket.on("data", chunk => responseChunks.push(chunk));
+    socket.on("end", () => {
+      clearTimeout(timeout);
+      const text = Buffer.concat(responseChunks).toString("utf8");
+      const [head = "", ...bodyParts] = text.split("\r\n\r\n");
+      const status = Number(head.match(/^HTTP\/1\.1\s+(\d{3})/i)?.[1] || 0);
+      resolveRequest({ status, head, text: bodyParts.join("\r\n\r\n") });
+    });
+    socket.on("error", error => {
+      clearTimeout(timeout);
+      rejectRequest(error);
+    });
+  });
+}
+
+function chunkedRequestParts({ method, port, headers = {}, chunks = [] }) {
+  const lines = [
+    `${method} /api/account/sync-state HTTP/1.1`,
+    `Host: localhost:${port}`,
+    "Connection: close",
+    "Transfer-Encoding: chunked",
+    ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`),
+    "",
+    ""
+  ];
+  const parts = [lines.join("\r\n")];
+  for (const chunk of chunks) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    parts.push(Buffer.from(`${bytes.byteLength.toString(16)}\r\n`), bytes, Buffer.from("\r\n"));
+  }
+  parts.push("0\r\n\r\n");
+  return parts;
+}
+
 async function evaluate(cdp, expression) {
   const result = await cdp.send("Runtime.evaluate", {
     expression,
@@ -213,21 +370,87 @@ function pngDimensions(buffer) {
   return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
 }
 
+function waitForChildExit(child, timeoutMs, label) {
+  if (!child || child.exitCode !== null || child.signalCode) {
+    return Promise.resolve({ code: child?.exitCode ?? null, signal: child?.signalCode ?? null });
+  }
+  return new Promise((resolveExit, rejectExit) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      rejectExit(new Error(`${label} did not exit within ${timeoutMs}ms.`));
+    }, timeoutMs);
+    const onExit = (code, signal) => {
+      cleanup();
+      resolveExit({ code, signal });
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      child.off("exit", onExit);
+    };
+    child.once("exit", onExit);
+  });
+}
+
+async function stopChild(child, label) {
+  if (!child || child.exitCode !== null || child.signalCode) return;
+  child.kill("SIGTERM");
+  try {
+    await waitForChildExit(child, 3_000, label);
+  } catch {
+    child.kill("SIGKILL");
+    await waitForChildExit(child, 3_000, `${label} after SIGKILL`).catch(() => {});
+  }
+}
+
+async function closeHttpServer(server) {
+  if (!server?.listening) return;
+  await new Promise(resolveClose => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(forceClose);
+      clearTimeout(giveUp);
+      resolveClose();
+    };
+    const forceClose = setTimeout(() => {
+      server.closeIdleConnections?.();
+      server.closeAllConnections?.();
+    }, 1_000);
+    const giveUp = setTimeout(finish, 3_000);
+    server.close(finish);
+  });
+}
+
 async function run() {
-  await mkdir(outputDir, { recursive: true });
-  await mkdir(profileDir, { recursive: true });
-  const partialConfigServer = spawn(process.execPath, ["server.js"], {
+  let partialConfigServer;
+  let unconfiguredServer;
+  let authServer;
+  let server;
+  let chrome;
+  let cloudUnconfiguredServer;
+  let cdp;
+  try {
+    await mkdir(outputDir, { recursive: true });
+    await mkdir(profileDir, { recursive: true });
+    partialConfigServer = spawn(process.execPath, ["server.js"], {
     cwd: process.cwd(),
-    env: { ...process.env, HOST: "127.0.0.1", PORT: String(unconfiguredPort), SUPABASE_URL: "http://127.0.0.1:1", SUPABASE_ANON_KEY: "", NODE_ENV: "development" },
+    env: { ...process.env, HOST: "127.0.0.1", PORT: String(unconfiguredPort), OPENAI_API_KEY: "", SUPABASE_URL: "http://127.0.0.1:1", SUPABASE_ANON_KEY: "", SUPABASE_SERVICE_ROLE_KEY: "", ENTITLEMENTS_ENABLED: "0", TRUST_PROXY: "0", TRUST_PROXY_HOPS: "1", NODE_ENV: "development" },
     stdio: "ignore",
     windowsHide: true
   });
-  const partialConfigExit = await new Promise(resolveExit => partialConfigServer.once("exit", code => resolveExit(code)));
-  assert(partialConfigExit !== 0, "Server should reject a partially configured account provider.");
+    let partialConfigExit;
+    try {
+      partialConfigExit = await waitForChildExit(partialConfigServer, 5_000, "Partially configured server");
+    } catch (error) {
+      await stopChild(partialConfigServer, "Partially configured server");
+      throw error;
+    }
+    assert(partialConfigExit.code !== 0, "Server should reject a partially configured account provider.");
 
-  const unconfiguredServer = spawn(process.execPath, ["server.js"], {
+    unconfiguredServer = spawn(process.execPath, ["server.js"], {
     cwd: process.cwd(),
-    env: { ...process.env, HOST: "127.0.0.1", PORT: String(unconfiguredPort), SUPABASE_URL: "", SUPABASE_ANON_KEY: "" },
+    env: { ...process.env, HOST: "127.0.0.1", PORT: String(unconfiguredPort), OPENAI_API_KEY: "", SUPABASE_URL: "", SUPABASE_ANON_KEY: "", SUPABASE_SERVICE_ROLE_KEY: "", ENTITLEMENTS_ENABLED: "0", TRUST_PROXY: "0", TRUST_PROXY_HOPS: "1" },
     stdio: "ignore",
     windowsHide: true
   });
@@ -235,17 +458,26 @@ async function run() {
   const unconfiguredAccountResponse = await fetch(`http://127.0.0.1:${unconfiguredPort}/api/account/session`);
   const unconfiguredAccount = await unconfiguredAccountResponse.json();
   assert(unconfiguredAccountResponse.status === 200 && !unconfiguredAccount.configured && !unconfiguredAccount.signedIn, "Unconfigured deployment should return a truthful local-only account state.");
-  unconfiguredServer.kill("SIGTERM");
-  await new Promise(resolveExit => unconfiguredServer.once("exit", resolveExit));
+    await stopChild(unconfiguredServer, "Unconfigured app server");
 
   const authProviderCalls = [];
-  const authServer = createFakeAccountProvider(authProviderCalls);
+  const cloudProvider = {
+    mode: "normal",
+    revision: 0,
+    exists: false,
+    schemaVersion: null,
+    checksum: null,
+    payload: null,
+    updatedAt: new Date().toISOString(),
+    calls: []
+  };
+    authServer = createFakeAccountProvider(authProviderCalls, cloudProvider);
   await new Promise((resolveListen, rejectListen) => {
     authServer.once("error", rejectListen);
     authServer.listen(authPort, "127.0.0.1", resolveListen);
   });
 
-  const server = spawn(process.execPath, ["server.js"], {
+    server = spawn(process.execPath, ["server.js"], {
     cwd: process.cwd(),
     env: {
       ...process.env,
@@ -255,15 +487,22 @@ async function run() {
       OPENAI_API_KEY: "",
       ADVICE_RATE_LIMIT: "10",
       ACCOUNT_RATE_LIMIT: "5",
+      CLOUD_SYNC_IP_RATE_LIMIT: "5",
+      CLOUD_SYNC_ACCOUNT_RATE_LIMIT: "20",
+      CLOUD_SYNC_RATE_WINDOW_MS: "60000",
       SUPABASE_URL: `http://127.0.0.1:${authPort}`,
       SUPABASE_ANON_KEY: "smoke-anon-key",
-      TRUST_PROXY: "1"
+      SUPABASE_SERVICE_ROLE_KEY: "smoke-service-role",
+      ENTITLEMENTS_ENABLED: "0",
+      UPSTREAM_TIMEOUT_MS: "1000",
+      TRUST_PROXY: "1",
+      TRUST_PROXY_HOPS: "1"
     },
     stdio: "ignore",
     windowsHide: true
   });
 
-  const chrome = spawn(chromePath, [
+    chrome = spawn(chromePath, [
     "--headless=new",
     `--remote-debugging-port=${chromePort}`,
     `--user-data-dir=${profileDir}`,
@@ -277,9 +516,26 @@ async function run() {
     windowsHide: true
   });
 
-  let cdp;
-  try {
     await waitForHttp(baseUrl);
+    cloudUnconfiguredServer = spawn(process.execPath, ["server.js"], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        NODE_ENV: "development",
+        HOST: "127.0.0.1",
+        PORT: String(cloudUnconfiguredPort),
+        OPENAI_API_KEY: "",
+        SUPABASE_URL: `http://127.0.0.1:${authPort}`,
+        SUPABASE_ANON_KEY: "smoke-anon-key",
+        SUPABASE_SERVICE_ROLE_KEY: "",
+        ENTITLEMENTS_ENABLED: "0",
+        TRUST_PROXY: "1",
+        TRUST_PROXY_HOPS: "1"
+      },
+      stdio: "ignore",
+      windowsHide: true
+    });
+    await waitForHttp(`http://127.0.0.1:${cloudUnconfiguredPort}`);
     const indexResponse = await fetch(baseUrl);
     const landingHtml = await indexResponse.text();
     const appResponse = await fetch(appUrl);
@@ -386,17 +642,337 @@ async function run() {
     });
     const verifiedAccountPayload = await verifyAccountResponse.json();
     const verifiedCookies = getResponseCookies(verifyAccountResponse);
+    let syncIpSequence = 40;
+    const syncResponses = [];
+    const syncFetch = async (method, options = {}) => {
+      const headers = {
+        origin: baseUrl,
+        "sec-fetch-site": "same-origin",
+        "x-forwarded-for": options.forwardedFor || options.ip || `198.51.100.${syncIpSequence++}`,
+        ...(options.cookie === false ? {} : { cookie: options.cookie || verifiedCookies.header }),
+        ...(options.headers || {})
+      };
+      Object.keys(headers).forEach(name => {
+        if (headers[name] === undefined) delete headers[name];
+      });
+      let body;
+      if (Object.prototype.hasOwnProperty.call(options, "rawBody")) {
+        body = options.rawBody;
+        headers["content-type"] ||= "application/json";
+      } else if (Object.prototype.hasOwnProperty.call(options, "body")) {
+        body = JSON.stringify(options.body);
+        headers["content-type"] ||= "application/json";
+      }
+      const response = await fetch(`${baseUrl}/api/account/sync-state`, { method, headers, body });
+      const text = await response.text();
+      const result = {
+        status: response.status,
+        allow: response.headers.get("allow"),
+        retryAfter: response.headers.get("retry-after"),
+        cacheControl: response.headers.get("cache-control"),
+        setCookie: response.headers.get("set-cookie"),
+        text,
+        json: (() => { try { return JSON.parse(text); } catch { return null; } })()
+      };
+      syncResponses.push(result);
+      return result;
+    };
+
+    const cloudUnconfiguredHealthResponse = await fetch(`http://127.0.0.1:${cloudUnconfiguredPort}/api/health`);
+    const cloudUnconfiguredHealth = await cloudUnconfiguredHealthResponse.json();
+    const cloudUnconfiguredResponse = await fetch(`http://127.0.0.1:${cloudUnconfiguredPort}/api/account/sync-state`, {
+      headers: {
+        cookie: verifiedCookies.header,
+        origin: `http://127.0.0.1:${cloudUnconfiguredPort}`,
+        "sec-fetch-site": "same-origin",
+        "x-forwarded-for": "198.51.100.31"
+      }
+    });
+    const cloudUnconfiguredText = await cloudUnconfiguredResponse.text();
+    assert(!cloudUnconfiguredHealth.cloudSyncConfigured && cloudUnconfiguredResponse.status === 503, "A signed-in request should receive 503 when cloud sync is not configured.");
+
+    const unsignedSyncByMethod = {};
+    for (const method of ["GET", "PUT", "DELETE"]) {
+      const response = await syncFetch(method, {
+        cookie: false,
+        body: method === "GET" ? undefined : {},
+        ip: `198.51.100.${32 + ["GET", "PUT", "DELETE"].indexOf(method)}`
+      });
+      unsignedSyncByMethod[method] = response;
+      assert(response.status === 401, `${method} cloud sync should require an authenticated account.`);
+    }
+    const unsignedSync = unsignedSyncByMethod.GET;
+    for (const method of ["GET", "PUT", "DELETE"]) {
+      const response = await syncFetch(method, {
+        cookie: false,
+        body: method === "GET" ? undefined : {},
+        headers: { origin: `http://sub.localhost:${appPort}`, "sec-fetch-site": "same-site" },
+        ip: `198.51.100.${33 + ["GET", "PUT", "DELETE"].indexOf(method)}`
+      });
+      assert(response.status === 403, `${method} cloud sync should reject a same-site subdomain.`);
+    }
+    for (const method of ["GET", "PUT", "DELETE"]) {
+      const response = await syncFetch(method, {
+        cookie: false,
+        body: method === "GET" ? undefined : {},
+        headers: { origin: "https://attacker.example", "sec-fetch-site": "same-origin" },
+        ip: `198.51.100.${36 + ["GET", "PUT", "DELETE"].indexOf(method)}`
+      });
+      assert(response.status === 403, `${method} cloud sync should require an exact Origin match even when fetch metadata claims same-origin.`);
+    }
+    const unsupportedSyncMethod = await syncFetch("POST", { body: {} });
+    assert(unsupportedSyncMethod.status === 405 && unsupportedSyncMethod.allow === "GET, PUT, DELETE", "Cloud sync should advertise the exact supported methods.");
+
+    const authCallsBeforeHeaderRejections = authProviderCalls.filter(call => call.path.startsWith("/auth/v1/")).length;
+    const getWithBody = await rawHttpRequest(`${baseUrl}/api/account/sync-state`, {
+      method: "GET",
+      headers: {
+        host: `localhost:${appPort}`,
+        origin: baseUrl,
+        "sec-fetch-site": "same-origin",
+        cookie: verifiedCookies.header,
+        "x-forwarded-for": "198.51.100.37",
+        "content-type": "application/json",
+        "content-length": "2"
+      },
+      body: "{}"
+    });
+    assert(getWithBody.status === 400 && JSON.parse(getWithBody.text).code === "BODY_NOT_ALLOWED", "GET cloud sync should reject request bodies.");
+    const chunkedGet = await rawSocketRequest(appPort, chunkedRequestParts({
+      method: "GET",
+      port: appPort,
+      headers: {
+        Origin: baseUrl,
+        "Sec-Fetch-Site": "same-origin",
+        Cookie: verifiedCookies.header,
+        "X-Forwarded-For": "198.51.100.151"
+      },
+      chunks: ["{}"]
+    }));
+    const conflictingFraming = await rawSocketRequest(appPort, [[
+      "PUT /api/account/sync-state HTTP/1.1",
+      `Host: localhost:${appPort}`,
+      "Connection: close",
+      `Origin: ${baseUrl}`,
+      "Sec-Fetch-Site: same-origin",
+      `Cookie: ${verifiedCookies.header}`,
+      "X-Forwarded-For: 198.51.100.152",
+      "Content-Type: application/json",
+      "Content-Length: 2",
+      "Transfer-Encoding: chunked",
+      "",
+      "2",
+      "{}",
+      "0",
+      "",
+      ""
+    ].join("\r\n")]);
+    const negativeContentLength = await rawSocketRequest(appPort, [[
+      "DELETE /api/account/sync-state HTTP/1.1",
+      `Host: localhost:${appPort}`,
+      "Connection: close",
+      `Origin: ${baseUrl}`,
+      "Sec-Fetch-Site: same-origin",
+      `Cookie: ${verifiedCookies.header}`,
+      "X-Forwarded-For: 198.51.100.155",
+      "Content-Type: application/json",
+      "Content-Length: -1",
+      "",
+      ""
+    ].join("\r\n")]);
+    const oversizedChunkedDelete = await rawSocketRequest(appPort, chunkedRequestParts({
+      method: "DELETE",
+      port: appPort,
+      headers: {
+        Origin: baseUrl,
+        "Sec-Fetch-Site": "same-origin",
+        Cookie: verifiedCookies.header,
+        "Content-Type": "application/json",
+        "X-Forwarded-For": "198.51.100.153"
+      },
+      chunks: [" ".repeat(deleteSyncEnvelopeBytes + 1)]
+    }));
+    const oversizedChunkedPut = await rawSocketRequest(appPort, chunkedRequestParts({
+      method: "PUT",
+      port: appPort,
+      headers: {
+        Origin: baseUrl,
+        "Sec-Fetch-Site": "same-origin",
+        Cookie: verifiedCookies.header,
+        "Content-Type": "application/json",
+        "X-Forwarded-For": "198.51.100.154"
+      },
+      chunks: [Buffer.alloc(CLOUD_SYNC_LIMITS.maxEnvelopeBytes + 1, 0x20)]
+    }));
+    const authCallsAfterHeaderRejections = authProviderCalls.filter(call => call.path.startsWith("/auth/v1/")).length;
+    assert(chunkedGet.status === 400 && conflictingFraming.status === 400 && negativeContentLength.status === 400, "Chunked GET, conflicting framing, and negative Content-Length should be rejected at the HTTP boundary.");
+    assert(oversizedChunkedDelete.status === 413 && oversizedChunkedPut.status === 413, "Chunked PUT and DELETE should enforce their method-specific streaming byte limits.");
+    assert(authCallsAfterHeaderRejections === authCallsBeforeHeaderRejections, "Framing and streaming size rejections must occur before calling the account provider.");
+    const invalidSyncJson = await syncFetch("PUT", { rawBody: "{" });
+    const nullSyncJson = await syncFetch("DELETE", { rawBody: "null" });
+    assert(invalidSyncJson.status === 400 && invalidSyncJson.json.code === "INVALID_JSON", "Cloud sync should distinguish malformed JSON.");
+    assert(nullSyncJson.status === 400 && nullSyncJson.json.code === "JSON_BODY_REQUIRED", "Cloud sync should distinguish a JSON null body.");
+
+    const firstPayload = { records: [{ id: "local-record", value: "private-local-value" }] };
+    const firstEnvelope = { baseRevision: 0, schemaVersion: 1, checksum: checksumPayload(firstPayload), payload: firstPayload };
+    const checksumMismatch = await syncFetch("PUT", { body: { ...firstEnvelope, checksum: "0".repeat(64) } });
+    const forgedUserCallCount = cloudProvider.calls.length;
+    const forgedUser = await syncFetch("PUT", { body: { ...firstEnvelope, userId: "22222222-2222-4222-8222-222222222222" } });
+    assert(checksumMismatch.status === 422 && forgedUser.status === 422 && cloudProvider.calls.length === forgedUserCallCount, "Invalid checksums and forged user IDs should be rejected before the provider call.");
+
+    const oversizedRawSync = await syncFetch("PUT", { rawBody: `{"padding":"${"界".repeat(Math.ceil(CLOUD_SYNC_LIMITS.maxEnvelopeBytes / 3))}"}` });
+    assert(oversizedRawSync.status === 413 && oversizedRawSync.json.code === "SYNC_ENVELOPE_TOO_LARGE", "The raw HTTP envelope should have an independent UTF-8 byte limit.");
+
+    const firstPut = await syncFetch("PUT", { body: firstEnvelope });
+    const stalePut = await syncFetch("PUT", { body: firstEnvelope });
+    const firstGet = await syncFetch("GET");
+    assert(firstPut.status === 200 && firstPut.json.revision === 1 && firstPut.json.payload.records[0].id === "local-record", "PUT should create revision 1 for the authenticated account.");
+    assert(stalePut.status === 409 && stalePut.json.conflict.revision === 1, "A stale PUT should return a structured revision conflict.");
+    assert(firstGet.status === 200 && firstGet.json.exists && firstGet.json.revision === 1 && firstGet.json.checksum === firstEnvelope.checksum, "GET should return the authenticated account snapshot.");
+    assert(cloudProvider.calls.every(call => call.body.p_user_id === fakeAccountUser.id), "Only the account resolution user ID may reach cloud RPCs.");
+
+    const firstDelete = await syncFetch("DELETE", { body: { baseRevision: 1 } });
+    const tombstoneGet = await syncFetch("GET");
+    assert(firstDelete.status === 200 && !firstDelete.json.exists && firstDelete.json.revision === 2, "DELETE should create an incremented tombstone revision.");
+    assert(tombstoneGet.status === 200 && !tombstoneGet.json.exists && tombstoneGet.json.revision === 2 && !("payload" in tombstoneGet.json), "GET should preserve a content-free tombstone revision.");
+
+    const fixedCanonicalBytes = Buffer.byteLength(canonicalizeSyncPayload({ value: "" }), "utf8");
+    const remainingCanonicalBytes = CLOUD_SYNC_LIMITS.maxCanonicalBytes - fixedCanonicalBytes;
+    const exactBoundaryText = "界".repeat(Math.floor(remainingCanonicalBytes / 3)) + "x".repeat(remainingCanonicalBytes % 3);
+    const exactBoundaryPayload = { value: exactBoundaryText };
+    assert(Buffer.byteLength(canonicalizeSyncPayload(exactBoundaryPayload), "utf8") === CLOUD_SYNC_LIMITS.maxCanonicalBytes, "Smoke fixture should land exactly on the canonical UTF-8 boundary.");
+    const exactBoundaryPut = await syncFetch("PUT", { body: { baseRevision: 2, schemaVersion: 1, checksum: checksumPayload(exactBoundaryPayload), payload: exactBoundaryPayload } });
+    const aboveBoundaryPayload = { value: `${exactBoundaryText}x` };
+    const aboveBoundaryPut = await syncFetch("PUT", { body: { baseRevision: 3, schemaVersion: 1, checksum: checksumPayload(aboveBoundaryPayload), payload: aboveBoundaryPayload } });
+    assert(exactBoundaryPut.status === 200 && exactBoundaryPut.json.revision === 3, `A canonical payload exactly at the UTF-8 limit should succeed (received ${exactBoundaryPut.status}: ${exactBoundaryPut.text.slice(0, 160)}).`);
+    assert(aboveBoundaryPut.status === 413 && aboveBoundaryPut.json.code === "SYNC_PAYLOAD_TOO_LARGE", "A canonical payload one UTF-8 byte above the limit should return 413.");
+    const exactDeletePrefix = JSON.stringify({ baseRevision: 3 });
+    const exactDeleteBody = exactDeletePrefix + " ".repeat(deleteSyncEnvelopeBytes - Buffer.byteLength(exactDeletePrefix));
+    const exactDelete = await syncFetch("DELETE", { rawBody: exactDeleteBody });
+    const authCallsBeforeOversizedDelete = authProviderCalls.filter(call => call.path.startsWith("/auth/v1/")).length;
+    const oversizedDelete = await syncFetch("DELETE", { rawBody: `${exactDeleteBody} ` });
+    const authCallsAfterOversizedDelete = authProviderCalls.filter(call => call.path.startsWith("/auth/v1/")).length;
+    assert(Buffer.byteLength(exactDeleteBody) === deleteSyncEnvelopeBytes && exactDelete.status === 200 && exactDelete.json.revision === 4, "DELETE should accept an exact method-specific raw envelope boundary.");
+    assert(oversizedDelete.status === 413 && authCallsAfterOversizedDelete === authCallsBeforeOversizedDelete, "DELETE should reject one byte above its raw limit before account lookup.");
+
+    cloudProvider.mode = "malformed";
+    const malformedProvider = await syncFetch("GET");
+    cloudProvider.mode = "failure";
+    const failedProvider = await syncFetch("GET");
+    cloudProvider.mode = "timeout";
+    const timedOutProvider = await syncFetch("GET");
+    cloudProvider.mode = "normal";
+    assert(malformedProvider.status === 502 && failedProvider.status === 502 && timedOutProvider.status === 504, "Cloud sync should classify malformed, failed, and timed-out providers without leaking provider details.");
+
+    const refreshedSync = await syncFetch("GET", { cookie: "hf_account_access=expired; hf_account_refresh=smoke-refresh-token" });
+    assert(refreshedSync.status === 200 && refreshedSync.setCookie?.includes("refreshed-access-token"), "Cloud sync should apply rotated authentication cookies.");
+    const missingFetchMetadata = await syncFetch("GET", { headers: { origin: undefined, "sec-fetch-site": undefined } });
+    const noneFetchMetadata = await syncFetch("GET", { headers: { origin: undefined, "sec-fetch-site": "none" } });
+    assert(missingFetchMetadata.status === 200 && noneFetchMetadata.status === 200, "Non-browser clients with missing metadata and reasonable Sec-Fetch-Site none requests should be accepted.");
+
+    const ipLimitResults = {};
+    for (const method of ["GET", "PUT", "DELETE"]) {
+      let result;
+      for (let index = 0; index <= 5; index += 1) {
+        result = await syncFetch(method, {
+          cookie: false,
+          rawBody: method === "GET" ? undefined : "{}",
+          forwardedFor: `198.51.100.${160 + index}, 203.0.113.${10 + ["GET", "PUT", "DELETE"].indexOf(method)}`
+        });
+      }
+      ipLimitResults[method] = result;
+      assert(result.status === 429 && Number(result.retryAfter) > 0, `${method} should enforce an independent pre-authentication IP limit with Retry-After.`);
+    }
+    let invalidForwardedIpLimit;
+    for (let index = 0; index <= 5; index += 1) {
+      invalidForwardedIpLimit = await syncFetch("GET", {
+        cookie: false,
+        forwardedFor: `198.51.100.${170 + index}, invalid-client-${index}`
+      });
+    }
+    assert(invalidForwardedIpLimit.status === 429, "Invalid trusted-side client IPs should fall back to the direct peer, so attacker prefixes cannot rotate the rate-limit key.");
+
+    const accountLimitResults = {};
+    for (const method of ["GET", "PUT", "DELETE"]) {
+      let result;
+      for (let index = 0; index < 25; index += 1) {
+        result = await syncFetch(method, {
+          rawBody: method === "GET" ? undefined : "{",
+          ip: `192.0.2.${20 + index}`
+        });
+        if (result.status === 429) break;
+      }
+      accountLimitResults[method] = result;
+      assert(result.status === 429 && Number(result.retryAfter) > 0, `${method} should enforce an independent authenticated-account limit with Retry-After.`);
+    }
+
+    const cloudErrorTexts = [
+      cloudUnconfiguredText,
+      unsignedSync.text,
+      invalidSyncJson.text,
+      nullSyncJson.text,
+      checksumMismatch.text,
+      forgedUser.text,
+      oversizedRawSync.text,
+      stalePut.text,
+      aboveBoundaryPut.text,
+      malformedProvider.text,
+      failedProvider.text,
+      timedOutProvider.text,
+      ...Object.values(unsignedSyncByMethod).map(result => result.text),
+      ...Object.values(ipLimitResults).map(result => result.text),
+      invalidForwardedIpLimit.text,
+      ...Object.values(accountLimitResults).map(result => result.text)
+    ].join("\n");
+    assert(syncResponses.every(result => result.cacheControl === "no-store"), "Every cloud sync response should disable caching.");
+    assert(!["smoke-anon-key", "smoke-service-role", "smoke-access-token", "smoke-refresh-token", "PRIVATE_UPSTREAM_MESSAGE", "private-local-value"].some(secret => cloudErrorTexts.includes(secret)), "Cloud sync errors must not expose secrets, provider messages, tokens, or request payloads.");
+    const cloudSyncHttp = {
+      unconfigured: cloudUnconfiguredResponse.status,
+      unauthenticated: unsignedSync.status,
+      invalidJson: invalidSyncJson.status,
+      nullJson: nullSyncJson.status,
+      invalidChecksum: checksumMismatch.status,
+      forgedUser: forgedUser.status,
+      oversizedEnvelope: oversizedRawSync.status,
+      put: firstPut.status,
+      conflict: stalePut.status,
+      get: firstGet.status,
+      delete: firstDelete.status,
+      tombstoneRevision: tombstoneGet.json.revision,
+      exactBoundary: exactBoundaryPut.status,
+      aboveBoundary: aboveBoundaryPut.status,
+      exactDeleteBoundary: exactDelete.status,
+      aboveDeleteBoundary: oversizedDelete.status,
+      providerMalformed: malformedProvider.status,
+      providerFailure: failedProvider.status,
+      providerTimeout: timedOutProvider.status,
+      refreshedCookie: refreshedSync.status,
+      ipLimits: Object.fromEntries(Object.entries(ipLimitResults).map(([method, result]) => [method, result.status])),
+      invalidForwardedIpLimit: invalidForwardedIpLimit.status,
+      accountLimits: Object.fromEntries(Object.entries(accountLimitResults).map(([method, result]) => [method, result.status]))
+    };
     const secureVerifyResponse = await fetch(`${baseUrl}/api/account/verify`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         origin: `https://localhost:${appPort}`,
-        "x-forwarded-for": "198.51.100.30",
-        "x-forwarded-proto": "https"
+        "x-forwarded-for": "203.0.113.250, 198.51.100.30",
+        "x-forwarded-proto": "http, https"
       },
       body: JSON.stringify({ email: fakeAccountUser.email, token: "123456" })
     });
     const secureCookies = getResponseCookies(secureVerifyResponse);
+    const invalidForwardedVerifyResponse = await fetch(`${baseUrl}/api/account/verify`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: baseUrl,
+        "x-forwarded-for": "203.0.113.251, not-an-ip",
+        "x-forwarded-proto": "https, ftp"
+      },
+      body: JSON.stringify({ email: fakeAccountUser.email, token: "123456" })
+    });
+    const invalidForwardedCookies = getResponseCookies(invalidForwardedVerifyResponse);
     const signedInSessionResponse = await fetch(`${baseUrl}/api/account/session`, { headers: { cookie: verifiedCookies.header } });
     const signedInSessionPayload = await signedInSessionResponse.json();
     const refreshedSessionResponse = await fetch(`${baseUrl}/api/account/session`, {
@@ -469,6 +1045,7 @@ async function run() {
       accountCookiesStrict: verifiedCookies.values.every(value => value.includes("HttpOnly") && value.includes("SameSite=Strict") && value.includes("Path=/")),
       accountCookiesSecure: verifiedCookies.values.some(value => value.includes("Secure")),
       forwardedHttpsCookiesSecure: secureVerifyResponse.status === 200 && secureCookies.values.length === 2 && secureCookies.values.every(value => value.includes("Secure")),
+      invalidForwardedTokensRejected: invalidForwardedVerifyResponse.status === 200 && invalidForwardedCookies.values.length === 2 && invalidForwardedCookies.values.every(value => !value.includes("Secure")),
       signedInSession: signedInSessionPayload,
       refreshedSession: refreshedSessionPayload,
       refreshedCookieRotated: refreshedCookies.values.some(value => value.includes("refreshed-access-token")),
@@ -485,7 +1062,7 @@ async function run() {
     assert(/^[0-9a-f-]{36}$/i.test(serverHttp.requestId), "API responses should expose a generated request ID.");
     assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.22.0", "Health response should expose status and release version.");
     assert(Number.isInteger(serverHttp.health.uptimeSeconds) && serverHttp.health.uptimeSeconds >= 0, "Health response should expose a valid uptime.");
-    assert(serverHttp.health.openaiConfigured === false && serverHttp.health.accountConfigured === true && serverHttp.health.entitlementConfigured === false && serverHttp.health.aiAccessMode === "deployment_shared" && serverHttp.health.model === "gpt-5-mini", "Health response should expose non-secret service configuration state.");
+    assert(serverHttp.health.openaiConfigured === false && serverHttp.health.accountConfigured === true && serverHttp.health.entitlementConfigured === false && serverHttp.health.cloudSyncConfigured === true && serverHttp.health.aiAccessMode === "deployment_shared" && serverHttp.health.model === "gpt-5-mini", "Health response should expose independent, non-secret service configuration state.");
     assert(serverHttp.indexCache === "no-cache", "HTML should revalidate instead of using a stale shell.");
     assert(serverHttp.landingReady, "Root should serve the beginner landing page with an app entry.");
     assert(serverHttp.appStatus === 200 && serverHttp.appReady, "The app route should serve the application shell with parent-relative assets.");
@@ -518,6 +1095,7 @@ async function run() {
     assert(serverHttp.accountCookieCount === 2 && serverHttp.accountCookiesStrict, "Account tokens should be stored in strict HttpOnly cookies.");
     assert(!serverHttp.accountCookiesSecure, "Local HTTP development cookies should not require HTTPS.");
     assert(serverHttp.forwardedHttpsCookiesSecure, "Trusted HTTPS deployments should mark every account cookie Secure.");
+    assert(serverHttp.invalidForwardedTokensRejected, "Invalid trusted-side forwarding tokens must fall back to the direct connection instead of trusting an attacker prefix.");
     assert(serverHttp.signedInSession.signedIn && serverHttp.signedInSession.dataScope === "local_only", "A valid access cookie should restore the account session without implying sync.");
     assert(serverHttp.refreshedSession.signedIn && serverHttp.refreshedCookieRotated, "An expired access token should refresh and rotate account cookies.");
     assert(serverHttp.signoutStatus === 200 && serverHttp.signoutCookiesCleared, "Sign out should clear both local account cookies.");
@@ -3764,6 +4342,7 @@ async function run() {
       ok: true,
       checks: {
         serverHttp,
+        cloudSyncHttp,
         shutdownResult,
         today: todayCheck,
         supportAgreement,
@@ -3805,9 +4384,12 @@ async function run() {
     }, null, 2));
   } finally {
     if (cdp) cdp.close();
-    chrome.kill();
-    server.kill();
-    authServer.close();
+    await stopChild(chrome, "Chrome");
+    await stopChild(cloudUnconfiguredServer, "Cloud-unconfigured app server");
+    await stopChild(server, "App server");
+    await stopChild(unconfiguredServer, "Unconfigured app server");
+    await stopChild(partialConfigServer, "Partially configured server");
+    await closeHttpServer(authServer);
   }
 }
 
