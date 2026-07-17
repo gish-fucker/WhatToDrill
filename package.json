@@ -5,11 +5,12 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "check": "node --check public/workout-session-model.js && node --check public/training-rotation-model.js && node --check public/cloud-sync-model.js && node --check public/app.js && node --check server.js && node --check server/entitlements.js",
+    "check": "node --check public/workout-session-model.js && node --check public/training-rotation-model.js && node --check public/cloud-sync-model.js && node --check public/app.js && node --check server.js && node --check server/entitlements.js && node --check server/cloud-sync.js",
     "test:workout-session": "node scripts/workout-session-test.mjs",
     "test:training-rotation": "node scripts/training-rotation-test.mjs",
     "test:entitlements": "node scripts/entitlements-test.mjs",
     "test:cloud-sync": "node scripts/cloud-sync-test.mjs",
-    "test:smoke": "node scripts/workout-session-test.mjs && node scripts/training-rotation-test.mjs && node scripts/entitlements-test.mjs && node scripts/cloud-sync-test.mjs && node scripts/smoke-test.mjs"
+    "test:cloud-sync-server": "node scripts/cloud-sync-server-test.mjs",
+    "test:smoke": "node scripts/workout-session-test.mjs && node scripts/training-rotation-test.mjs && node scripts/entitlements-test.mjs && node scripts/cloud-sync-test.mjs && node scripts/cloud-sync-server-test.mjs && node scripts/smoke-test.mjs"
   }
 }
