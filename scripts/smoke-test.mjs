@@ -251,7 +251,7 @@ async function run() {
       ...process.env,
       HOST: "127.0.0.1",
       PORT: String(appPort),
-      APP_VERSION: "1.21.0",
+      APP_VERSION: "1.22.0",
       OPENAI_API_KEY: "",
       ADVICE_RATE_LIMIT: "10",
       ACCOUNT_RATE_LIMIT: "5",
@@ -483,7 +483,7 @@ async function run() {
     assert(serverHttp.csp?.includes("frame-ancestors 'none'"), "Static responses should include a restrictive CSP.");
     assert(serverHttp.frameOptions === "DENY", "Static responses should prevent framing.");
     assert(/^[0-9a-f-]{36}$/i.test(serverHttp.requestId), "API responses should expose a generated request ID.");
-    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.21.0", "Health response should expose status and release version.");
+    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.22.0", "Health response should expose status and release version.");
     assert(Number.isInteger(serverHttp.health.uptimeSeconds) && serverHttp.health.uptimeSeconds >= 0, "Health response should expose a valid uptime.");
     assert(serverHttp.health.openaiConfigured === false && serverHttp.health.accountConfigured === true && serverHttp.health.entitlementConfigured === false && serverHttp.health.aiAccessMode === "deployment_shared" && serverHttp.health.model === "gpt-5-mini", "Health response should expose non-secret service configuration state.");
     assert(serverHttp.indexCache === "no-cache", "HTML should revalidate instead of using a stale shell.");
@@ -1952,6 +1952,132 @@ async function run() {
     assert(rotationUi.confirmed.status === "planned" && rotationUi.confirmed.date === rotationUi.chosenDate && rotationUi.confirmed.decision === "changed_day" && rotationUi.confirmed.nextIndex === 0 && rotationUi.confirmed.dialogClosed, "Users should be able to change the date and confirm a different rotation day without ambiguous state.");
     assert(rotationUi.selfDecided && !rotationUi.overflow, "Choosing to decide independently should remove the automatic plan without causing layout overflow.");
 
+    const nextPlanExerciseEdit = await evaluate(cdp, `(() => {
+      const snapshot = JSON.parse(JSON.stringify(state));
+      state.settings.trainingRotation = TrainingRotationModel.normalizeRotation({
+        mode: "upper_lower",
+        currentIndex: 0,
+        days: [
+          { id: "rotation_upper", label: "上肢", templateId: "beginner_upper" },
+          { id: "rotation_lower", label: "下肢", templateId: "beginner_lower" }
+        ]
+      }, getAllTemplates());
+      const source = {
+        id: "remove-exercise-source", date: today(), title: "上肢训练", sessionRpe: 6, feeling: "right",
+        rotationDayId: "rotation_upper", sourceTemplateId: "beginner_upper", completionSummary: { completed: 4, skipped: 0, pending: 0 },
+        exercises: [{ name: "卧推", sets: [{ weight: 20, reps: 8, rpe: 6, note: "" }] }]
+      };
+      state.workouts = [source];
+      state.nextWorkoutPlan = buildNextWorkoutPlan(source, { rotationDayId: "rotation_lower" });
+      const templatesBefore = JSON.stringify(state.templates);
+      const workoutsBefore = JSON.stringify(state.workouts);
+      const rotationBefore = JSON.stringify(state.settings.trainingRotation);
+      showNextWorkoutResult(source, state.nextWorkoutPlan);
+      const before = {
+        names: state.nextWorkoutPlan.exercises.map(item => item.name),
+        duration: state.nextWorkoutPlan.estimatedDuration,
+        action: Boolean(document.querySelector("#removeNextWorkoutExerciseBtn"))
+      };
+      const chosenDate = addLocalDays(today(), 4);
+      document.querySelector("#nextWorkoutDateInput").value = chosenDate;
+      document.querySelector("#removeNextWorkoutExerciseBtn")?.click();
+      const editedNames = state.nextWorkoutPlan.exercises.map(item => item.name);
+      const edited = {
+        names: editedNames,
+        duration: state.nextWorkoutPlan.estimatedDuration,
+        date: state.nextWorkoutPlan.scheduledFor,
+        inputDate: document.querySelector("#nextWorkoutDateInput")?.value,
+        decision: state.nextWorkoutPlan.userDecision,
+        persistedNames: JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)})).nextWorkoutPlan?.exercises?.map(item => item.name) || [],
+        dialogOpen: document.querySelector("#nextWorkoutResultDialog").open,
+        announcement: document.querySelector("#toast").textContent,
+        templatesUnchanged: JSON.stringify(state.templates) === templatesBefore,
+        workoutsUnchanged: JSON.stringify(state.workouts) === workoutsBefore,
+        rotationUnchanged: JSON.stringify(state.settings.trainingRotation) === rotationBefore
+      };
+      closeNextWorkoutResult();
+      showNextWorkoutResult(source, state.nextWorkoutPlan);
+      const reopenedNames = state.nextWorkoutPlan.exercises.map(item => item.name);
+      document.querySelector("#confirmNextWorkoutBtn").click();
+      const confirmedEdit = {
+        date: state.nextWorkoutPlan.scheduledFor,
+        status: state.nextWorkoutPlan.status,
+        persistedDate: JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)})).nextWorkoutPlan.scheduledFor
+      };
+
+      state.nextWorkoutPlan = buildNextWorkoutPlan(source, { rotationDayId: "rotation_lower" });
+      showNextWorkoutResult(source, state.nextWorkoutPlan);
+      const daySelect = document.querySelector("#nextWorkoutDaySelect");
+      daySelect.value = "rotation_upper";
+      daySelect.dispatchEvent(new Event("change", { bubbles: true }));
+      const changedDay = {
+        sourceTemplateId: state.nextWorkoutPlan.sourceTemplateId,
+        names: state.nextWorkoutPlan.exercises.map(item => item.name),
+        decision: state.nextWorkoutPlan.userDecision
+      };
+
+      state.nextWorkoutPlan = buildNextWorkoutPlan(source, { rotationDayId: "rotation_lower" });
+      showNextWorkoutResult(source, state.nextWorkoutPlan);
+      document.querySelector("#removeNextWorkoutExerciseBtn")?.click();
+      document.querySelector("#makeNextWorkoutRecoveryBtn").click();
+      const recovery = {
+        source: state.nextWorkoutPlan.source,
+        action: Boolean(document.querySelector("#removeNextWorkoutExerciseBtn"))
+      };
+
+      state.nextWorkoutPlan = normalizeNextWorkoutPlan({
+        ...buildNextWorkoutPlan(source, { rotationDayId: "rotation_lower" }),
+        exercises: buildNextWorkoutPlan(source, { rotationDayId: "rotation_lower" }).exercises.slice(0, 1)
+      });
+      showNextWorkoutResult(source, state.nextWorkoutPlan);
+      const oneExerciseAction = Boolean(document.querySelector("#removeNextWorkoutExerciseBtn"));
+
+      const durationCases = [1, -5, 0.5, 9999].map(importedDuration => {
+        state.nextWorkoutPlan = normalizeNextWorkoutPlan({
+          ...buildNextWorkoutPlan(source, { rotationDayId: "rotation_lower" }),
+          estimatedDuration: importedDuration
+        });
+        showNextWorkoutResult(source, state.nextWorkoutPlan);
+        document.querySelector("#removeNextWorkoutExerciseBtn").click();
+        return {
+          importedDuration,
+          duration: state.nextWorkoutPlan.estimatedDuration,
+          remaining: state.nextWorkoutPlan.exercises.length
+        };
+      });
+
+      state.nextWorkoutPlan = buildNextWorkoutPlan(source, { rotationDayId: "rotation_lower" });
+      showNextWorkoutResult(source, state.nextWorkoutPlan);
+      document.querySelector("#removeNextWorkoutExerciseBtn")?.click();
+      const namesBeforeStart = state.nextWorkoutPlan.exercises.map(item => item.name);
+      startNextWorkoutPlan();
+      const startedNames = activeWorkoutSession.exercises.map(item => item.name);
+      clearWorkoutDraft();
+      activeWorkoutSession = null;
+      clearWorkoutForm();
+      Object.assign(state, normalizeImportedState(snapshot));
+      persistState();
+      renderAll();
+      return { before, chosenDate, edited, editedNames, reopenedNames, confirmedEdit, changedDay, recovery, oneExerciseAction, durationCases, namesBeforeStart, startedNames };
+    })()`);
+    assert(nextPlanExerciseEdit.before.action, "Editable suggested plans should offer 减少一个动作.");
+    assert(nextPlanExerciseEdit.edited.names.length === nextPlanExerciseEdit.before.names.length - 1 && nextPlanExerciseEdit.edited.names.join("→") === nextPlanExerciseEdit.before.names.slice(0, -1).join("→"), "Removing an exercise should remove exactly the last item and preserve retained order.");
+    assert(nextPlanExerciseEdit.edited.duration > 0 && nextPlanExerciseEdit.edited.duration < nextPlanExerciseEdit.before.duration, "Removing an exercise should reduce the positive duration estimate.");
+    assert(nextPlanExerciseEdit.edited.decision === "reduced_exercise" && nextPlanExerciseEdit.edited.persistedNames.join("→") === nextPlanExerciseEdit.editedNames.join("→"), "The one-off edit should be normalized and persisted immediately.");
+    assert(nextPlanExerciseEdit.edited.date === nextPlanExerciseEdit.chosenDate && nextPlanExerciseEdit.edited.inputDate === nextPlanExerciseEdit.chosenDate, "Removing an exercise should preserve a valid unsubmitted date in the plan snapshot and redrawn input.");
+    assert(nextPlanExerciseEdit.edited.dialogOpen && nextPlanExerciseEdit.edited.announcement.includes(nextPlanExerciseEdit.before.names.at(-1)), "The result dialog should stay open and announce the removed exercise by name.");
+    assert(nextPlanExerciseEdit.edited.templatesUnchanged && nextPlanExerciseEdit.edited.workoutsUnchanged && nextPlanExerciseEdit.edited.rotationUnchanged, "Removing an exercise must not mutate templates, history, or rotation.");
+    assert(nextPlanExerciseEdit.reopenedNames.join("→") === nextPlanExerciseEdit.editedNames.join("→"), "Closing and reopening should preserve the edited plan snapshot.");
+    assert(nextPlanExerciseEdit.confirmedEdit.status === "planned" && nextPlanExerciseEdit.confirmedEdit.date === nextPlanExerciseEdit.chosenDate && nextPlanExerciseEdit.confirmedEdit.persistedDate === nextPlanExerciseEdit.chosenDate, "Changing the date, removing an exercise, and confirming should retain the chosen date.");
+    assert(nextPlanExerciseEdit.changedDay.sourceTemplateId === "beginner_upper" && nextPlanExerciseEdit.changedDay.decision !== "reduced_exercise", "Changing the training day should rebuild the plan from its source template.");
+    assert(nextPlanExerciseEdit.recovery.source === "recovery_override" && !nextPlanExerciseEdit.recovery.action && !nextPlanExerciseEdit.oneExerciseAction, "Recovery and one-exercise plans should not offer removal.");
+    assert(nextPlanExerciseEdit.durationCases.every(item => Number.isFinite(item.duration) && item.duration > 0), "Imported low or negative durations should normalize to a positive estimate after removal.");
+    assert(nextPlanExerciseEdit.durationCases.find(item => item.importedDuration === 1)?.duration <= 1, "Removing from a low positive imported duration must not increase the estimate.");
+    assert(nextPlanExerciseEdit.durationCases.find(item => item.importedDuration === -5)?.duration <= nextPlanExerciseEdit.durationCases.find(item => item.importedDuration === -5).remaining * 8, "A negative imported duration should be replaced by a bounded per-exercise estimate.");
+    assert(nextPlanExerciseEdit.durationCases.find(item => item.importedDuration === 0.5)?.duration === 0.5, "Removing from a sub-minute positive imported duration must preserve it instead of increasing it.");
+    assert(nextPlanExerciseEdit.durationCases.find(item => item.importedDuration === 9999)?.duration === nextPlanExerciseEdit.durationCases.find(item => item.importedDuration === 9999).remaining * 8, "An implausibly large imported duration should be rebuilt from the remaining exercise count.");
+    assert(nextPlanExerciseEdit.startedNames.join("→") === nextPlanExerciseEdit.namesBeforeStart.join("→"), "Starting the edited plan should use exactly its retained exercises.");
+
     const previousSetHistory = await evaluate(cdp, `(() => {
       const savedName = JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)})).workouts[0].exercises[0].name;
       const select = document.querySelector(".exercise-name");
@@ -3209,7 +3335,7 @@ async function run() {
         overflow: document.documentElement.scrollWidth > innerWidth
       };
     })()`);
-    assert(updateFlow.version.includes("v1.21.0"), "Help should display the current semantic app version.");
+    assert(updateFlow.version.includes("v1.22.0"), "Help should display the current semantic app version.");
     assert(updateFlow.shown && updateFlow.dismissed, "App update banner should be visible and dismissible.");
     assert(updateFlow.message?.type === "SKIP_WAITING" && updateFlow.buttonText === "更新中", "Confirmed update should activate the waiting service worker with clear feedback.");
     assert(!updateFlow.overflow, "Update banner should not cause desktop overflow.");
@@ -3279,6 +3405,45 @@ async function run() {
     assert(mobileFirstSetup.open && mobileFirstSetup.focusedName === "firstWorkoutCondition", `The 390px setup dialog should open with reachable keyboard focus: ${JSON.stringify(mobileFirstSetup)}.`);
     assert(mobileFirstSetup.width <= mobileFirstSetup.viewportWidth - 24 && !mobileFirstSetup.overflow && mobileFirstSetup.bottomReachable, `The 390px setup dialog should fit horizontally and scroll to all content: ${JSON.stringify(mobileFirstSetup)}.`);
     assert(mobileFirstSetup.targets.every(height => height >= 44), `Every setup choice and action should provide a 44px mobile touch target: ${JSON.stringify(mobileFirstSetup.targets)}.`);
+    const mobileNextPlanEdit = await evaluate(cdp, `(() => {
+      const snapshot = JSON.parse(JSON.stringify(state));
+      state.settings.trainingRotation = TrainingRotationModel.normalizeRotation({
+        mode: "upper_lower",
+        currentIndex: 0,
+        days: [
+          { id: "rotation_upper", label: "上肢", templateId: "beginner_upper" },
+          { id: "rotation_lower", label: "下肢", templateId: "beginner_lower" }
+        ]
+      }, getAllTemplates());
+      const source = {
+        id: "mobile-remove-source", date: today(), title: "上肢训练", sessionRpe: 6, feeling: "right",
+        rotationDayId: "rotation_upper", sourceTemplateId: "beginner_upper", completionSummary: { completed: 4, skipped: 0, pending: 0 },
+        exercises: [{ name: "卧推", sets: [{ weight: 20, reps: 8, rpe: 6, note: "" }] }]
+      };
+      state.workouts = [source];
+      state.nextWorkoutPlan = buildNextWorkoutPlan(source, { rotationDayId: "rotation_lower" });
+      showNextWorkoutResult(source, state.nextWorkoutPlan);
+      const dialog = document.querySelector("#nextWorkoutResultDialog");
+      const buttons = [...dialog.querySelectorAll(".next-plan-decision-actions button")].filter(button => button.offsetParent !== null);
+      const heights = buttons.map(button => button.getBoundingClientRect().height);
+      dialog.scrollTop = dialog.scrollHeight;
+      const lastButton = buttons.at(-1).getBoundingClientRect();
+      const result = {
+        action: Boolean(document.querySelector("#removeNextWorkoutExerciseBtn")),
+        overflow: document.documentElement.scrollWidth > innerWidth,
+        heights,
+        bottomReachable: dialog.scrollTop + dialog.clientHeight >= dialog.scrollHeight - 1,
+        lastActionVisible: lastButton.top < innerHeight && lastButton.bottom <= innerHeight
+      };
+      closeNextWorkoutResult();
+      Object.assign(state, normalizeImportedState(snapshot));
+      persistState();
+      renderAll();
+      return result;
+    })()`);
+    assert(mobileNextPlanEdit.action && !mobileNextPlanEdit.overflow, `The 390px next-plan edit should fit without horizontal overflow: ${JSON.stringify(mobileNextPlanEdit)}.`);
+    assert(mobileNextPlanEdit.heights.every(height => height >= 44), `Every visible next-plan decision should provide a 44px touch target: ${JSON.stringify(mobileNextPlanEdit.heights)}.`);
+    assert(mobileNextPlanEdit.bottomReachable && mobileNextPlanEdit.lastActionVisible, `The last next-plan action should be reachable by scrolling the dialog: ${JSON.stringify(mobileNextPlanEdit)}.`);
     await evaluate(cdp, `(() => {
       const mobileTemplate = beginnerTemplates.find(template => template.id === "beginner_full_body");
       startFocusedWorkoutSession(mobileTemplate, mobileTemplate.name);

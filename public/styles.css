@@ -2238,6 +2238,10 @@ input[type="checkbox"] {
   margin-top: 8px;
 }
 
+.next-plan-decision-actions button {
+  min-height: 44px;
+}
+
 .progress-entry-state {
   display: grid;
   justify-items: start;
@@ -5304,6 +5308,10 @@ input[type="checkbox"] {
 }
 
 @media (max-width: 640px) {
+  .next-plan-decision-actions {
+    grid-template-columns: 1fr;
+  }
+
   .first-workout-setup-dialog .confirm-dialog-body {
     padding: 18px;
   }

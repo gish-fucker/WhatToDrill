@@ -1,6 +1,6 @@
 const STORAGE_KEY = "habit_fitness_app_v1";
 const WORKOUT_DRAFT_KEY = "habit_fitness_workout_draft_v1";
-const APP_VERSION = "1.21.0";
+const APP_VERSION = "1.22.0";
 const CLOUD_ADVICE_CONSENT_VERSION = 1;
 const BACKUP_SCHEMA_VERSION = 1;
 const MAX_WORKOUT_CSV_BYTES = 5 * 1024 * 1024;
@@ -301,7 +301,7 @@ function normalizeNextWorkoutPlan(plan) {
     sourceTemplateId: typeof plan.sourceTemplateId === "string" ? plan.sourceTemplateId : "",
     rotationIndex: Number.isInteger(Number(plan.rotationIndex)) ? Number(plan.rotationIndex) : 0,
     sourceComparableWorkoutId: typeof plan.sourceComparableWorkoutId === "string" ? plan.sourceComparableWorkoutId : "",
-    userDecision: ["suggested", "changed_day", "recovery", "self_decided"].includes(plan.userDecision) ? plan.userDecision : "suggested",
+    userDecision: ["suggested", "changed_day", "recovery", "self_decided", "reduced_exercise"].includes(plan.userDecision) ? plan.userDecision : "suggested",
     rotationAdvancedAt: Number.isFinite(Date.parse(plan.rotationAdvancedAt)) ? new Date(plan.rotationAdvancedAt).toISOString() : "",
     estimatedDuration: numberOrNull(plan.estimatedDuration),
     acceptedAt: Number.isFinite(Date.parse(plan.acceptedAt)) ? new Date(plan.acceptedAt).toISOString() : "",
@@ -2347,6 +2347,7 @@ function showNextWorkoutResult(workout, plan = state.nextWorkoutPlan) {
       </div>
       <div class="next-plan-decision-actions">
         <button id="confirmNextWorkoutBtn" type="button">确认下次计划</button>
+        ${plan.source !== "recovery_override" && plan.exercises.length > 1 ? '<button id="removeNextWorkoutExerciseBtn" class="ghost-button" type="button">减少一个动作</button>' : ""}
         ${plan.source !== "recovery_override" ? '<button id="makeNextWorkoutRecoveryBtn" class="ghost-button" type="button">改成恢复训练</button>' : ""}
         <button id="selfDecideNextWorkoutBtn" class="text-button" type="button">这次我自己决定</button>
       </div>
@@ -2374,6 +2375,44 @@ function showNextWorkoutResult(workout, plan = state.nextWorkoutPlan) {
 
 function sourceWorkoutForNextPlan() {
   return state.workouts.find(workout => workout.id === state.nextWorkoutPlan?.sourceWorkoutId) || null;
+}
+
+function removeExerciseFromSuggestedNextWorkout() {
+  const plan = state.nextWorkoutPlan;
+  if (!plan || plan.source === "recovery_override" || plan.exercises.length <= 1) return;
+  const sourceWorkout = sourceWorkoutForNextPlan();
+  if (!sourceWorkout) {
+    showToast("找不到这次建议的来源训练，请返回首页重新生成");
+    return;
+  }
+  const removed = plan.exercises.at(-1);
+  const remainingExerciseCount = plan.exercises.length - 1;
+  const importedDuration = Number(plan.estimatedDuration);
+  let estimatedDuration;
+  if (Number.isFinite(importedDuration) && importedDuration > 0 && importedDuration < 1) {
+    estimatedDuration = importedDuration;
+  } else if (Number.isFinite(importedDuration) && importedDuration >= 1 && importedDuration <= 480) {
+    estimatedDuration = Math.min(
+      importedDuration,
+      Math.max(1, Math.round(importedDuration * remainingExerciseCount / plan.exercises.length))
+    );
+  } else {
+    estimatedDuration = Math.max(1, remainingExerciseCount * 8);
+  }
+  const pendingDate = $("nextWorkoutDateInput")?.value;
+  const next = normalizeNextWorkoutPlan({
+    ...plan,
+    scheduledFor: isValidDateText(pendingDate) ? pendingDate : plan.scheduledFor,
+    exercises: plan.exercises.slice(0, -1),
+    estimatedDuration,
+    adjustments: [...plan.adjustments.slice(0, 3), `已按你的选择移除 ${removed.name}`],
+    userDecision: "reduced_exercise"
+  });
+  if (!next) return;
+  state.nextWorkoutPlan = next;
+  persistState();
+  showNextWorkoutResult(sourceWorkout, next);
+  showToast(`已减少一个动作：${removed.name}`);
 }
 
 function changeSuggestedRotationDay(rotationDayId) {
@@ -7620,6 +7659,10 @@ function bindActions() {
     }
     if (event.target.closest("#makeNextWorkoutRecoveryBtn")) {
       makeSuggestedWorkoutRecovery();
+      return;
+    }
+    if (event.target.closest("#removeNextWorkoutExerciseBtn")) {
+      removeExerciseFromSuggestedNextWorkout();
       return;
     }
     if (event.target.closest("#selfDecideNextWorkoutBtn")) chooseNextWorkoutMyself();
