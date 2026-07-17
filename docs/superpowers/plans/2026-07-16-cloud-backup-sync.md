@@ -13,9 +13,13 @@
 - Sync is opt-in and requires a signed-in account.
 - GitHub Pages remains local-only and must not show a fake cloud-enable action.
 - Authentication tokens and the Supabase service-role key never enter browser state, exports, logs, or responses.
-- Payload size is at most 1 MiB and is validated independently on the server.
-- PUT and DELETE require same-origin requests, authentication, and rate limiting.
+- Canonical snapshot payload size is at most exactly 1,048,576 UTF-8 bytes; the HTTP envelope has a separate bounded overhead limit.
+- GET, PUT, and DELETE require strict same-origin requests, authentication, IP and account rate limiting.
 - All writes use `baseRevision`; stale writes return HTTP 409 and never overwrite silently.
+- Conflict metadata cannot be cleared by ordinary pull/push completion; only explicit use-cloud or keep-local actions may resolve it, and every transition is bound to the current account ID.
+- A revision identifies immutable content: the same revision with a different checksum is an integrity conflict.
+- DELETE creates a content-free tombstone with an incremented revision; revisions never reset after deletion.
+- The server recomputes canonical SHA-256 and rejects any checksum mismatch.
 - Sync metadata uses a separate localStorage key and is excluded from manual JSON export.
 - Logout, local reset, and cloud deletion are three distinct actions.
 - TLS and provider-managed encryption at rest may be documented; do not claim end-to-end encryption.
@@ -48,7 +52,7 @@
 
 - [ ] **Step 1: Write failing deterministic tests**
 
-Cover empty metadata, account changes, clean/dirty transitions, same-checksum no-op, successful revision advance, offline pending state, 409 conflict preserving the local checksum, use-cloud resolution, keep-local resolution, and newer unsupported schema refusal.
+Cover empty metadata, own-property/plain-object enforcement, account changes during every async transition, clean/dirty invariant derivation, same-checksum no-op, successful revision advance, same-revision/different-checksum integrity conflict, offline pending state, 409 conflict preserving the local checksum, ordinary completion being unable to clear conflict, explicit use-cloud resolution, explicit keep-local resolution at no older than the known conflict revision, and newer unsupported schema refusal. Hash tests cover browser Web Crypto, injected byte/string adapters, non-finite numbers, undefined, sparse arrays, cycles, BigInt, and prototype-polluted input.
 
 - [ ] **Step 2: Prove tests fail**
 
@@ -97,15 +101,15 @@ Expected: `Cloud sync model tests passed.`
 
 - [ ] **Step 1: Write validator and compare-and-swap tests**
 
-Test allowed top-level fields, schema version, arrays and record-count caps, string-length caps, checksum format, 1 MiB limit, create at revision 0, update at matching revision, stale 409, and delete at matching revision.
+Test an exact outer envelope allow-list, schema version, arrays and record-count caps, string-length caps, checksum format and content, canonical UTF-8 payload at and above 1,048,576 bytes, safe-integer revisions, create at revision 0, update at matching revision, stale 409, tombstone delete at matching revision, and stale-device ABA prevention after delete and recreate.
 
 - [ ] **Step 2: Write the migration**
 
-Create `cloud_sync_states(user_id uuid primary key references auth.users(id) on delete cascade, revision bigint not null, schema_version integer not null, payload jsonb not null, checksum text not null, created_at timestamptz, updated_at timestamptz)`. Enable RLS, revoke all from `anon` and `authenticated`, grant only service-role RPC execution. Implement get/put/delete RPCs; put/delete acquire a transaction advisory lock derived from user ID and enforce `base_revision` atomically.
+Create `cloud_sync_states(user_id uuid primary key references auth.users(id) on delete cascade, revision bigint not null, schema_version integer, payload jsonb, checksum text, deleted_at timestamptz, created_at timestamptz not null, updated_at timestamptz not null)`. Add a constraint requiring either a complete active snapshot or a content-free tombstone. Enable RLS; revoke table access from `PUBLIC`, `anon`, `authenticated`, and `service_role`. Implement `SECURITY DEFINER` get/put/delete RPCs with fixed `search_path`, fully qualified names, explicit revoke from default public/anon/authenticated execution, and execute granted only to `service_role`. Put/delete acquire a namespaced advisory lock and enforce `base_revision` atomically. DELETE increments revision and clears content; GET reports `exists:false` while retaining that revision; a later PUT must use the tombstone revision.
 
 - [ ] **Step 3: Implement the server module**
 
-Reuse the entitlement module's timeout and service-role fetch pattern. Never accept a user ID from request JSON. Map validation to 422, size to 413, stale revisions to 409, unavailable configuration to 503, and provider failure to 502.
+Reuse the entitlement module's timeout and service-role fetch pattern but keep cloud-sync configuration independent from the entitlement feature switch. Never accept a user ID from request JSON. Recompute canonical SHA-256 on both inbound PUT and outbound GET data. Map validation or checksum mismatch to 422, size to 413, stale revisions to 409, unavailable configuration to 503, provider timeout to 504, malformed/unexpected provider data to 502, and other provider failure to 502. RPCs return structured conflict results; do not parse provider error messages.
 
 - [ ] **Step 4: Pass server tests**
 
@@ -125,15 +129,15 @@ Expected: validator and fake RPC tests pass without network access.
 
 - [ ] **Step 1: Add failing HTTP security tests**
 
-Assert unauthenticated requests return 401; cross-site PUT/DELETE return 403; malformed payload returns 422; oversized payload returns 413; unconfigured server returns 503; responses set `cache-control: no-store` and never expose tokens or service-role values.
+Assert unauthenticated requests return 401; cross-origin or same-site-subdomain GET/PUT/DELETE return 403; all methods have independent IP/account limits and `Retry-After`; malformed or checksum-mismatched payload returns 422; oversized raw envelope or canonical payload returns 413 including multi-byte UTF-8 boundaries; unconfigured server returns 503; provider timeout returns 504; malformed provider data returns 502; responses set `cache-control: no-store` and never expose tokens, anon key, service-role key, upstream messages, or request payloads.
 
 - [ ] **Step 2: Add the routes**
 
-Resolve the account with `resolveAccountUser(req)`, apply refreshed cookies, and pass only `resolution.user.id` to the sync module. GET returns either `{configured:true,exists:false,revision:0}` or the current snapshot. PUT and DELETE reuse `readJsonRequest`, origin checks, and a sync-specific per-user/IP limiter.
+Before authentication, require exact `Origin` match when present and accept only `Sec-Fetch-Site: same-origin`, a reasonable `none`, or a missing header for non-browser clients. Apply an IP limit, resolve the account with `resolveAccountUser(req)`, apply refreshed cookies, then apply an account limit and pass only `resolution.user.id` to the sync module. GET returns either an active snapshot or `{configured:true,exists:false,revision:<current tombstone revision>}`. PUT strictly accepts only `{baseRevision,schemaVersion,checksum,payload}`; DELETE only `{baseRevision}`. Extend body reading with a method-specific byte limit and distinguish invalid JSON, JSON `null`, and read failure. Place routes before the generic `/api/account/*` 405 branch and return `Allow: GET, PUT, DELETE` for unsupported methods.
 
 - [ ] **Step 3: Extend health and configuration truth**
 
-Add `cloudSyncConfigured` to `/api/health`. Document required Supabase URL, anon key, and service-role key; do not add secret values to tracked files.
+Add `cloudSyncConfigured` to `/api/health`. Document required Supabase URL, anon key, and service-role key; do not add secret values to tracked files. Enabling cloud sync must not implicitly enable entitlement/quota behavior unless its own schema and explicit feature configuration are present.
 
 - [ ] **Step 4: Pass HTTP smoke tests**
 
