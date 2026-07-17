@@ -197,6 +197,24 @@
     }
   }
 
+  function assertPostgresJsonString(value) {
+    for (let index = 0; index < value.length; index += 1) {
+      const codeUnit = value.charCodeAt(index);
+      if (codeUnit === 0) {
+        throw unsupportedSnapshotValue("Cloud snapshot strings cannot contain U+0000.");
+      }
+      if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+        const nextCodeUnit = value.charCodeAt(index + 1);
+        if (!(nextCodeUnit >= 0xdc00 && nextCodeUnit <= 0xdfff)) {
+          throw unsupportedSnapshotValue("Cloud snapshot strings cannot contain an unpaired high surrogate.");
+        }
+        index += 1;
+      } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+        throw unsupportedSnapshotValue("Cloud snapshot strings cannot contain an unpaired low surrogate.");
+      }
+    }
+  }
+
   function canonicalStringify(value) {
     assertCanonicalEnvironment();
     const ancestors = new Set();
@@ -204,7 +222,11 @@
     function encode(current) {
       if (current === null) return "null";
       const type = typeof current;
-      if (type === "string" || type === "boolean") return JSON.stringify(current);
+      if (type === "string") {
+        assertPostgresJsonString(current);
+        return JSON.stringify(current);
+      }
+      if (type === "boolean") return JSON.stringify(current);
       if (type === "number") {
         if (!Number.isFinite(current)) throw unsupportedSnapshotValue("Cloud snapshots require finite numbers.");
         return JSON.stringify(current);
@@ -244,6 +266,7 @@
         if (keys.some(key => typeof key !== "string" || FORBIDDEN_RECORD_KEYS.has(key))) {
           throw unsupportedSnapshotValue("Cloud snapshot contains a forbidden object key.");
         }
+        keys.forEach(assertPostgresJsonString);
         return `{${keys.sort().map(key => `${JSON.stringify(key)}:${encode(ownValue(current, key, undefined))}`).join(",")}}`;
       } finally {
         ancestors.delete(current);

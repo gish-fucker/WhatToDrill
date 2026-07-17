@@ -392,14 +392,31 @@ const unsupportedSnapshots = [
   { list: accessorArray },
   JSON.parse('{"__proto__":{"polluted":true}}'),
   { value: new Date(NOW) },
-  { value: { toJSON() { return "hidden"; } } }
+  { value: { toJSON() { return "hidden"; } } },
+  { value: "before\u0000after" },
+  { value: "lone-high-\ud800" },
+  { value: "lone-low-\udc00" },
+  { ["key-\u0000"]: true },
+  { ["key-\ud800"]: true },
+  { ["key-\udc00"]: true }
 ];
-for (const snapshot of unsupportedSnapshots) {
+for (const [index, snapshot] of unsupportedSnapshots.entries()) {
   await assert.rejects(
     model.snapshotChecksum(snapshot, sha256),
-    hasCode("UNSUPPORTED_SNAPSHOT_VALUE")
+    hasCode("UNSUPPORTED_SNAPSHOT_VALUE"),
+    `Unsupported snapshot fixture ${index} must be rejected.`
   );
 }
+
+const emojiKey = "动作\u{1f600}";
+const emojiSnapshot = {
+  [emojiKey]: "深蹲\u{1f3cb}\ufe0f\u200d\u2640\ufe0f",
+  nested: ["\u2705", "\u{1f1e8}\u{1f1f3}"]
+};
+const serializedEmoji = model.serializeSnapshot(emojiSnapshot);
+assert.deepEqual(JSON.parse(serializedEmoji), emojiSnapshot);
+assert.ok(serializedEmoji.includes(JSON.stringify(emojiKey)));
+assert.match(await model.snapshotChecksum(emojiSnapshot, sha256), /^[a-f0-9]{64}$/);
 
 try {
   Object.defineProperty(Object.prototype, "toJSON", {
