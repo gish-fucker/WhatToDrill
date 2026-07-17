@@ -125,7 +125,7 @@ assert.equal(companion.companion.transition.targetSetId, companionSecond);
 assert.equal(model.remainingRestSeconds(companion, "2026-07-16T10:00:30.000Z"), 60);
 companion = model.prefillCurrentWeight(companion);
 assert.equal(companion.exercises[0].sets[1].actual.weight, 42.5, "The next set should reuse the nearest completed weight in the same exercise.");
-const extended = model.adjustRest(companion, 30);
+const extended = model.adjustRest(companion, 30, "2026-07-16T10:00:30.000Z");
 assert.equal(model.remainingRestSeconds(extended, "2026-07-16T10:00:30.000Z"), 90);
 const reset = model.resetRest(extended, "2026-07-16T10:01:00.000Z");
 assert.equal(model.remainingRestSeconds(reset, "2026-07-16T10:01:00.000Z"), 90);
