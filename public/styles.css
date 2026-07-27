@@ -2000,6 +2000,89 @@ input[type="checkbox"] {
   box-shadow: inset 0 0 0 1px var(--primary);
 }
 
+.recommendation-feedback {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.recommendation-feedback > span {
+  width: 100%;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.recommendation-feedback button {
+  min-height: 44px;
+}
+
+.recommendation-feedback button[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+  color: var(--primary-strong);
+}
+
+.local-beta-panel details > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.local-beta-event-list {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.local-beta-event {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  overflow-wrap: anywhere;
+}
+
+.local-beta-event span,
+.local-beta-event small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.local-beta-event small {
+  grid-column: 1 / -1;
+}
+
+.local-beta-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.local-beta-actions button {
+  min-height: 44px;
+}
+
+@media (max-width: 520px) {
+  .local-beta-event {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .local-beta-event small {
+    grid-column: auto;
+  }
+}
+
 .exercise-transition {
   min-width: 0;
   border-left: 4px solid var(--accent);

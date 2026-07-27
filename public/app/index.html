@@ -648,6 +648,17 @@
                 <strong>导入保护</strong>
                 <p class="muted">JSON 会先预览，确认后完整恢复；Strong/Hevy CSV 会去重并只追加训练，不改写现有记录和设置。</p>
               </article>
+              <article id="localBetaPanel" class="local-beta-panel">
+                <details>
+                  <summary><strong>本地 Beta 记录</strong> <span id="localBetaCount" class="type-pill">0 条</span></summary>
+                  <p class="muted">本地 Beta 记录不是在线用户分析。它只在此浏览器保存最小化流程事件，不上传健康内容，不保存备注、动作实际重量、疼痛原文、邮箱或身份令牌，也不进入云备份、普通备份或普通导入。</p>
+                  <div id="localBetaEventList" class="local-beta-event-list" aria-live="polite"></div>
+                  <div class="local-beta-actions">
+                    <button id="exportLocalBetaBtn" class="ghost-button" type="button">导出本地 Beta 记录</button>
+                    <button id="clearLocalBetaBtn" class="danger-button" type="button">清除本地 Beta 记录</button>
+                  </div>
+                </details>
+              </article>
             </div>
           </section>
 
@@ -1085,6 +1096,7 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script src="../workout-session-model.js?v=__APP_VERSION__"></script>
+    <script src="../local-beta-funnel-model.js?v=__APP_VERSION__"></script>
     <script src="../training-rotation-model.js?v=__APP_VERSION__"></script>
     <script src="../cloud-sync-model.js?v=__APP_VERSION__"></script>
     <script src="../app.js?v=__APP_VERSION__"></script>

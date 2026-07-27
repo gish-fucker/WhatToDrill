@@ -3,6 +3,18 @@ import "../public/local-beta-funnel-model.js";
 
 const model = globalThis.LocalBetaFunnelModel;
 assert.ok(model, "Local Beta funnel model should attach to globalThis.");
+assert.deepEqual(model.EVENT_NAMES, [
+  "onboarding_completed",
+  "workout_started",
+  "first_set_completed",
+  "workout_completed",
+  "next_plan_generated",
+  "next_plan_modified",
+  "next_plan_accepted",
+  "returned_workout_started",
+  "workout_abandoned",
+  "recommendation_feedback"
+]);
 
 function memoryStorage() {
   const values = new Map();
@@ -13,6 +25,23 @@ function memoryStorage() {
     values
   };
 }
+
+const allowlistStorage = memoryStorage();
+const allowlistFunnel = model.create({
+  storage: allowlistStorage,
+  appVersion: "1.24.0",
+  algorithmVersion: "golden-1",
+  now: () => "2026-07-27T00:00:00.000Z",
+  idFactory: () => "installation-allowlist"
+});
+model.EVENT_NAMES.forEach((name, index) => {
+  const context = name === "recommendation_feedback" ? { feedback: "too_hard" } : {};
+  assert.equal(allowlistFunnel.record(name, context, `allowlist-${index}`)?.name, name);
+});
+assert.equal(allowlistFunnel.record("unknown_event", {}, "unknown"), null);
+assert.equal(allowlistFunnel.list().length, model.EVENT_NAMES.length);
+assert.equal(allowlistFunnel.list().at(-1).feedback, "too_hard");
+assert.equal(JSON.stringify(allowlistFunnel.list()).includes("unknown_event"), false);
 
 const storage = memoryStorage();
 let tick = 0;

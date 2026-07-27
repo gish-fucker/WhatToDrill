@@ -20,6 +20,8 @@ const profileDir = resolve(outputDir, "smoke-profile");
 const storageKey = "habit_fitness_app_v1";
 const workoutDraftKey = "habit_fitness_workout_draft_v1";
 const cloudSyncMetadataKey = "what_to_drill_cloud_sync_v1";
+const localBetaEventsKey = "whatToDrillLocalBetaEventsV1";
+const localBetaMetaKey = "whatToDrillLocalBetaMetaV1";
 const fakeAccountUser = { id: "11111111-1111-4111-8111-111111111111", email: "smoke@example.com" };
 const deleteSyncEnvelopeBytes = 256;
 
@@ -624,6 +626,8 @@ async function run() {
     const healthPayload = await healthResponse.json();
     const versionedAssetResponse = await fetch(`${baseUrl}/app.js?v=smoke`);
     const appSource = await versionedAssetResponse.text();
+    const localBetaModelResponse = await fetch(`${baseUrl}/local-beta-funnel-model.js?v=smoke`);
+    const localBetaModelSource = await localBetaModelResponse.text();
     const headResponse = await fetch(`${baseUrl}/styles.css`, { method: "HEAD" });
     const validAdvicePayload = {
       schemaVersion: 1,
@@ -1070,6 +1074,13 @@ async function run() {
       appReady: appHtml.includes('id="mainContent"') && appHtml.includes('../app.js'),
       appVersionInjected: appHtml.includes(`data-app-version="${packageVersion}"`) && appHtml.includes(`app.js?v=${packageVersion}`),
       cloudSyncModelBeforeApp: appHtml.indexOf("../cloud-sync-model.js") >= 0 && appHtml.indexOf("../cloud-sync-model.js") < appHtml.indexOf("../app.js"),
+      localBetaModelBeforeApp: appHtml.indexOf("../local-beta-funnel-model.js") >= 0 && appHtml.indexOf("../local-beta-funnel-model.js") < appHtml.indexOf("../app.js"),
+      localBetaModelStatus: localBetaModelResponse.status,
+      localBetaModelReady: localBetaModelSource.includes("LocalBetaFunnelModel") && localBetaModelSource.includes("recommendation_feedback"),
+      localBetaIntegrationHooks: [
+        "onboarding_completed", "workout_started", "first_set_completed", "workout_completed", "next_plan_generated",
+        "next_plan_modified", "next_plan_accepted", "returned_workout_started", "workout_abandoned", "recommendation_feedback"
+      ].every(name => appSource.includes(`"${name}"`)),
       privacyStatus: privacyResponse.status,
       privacyCache: privacyResponse.headers.get("cache-control"),
       termsStatus: termsResponse.status,
@@ -1081,10 +1092,15 @@ async function run() {
         && privacyHtml.includes("其他设备看到 tombstone 时会保留本机记录")
         && termsHtml.includes("只有主动开启云备份后才会上传完整快照")
         && termsHtml.includes("当前应用没有删除认证账号的入口"),
+      localBetaPrivacyAligned: privacyHtml.includes("本地 Beta 记录不是在线用户分析")
+        && privacyHtml.includes("不会上传健康内容")
+        && privacyHtml.includes("不进入普通 JSON 备份、普通导入、云备份或第三方分析平台")
+        && privacyHtml.includes("单独查看、清除和导出"),
       iconCacheEntries: Object.keys(iconChecks).every(name => serviceWorkerSource.includes(name)),
       scopeAwareShell: serviceWorkerSource.includes("self.registration.scope") && serviceWorkerSource.includes("cache.put(request"),
       relativeWorkerRegistration: appSource.includes('serviceWorker.register("../sw.js")'),
       cloudSyncModelCached: serviceWorkerSource.includes("cloud-sync-model.js"),
+      localBetaModelCached: serviceWorkerSource.includes("local-beta-funnel-model.js"),
       syncApiNeverCached: serviceWorkerSource.includes('url.pathname.startsWith("/api/")'),
       staticSyncOptOut: appSource.includes("IS_STATIC_HOSTED_APP") && appSource.includes("!IS_STATIC_HOSTED_APP && cloudSyncConfigured"),
       manifestIcons: manifest.icons,
@@ -1136,14 +1152,16 @@ async function run() {
     assert(serverHttp.appStatus === 200 && serverHttp.appReady, "The app route should serve the application shell with parent-relative assets.");
     assert(serverHttp.appVersionInjected && serverHttp.serviceWorkerVersionInjected, "HTML, page assets, health metadata, and service-worker cache must use the package release version.");
     assert(serverHttp.cloudSyncModelBeforeApp, "The app shell should load the cloud sync model before browser synchronization code.");
+    assert(serverHttp.localBetaModelBeforeApp && serverHttp.localBetaModelStatus === 200 && serverHttp.localBetaModelReady && serverHttp.localBetaIntegrationHooks, "The app shell should load the local Beta model and wire every required business event before app integration code.");
     assert(serverHttp.privacyStatus === 200 && serverHttp.termsStatus === 200, "Legal pages should be served as public product pages.");
     assert(serverHttp.productPromisesAligned, "Privacy and terms must describe opt-in cloud backup, remote-deletion preservation, and the missing account-deletion capability.");
+    assert(serverHttp.localBetaPrivacyAligned, "Privacy must describe the local-only Beta record, excluded health content, and independent controls.");
     assert(serverHttp.privacyCache === "no-cache", "Privacy policy should revalidate so users receive policy updates.");
     assert(serverHttp.termsCsp?.includes("frame-ancestors 'none'"), "Legal pages should receive the same security headers as the app.");
     assert(serverHttp.updateMessageHandler, "Service worker should support user-confirmed activation.");
     assert(serverHttp.iconCacheEntries, "PWA app shell should cache every raster install icon.");
     assert(serverHttp.scopeAwareShell && serverHttp.relativeWorkerRegistration, "PWA registration and shell caching should follow the actual deployment scope.");
-    assert(serverHttp.cloudSyncModelCached && serverHttp.syncApiNeverCached, "The PWA shell should cache the sync model but never intercept account sync API requests.");
+    assert(serverHttp.cloudSyncModelCached && serverHttp.localBetaModelCached && serverHttp.syncApiNeverCached, "The PWA shell should cache browser models but never intercept account sync API requests.");
     assert(serverHttp.staticSyncOptOut, "Static hosting should keep cloud enablement hidden and local-only.");
     assert(serverHttp.manifestId === "./app/" && serverHttp.manifestStartUrl === "./app/" && serverHttp.manifestScope === "./" && serverHttp.manifestIcons.every(icon => icon.src.startsWith("./")), "Manifest URLs should keep the app start route and deployment-relative scope.");
     assert(serverHttp.subpathManifest.id === "/Daily-Workout-Record/app/" && serverHttp.subpathManifest.startUrl === "/Daily-Workout-Record/app/" && serverHttp.subpathManifest.scope === "/Daily-Workout-Record/" && serverHttp.subpathManifest.icons.every(path => path.startsWith("/Daily-Workout-Record/")), "Manifest URLs should resolve the app inside a GitHub Pages project subpath.");
@@ -4305,10 +4323,89 @@ async function run() {
     assert(storageFailure.toast.includes("本地空间不足"), "Storage quota failure should explain the local storage issue.");
     assert(storageFailure.health.includes("存储需处理") && storageFailure.health.includes("需处理"), "Data health should expose storage failure status.");
 
+    const localBetaIntegration = await evaluate(cdp, `(() => {
+      localBetaFunnel.clear();
+      const stateBefore = JSON.stringify(state);
+      const names = LocalBetaFunnelModel.EVENT_NAMES;
+      names.forEach((name, index) => recordLocalBetaEvent(
+        name,
+        "smoke-beta-" + index,
+        "routine-smoke",
+        name === "recommendation_feedback"
+          ? { feedback: "too_hard", note: "PRIVATE_NOTE", weight: 99, pain: "PRIVATE_PAIN", email: "private@example.com", token: "PRIVATE_TOKEN" }
+          : { note: "PRIVATE_NOTE", weight: 99, pain: "PRIVATE_PAIN", email: "private@example.com", token: "PRIVATE_TOKEN" }
+      ));
+      recordLocalBetaEvent("workout_completed", "smoke-beta-second-completion", "routine-smoke", { note: "PRIVATE_NOTE" });
+      const duplicate = recordLocalBetaEvent("workout_started", "smoke-beta-1", "routine-smoke");
+      const events = localBetaFunnel.list();
+      const eventJson = JSON.stringify(events);
+      const allowed = new Set(["installationId", "name", "timestamp", "appVersion", "algorithmVersion", "templateId", "environment", "goal", "feedback"]);
+      const backup = buildBackupPayload();
+      const cloud = buildCloudSnapshot();
+      const normalizedImport = normalizeImportedState({
+        ...backup,
+        whatToDrillLocalBetaEventsV1: [{ name: "PRIVATE_IMPORTED_EVENT" }],
+        whatToDrillLocalBetaMetaV1: { installationId: "PRIVATE_IMPORTED_ID" }
+      });
+      const originalClick = HTMLAnchorElement.prototype.click;
+      let downloadName = "";
+      HTMLAnchorElement.prototype.click = function captureDownload() { downloadName = this.download; };
+      exportLocalBetaRecords();
+      HTMLAnchorElement.prototype.click = originalClick;
+      activateTab("help", { scroll: false });
+      const details = document.querySelector("#localBetaPanel details");
+      const collapsedByDefault = !details.open;
+      details.open = true;
+      renderLocalBetaRecords();
+      const view = {
+        count: document.querySelector("#localBetaCount")?.textContent,
+        latest: document.querySelector("#localBetaEventList")?.innerText,
+        collapsedByDefault
+      };
+      const firstClearState = (() => {
+        clearLocalBetaRecords();
+        return document.querySelector("#clearLocalBetaBtn")?.textContent;
+      })();
+      clearLocalBetaRecords();
+      const cleared = {
+        eventsMissing: localStorage.getItem(${JSON.stringify(localBetaEventsKey)}) === null,
+        metaMissing: localStorage.getItem(${JSON.stringify(localBetaMetaKey)}) === null,
+        stateUnchanged: JSON.stringify(state) === stateBefore,
+        count: document.querySelector("#localBetaCount")?.textContent
+      };
+      recordLocalBetaEvent("onboarding_completed", "smoke-reset-retained", "starter_home_bodyweight");
+      return {
+        names: [...new Set(events.map(event => event.name))],
+        total: events.length,
+        duplicate,
+        oneInstallation: new Set(events.map(event => event.installationId)).size === 1,
+        allowedOnly: events.every(event => Object.keys(event).every(key => allowed.has(key))),
+        privateAbsent: !["PRIVATE_NOTE", "PRIVATE_PAIN", "private@example.com", "PRIVATE_TOKEN", "PRIVATE_IMPORTED_EVENT", "PRIVATE_IMPORTED_ID"].some(value => eventJson.includes(value)),
+        backupIsolated: !JSON.stringify(backup).includes("whatToDrillLocalBeta") && !JSON.stringify(backup).includes(events[0].installationId),
+        cloudIsolated: !JSON.stringify(cloud).includes("whatToDrillLocalBeta") && !JSON.stringify(cloud).includes(events[0].installationId),
+        importIsolated: !Object.hasOwn(normalizedImport, "whatToDrillLocalBetaEventsV1") && !Object.hasOwn(normalizedImport, "whatToDrillLocalBetaMetaV1"),
+        summary: LocalBetaFunnelModel.summarize(events),
+        downloadName,
+        view,
+        firstClearState,
+        cleared,
+        resetSeedCount: localBetaFunnel.list().length
+      };
+    })()`);
+    assert(localBetaIntegration.names.length === 10 && localBetaIntegration.total === 11 && localBetaIntegration.duplicate === null, `Local Beta should record all events once and dedupe repeated transitions: ${JSON.stringify(localBetaIntegration)}.`);
+    assert(localBetaIntegration.oneInstallation && localBetaIntegration.allowedOnly && localBetaIntegration.privateAbsent, "Local Beta records must use one anonymous installation ID and discard every non-allowlisted field.");
+    assert(localBetaIntegration.backupIsolated && localBetaIntegration.cloudIsolated && localBetaIntegration.importIsolated, "Local Beta keys and installation IDs must stay outside ordinary backup, import, and cloud snapshots.");
+    assert(localBetaIntegration.summary.firstWorkoutStarted === 1 && localBetaIntegration.summary.firstWorkoutCompleted === 1 && localBetaIntegration.summary.nextPlanAccepted === 1 && localBetaIntegration.summary.secondWorkoutStarted === 1 && localBetaIntegration.summary.secondWorkoutCompleted === 1 && localBetaIntegration.summary.recommendationFeedback.too_hard === 1, `Local Beta summary should expose first/second workout milestones and feedback distribution: ${JSON.stringify(localBetaIntegration.summary)}.`);
+    assert(localBetaIntegration.downloadName.includes("what-to-drill-local-beta-") && localBetaIntegration.downloadName.endsWith(".json"), "Local Beta export must use its own JSON filename.");
+    assert(localBetaIntegration.view.collapsedByDefault && localBetaIntegration.view.count === "11 条" && localBetaIntegration.view.latest.includes("recommendation_feedback"), "Local Beta records should be collapsed by default and viewable inside the existing help page.");
+    assert(localBetaIntegration.firstClearState.includes("再次点击") && localBetaIntegration.cleared.eventsMissing && localBetaIntegration.cleared.metaMissing && localBetaIntegration.cleared.stateUnchanged && localBetaIntegration.cleared.count === "0 条", "Local Beta clear should require confirmation and leave training state untouched.");
+    assert(localBetaIntegration.resetSeedCount === 1, "Local Beta reset fixture should be ready for ordinary-data clear isolation.");
+
     const dataReset = await evaluate(cdp, `(() => {
       const before = {
         dailyLogs: state.dailyLogs.length,
-        workouts: state.workouts.length
+        workouts: state.workouts.length,
+        betaEvents: localBetaFunnel.list().length
       };
       document.querySelector("#resetDemoBtn").click();
       const opened = document.querySelector("#resetDataDialog").open;
@@ -4331,6 +4428,8 @@ async function run() {
           dailyLogs: state.dailyLogs.length,
           workouts: state.workouts.length,
           storageRemoved: localStorage.getItem(${JSON.stringify(storageKey)}) === null,
+          betaEvents: localBetaFunnel.list().length,
+          betaStoragePresent: localStorage.getItem(${JSON.stringify(localBetaEventsKey)}) !== null,
           needsFirstWorkoutSetup: needsFirstWorkoutSetup(),
           hasSetupAction: Boolean(document.querySelector("#startCoachWorkoutBtn")),
           toast: document.querySelector("#toast")?.textContent
@@ -4344,8 +4443,9 @@ async function run() {
     assert(!dataReset.afterConfirm.open, "Confirm should close the clear data dialog.");
     assert(dataReset.afterConfirm.dailyLogs === 0 && dataReset.afterConfirm.workouts === 0, "Confirm should reset local records.");
     assert(dataReset.afterConfirm.storageRemoved, "Confirm should remove the persisted local state.");
+    assert(dataReset.before.betaEvents === 1 && dataReset.afterConfirm.betaEvents === 1 && dataReset.afterConfirm.betaStoragePresent, "Ordinary data clear must preserve the separately controlled local Beta record.");
     assert(dataReset.afterConfirm.needsFirstWorkoutSetup && dataReset.afterConfirm.hasSetupAction, "Clearing all data should require first-workout setup again.");
-    assert(dataReset.afterConfirm.toast.includes("所有本地数据已清空"), "Confirm should explain that local data was cleared.");
+    assert(dataReset.afterConfirm.toast.includes("训练与设置数据已清空") && dataReset.afterConfirm.toast.includes("本地 Beta 记录仍保留"), "Confirm should explain that ordinary data was cleared while local Beta stayed separate.");
 
     await evaluate(cdp, `activateTab("help"); window.scrollTo(0, 0);`);
     await delay(150);
@@ -4478,6 +4578,7 @@ async function run() {
     assert(privacyPage.text.includes("本地优先") && privacyPage.text.includes("主动开启云备份") && privacyPage.text.includes("清空本机") && privacyPage.text.includes("删除云端备份"), "Privacy policy should explain local, opt-in cloud, and distinct deletion data paths.");
     assert(privacyPage.text.includes("tombstone") && privacyPage.text.includes("其他设备看到 tombstone 时会保留本机记录") && privacyPage.text.includes("当前应用没有删除 Supabase 认证账号的功能"), "Privacy policy should disclose remote-deletion preservation, retained tombstones, and the missing account-deletion capability.");
     assert(privacyPage.text.includes("Supabase Auth") && privacyPage.text.includes("不会自动上传") && privacyPage.text.includes("配额事件不包含训练内容"), "Privacy policy should disclose identity, local-data, and quota-event boundaries.");
+    assert(privacyPage.text.includes("本地 Beta 记录不是在线用户分析") && privacyPage.text.includes("不会上传健康内容") && privacyPage.text.includes("普通 JSON 备份") && privacyPage.text.includes("单独查看、清除和导出"), "Privacy policy should describe the local Beta record without implying online analytics.");
     assert(privacyPage.text.includes("Pro 长期报告") && privacyPage.text.includes("长期报告计算不会因此上传"), "Privacy policy should disclose the local-only Pro report data path.");
     assert(!privacyPage.overflow, "Privacy policy desktop layout should not overflow.");
 
@@ -4553,12 +4654,18 @@ async function run() {
       const dialog = document.querySelector("#nextWorkoutResultDialog");
       const buttons = [...dialog.querySelectorAll(".next-plan-decision-actions button")].filter(button => button.offsetParent !== null);
       const heights = buttons.map(button => button.getBoundingClientRect().height);
+      const feedbackButtons = [...dialog.querySelectorAll("[data-recommendation-feedback]")];
+      const feedbackHeights = feedbackButtons.map(button => button.getBoundingClientRect().height);
+      feedbackButtons[0].click();
+      const feedbackState = feedbackButtons.map(button => ({ disabled: button.disabled, pressed: button.getAttribute("aria-pressed") }));
       dialog.scrollTop = dialog.scrollHeight;
       const lastButton = buttons.at(-1).getBoundingClientRect();
       const result = {
         action: Boolean(document.querySelector("#removeNextWorkoutExerciseBtn")),
         overflow: document.documentElement.scrollWidth > innerWidth,
         heights,
+        feedbackHeights,
+        feedbackState,
         bottomReachable: dialog.scrollTop + dialog.clientHeight >= dialog.scrollHeight - 1,
         lastActionVisible: lastButton.top < innerHeight && lastButton.bottom <= innerHeight
       };
@@ -4570,6 +4677,7 @@ async function run() {
     })()`);
     assert(mobileNextPlanEdit.action && !mobileNextPlanEdit.overflow, `The 390px next-plan edit should fit without horizontal overflow: ${JSON.stringify(mobileNextPlanEdit)}.`);
     assert(mobileNextPlanEdit.heights.every(height => height >= 44), `Every visible next-plan decision should provide a 44px touch target: ${JSON.stringify(mobileNextPlanEdit.heights)}.`);
+    assert(mobileNextPlanEdit.feedbackHeights.length === 4 && mobileNextPlanEdit.feedbackHeights.every(height => height >= 44) && mobileNextPlanEdit.feedbackState.every(item => item.disabled) && mobileNextPlanEdit.feedbackState.filter(item => item.pressed === "true").length === 1, `Recommendation feedback should be a one-shot, accessible 44px control group: ${JSON.stringify(mobileNextPlanEdit)}.`);
     assert(mobileNextPlanEdit.bottomReachable && mobileNextPlanEdit.lastActionVisible, `The last next-plan action should be reachable by scrolling the dialog: ${JSON.stringify(mobileNextPlanEdit)}.`);
     await evaluate(cdp, `(() => {
       const mobileTemplate = beginnerTemplates.find(template => template.id === "beginner_full_body");
@@ -4646,6 +4754,10 @@ async function run() {
           return height > 0 && height < 44;
         }).map(button => button.id)
       }))()`));
+      if (width === 320) {
+        await evaluate(cdp, `(() => { const toast = document.querySelector("#toast"); toast?.classList.remove("visible"); if (toast) toast.textContent = ""; })()`);
+        await screenshot(cdp, "smoke-mobile-320.png");
+      }
     }
     assert(companionWidths.every(result => !result.overflow && result.panelWidth <= result.sessionWidth && result.shortTargets.length === 0), `Focused workout must fit 320/375/390/430px with 44px controls: ${JSON.stringify(companionWidths)}.`);
     await cdp.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 900, deviceScaleFactor: 2, mobile: true });
@@ -4660,6 +4772,28 @@ async function run() {
     }))()`);
     assert(mobileHelp.title === "帮助与版本说明", "Mobile help page should render.");
     assert(!mobileHelp.overflow, "Mobile help layout should not overflow.");
+    const mobileLocalBeta = [];
+    for (const width of [320, 390]) {
+      await cdp.send("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 2, mobile: true });
+      await delay(80);
+      mobileLocalBeta.push(await evaluate(cdp, `(() => {
+        const details = document.querySelector("#localBetaPanel details");
+        details.open = true;
+        details.scrollIntoView({ block: "center" });
+        const panelBounds = document.querySelector("#localBetaPanel").getBoundingClientRect();
+        return {
+          width: innerWidth,
+          overflow: document.documentElement.scrollWidth > innerWidth,
+          panelWidth: panelBounds.width,
+          actionHeights: [...document.querySelectorAll(".local-beta-actions button")].map(button => button.getBoundingClientRect().height),
+          summaryHeight: document.querySelector("#localBetaPanel summary")?.getBoundingClientRect().height || 0
+        };
+      })()`));
+    }
+    assert(mobileLocalBeta.every(result => !result.overflow && result.panelWidth <= result.width && result.summaryHeight >= 44 && result.actionHeights.length === 2 && result.actionHeights.every(height => height >= 44)), `Local Beta view/export/clear controls must fit 320/390px with 44px targets: ${JSON.stringify(mobileLocalBeta)}.`);
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 900, deviceScaleFactor: 2, mobile: true });
+    await evaluate(cdp, `(() => { const toast = document.querySelector("#toast"); toast?.classList.remove("visible"); if (toast) toast.textContent = ""; })()`);
+    await screenshot(cdp, "smoke-mobile-local-beta.png");
     const mobileAccount = await evaluate(cdp, `(() => {
       window.__mobileLiveSession = accountSession;
       window.__mobileLiveEntitlements = accountEntitlements;
@@ -4944,7 +5078,9 @@ async function run() {
         riskReview,
         careSummary,
         dataReset,
+        localBetaIntegration,
         mobile,
+        mobileLocalBeta,
         mobileInsights,
         mobileRhythmReview,
         mobileWeeklyRhythm,
@@ -4959,6 +5095,8 @@ async function run() {
         "output/playwright/cloud-sync-mobile.png",
         "output/playwright/smoke-desktop-pro-longitudinal.png",
         "output/playwright/smoke-mobile.png",
+        "output/playwright/smoke-mobile-320.png",
+        "output/playwright/smoke-mobile-local-beta.png",
         "output/playwright/smoke-mobile-insights.png",
         "output/playwright/smoke-mobile-pro-longitudinal.png",
         "output/playwright/smoke-desktop-account-boundary.png",

@@ -59,7 +59,8 @@
 - `algorithmVersion`；
 - `templateId` 或 routine ID；
 - `environment` 枚举；
-- `goal` 枚举。
+- `goal` 枚举；
+- 仅 `recommendation_feedback` 可额外保存 `feedback` 枚举，允许值为 `helpful`、`too_easy`、`too_hard`、`not_for_me`，用于生成反馈分布。
 
 不得保存备注、动作重量、次数、时长、RPE、疼痛原文、邮箱、Cookie、身份令牌或自由文本。事件上限为 1000 条，追加时删除最旧记录。内部去重元数据与导出事件分开保存，只包含随机会话/计划键和已发事件名。
 
@@ -74,7 +75,7 @@
 - `next_plan_accepted`：确认下一计划；
 - `returned_workout_started`：已有至少一次完成训练后再次创建训练会话；
 - `workout_abandoned`：用户明确放弃草稿，或创建新会话替换仍未完成的旧会话；
-- `recommendation_feedback`：提交推荐反馈。
+- `recommendation_feedback`：提交上述四值枚举之一的推荐反馈，不接收自由文本。
 
 不使用“关闭页面超过若干分钟”之类推断来记录放弃。去重键阻止同一业务动作因双击、重复渲染或刷新重复记事件；不同训练会话仍可产生各自事件。
 

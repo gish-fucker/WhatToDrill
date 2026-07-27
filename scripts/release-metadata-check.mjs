@@ -20,7 +20,9 @@ assert.doesNotMatch(render, /daily-record-app|APP_VERSION/);
 assert.doesNotMatch(envExample, /APP_VERSION/);
 assert.match(appHtml, /data-app-version="__APP_VERSION__"/);
 assert.match(app, /document\.documentElement\.dataset\.appVersion/);
+assert(appHtml.indexOf("../local-beta-funnel-model.js") >= 0 && appHtml.indexOf("../local-beta-funnel-model.js") < appHtml.indexOf("../app.js"));
 assert.match(serviceWorker, /what-to-drill-shell-v__APP_VERSION__/);
+assert.match(serviceWorker, /local-beta-funnel-model\.js\?v=__APP_VERSION__/);
 assert.equal(Object.hasOwn(manifest, "version"), false, "The web manifest must not carry an independent release version.");
 assert.match(workflow, /npm run build:pages/);
 assert.match(workflow, /path:\s+\.pages/);
@@ -30,6 +32,9 @@ assert.match(readme, /Node\/Render 未完整配置 Supabase 时是本机模式/)
 assert.match(readme, /只有用户登录并主动点击“开启云备份”/);
 assert.match(privacy, /生效日期：2026 年 7 月 27 日/);
 assert.match(privacy, /当前应用没有删除 Supabase 认证账号的功能/);
+assert.match(privacy, /本地 Beta 记录不是在线用户分析/);
+assert.match(privacy, /不会上传健康内容/);
+assert.match(readme, /本地 Beta 记录与普通数据完全分开/);
 assert.match(terms, /当前应用没有删除认证账号的入口/);
 
 console.log(`Release metadata and product promises are consistent at ${packageMetadata.version}.`);

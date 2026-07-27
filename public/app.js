@@ -12,6 +12,11 @@ const MAX_WORKOUT_CSV_BYTES = 5 * 1024 * 1024;
 const MAX_WORKOUT_CSV_ROWS = 20_000;
 const IS_STATIC_HOSTED_APP = window.location.hostname.endsWith(".github.io");
 const REST_SECONDS_BY_GOAL = Object.freeze({ general: 75, muscle_gain: 90, strength: 180, fat_loss: 60, recovery: 45 });
+const localBetaFunnel = LocalBetaFunnelModel.create({
+  storage: window.localStorage,
+  appVersion: APP_VERSION,
+  algorithmVersion: TrainingRotationModel.RECOMMENDATION_ALGORITHM_VERSION
+});
 const DEFAULT_RECORD_TYPES = Object.freeze({
   "引体向上": "assisted_or_added_weight_reps",
   "俯卧撑": "bodyweight_reps",
@@ -525,8 +530,24 @@ function normalizeTemplateRecordTypes(templates = []) {
 }
 
 function saveState() {
-  persistState();
+  const saved = persistState();
   renderAll();
+  return saved;
+}
+
+function localBetaContext(templateId = "", extra = {}) {
+  return {
+    templateId: templateId || "",
+    environment: state.settings.preferredEnvironment,
+    goal: state.settings.trainingGoal,
+    ...extra
+  };
+}
+
+function recordLocalBetaEvent(name, dedupeKey, templateId = "", extra = {}) {
+  const event = localBetaFunnel.record(name, localBetaContext(templateId, extra), dedupeKey);
+  if (event) renderLocalBetaRecords();
+  return event;
 }
 
 function persistState() {
@@ -1976,11 +1997,12 @@ function startNextWorkoutPlan() {
     startDailyCoachWorkout({ skipPainGate: true });
     return;
   }
-  if (plan.status === "suggested") confirmNextWorkoutPlan(plan.userDecision || "suggested", { persist: false });
+  if (plan.status === "suggested") confirmNextWorkoutPlan(plan.userDecision || "suggested", { persist: false, recordEvent: false });
   plan.status = "started";
   plan.acceptedAt = plan.acceptedAt || new Date().toISOString();
   plan.startedAt = new Date().toISOString();
-  persistState();
+  const saved = persistState();
+  if (saved) recordLocalBetaEvent("next_plan_accepted", `${plan.id}:accepted`, plan.sourceTemplateId || plan.id);
   const template = {
     id: plan.id,
     name: plan.title,
@@ -2022,9 +2044,13 @@ function confirmNextWorkoutPlan(userDecision = "suggested", options = {}) {
     }, state.templates);
     plan.rotationAdvancedAt = new Date().toISOString();
   }
+  let saved = true;
   if (options.persist !== false) {
-    saveState();
+    saved = saveState();
     showToast("下次计划已确认");
+  }
+  if (saved && options.recordEvent !== false) {
+    recordLocalBetaEvent("next_plan_accepted", `${plan.id}:accepted`, plan.sourceTemplateId || plan.id);
   }
   return true;
 }
@@ -2041,6 +2067,14 @@ function continuePreviousWorkout() {
 
 function startFocusedWorkoutSession(template, title) {
   focusedSetCompletionLocked = false;
+  if (activeWorkoutSession) {
+    const replaced = activeWorkoutSession;
+    recordLocalBetaEvent(
+      "workout_abandoned",
+      `${replaced.id}:abandoned_replaced`,
+      replaced.sourceTemplateId || replaced.templateId
+    );
+  }
   const goalDefaultRest = REST_SECONDS_BY_GOAL[state.settings.trainingGoal] || REST_SECONDS_BY_GOAL.general;
   activeWorkoutSession = WorkoutSessionModel.createSession({
     date: today(),
@@ -2072,6 +2106,11 @@ function startFocusedWorkoutSession(template, title) {
   activeWorkoutSession.nextPlanId = template.nextPlanId || "";
   lastWorkoutSetAction = null;
   persistWorkoutDraft();
+  const betaTemplateId = activeWorkoutSession.sourceTemplateId || activeWorkoutSession.templateId;
+  recordLocalBetaEvent("workout_started", `${activeWorkoutSession.id}:started`, betaTemplateId);
+  if (state.workouts.length > 0) {
+    recordLocalBetaEvent("returned_workout_started", `${activeWorkoutSession.id}:returned`, betaTemplateId);
+  }
   renderFocusedWorkoutSession();
 }
 
@@ -2522,6 +2561,7 @@ function completeFocusedSet() {
   focusedSetCompletionLocked = true;
   window.setTimeout(() => { focusedSetCompletionLocked = false; }, 350);
   const completedId = current.set.id;
+  const completingFirstSet = WorkoutSessionModel.progress(activeWorkoutSession).completed === 0;
   activeWorkoutSession = WorkoutSessionModel.completeSet(activeWorkoutSession, completedId, focusedActualPatch(), {
     now: new Date().toISOString(),
     restDurationSeconds: restDurationForCurrentSet(current)
@@ -2531,6 +2571,13 @@ function completeFocusedSet() {
   lastRestAlertKey = "";
   vibrateWorkout(35);
   persistWorkoutDraft();
+  if (completingFirstSet && WorkoutSessionModel.progress(activeWorkoutSession).completed === 1) {
+    recordLocalBetaEvent(
+      "first_set_completed",
+      `${activeWorkoutSession.id}:first_set_completed`,
+      activeWorkoutSession.sourceTemplateId || activeWorkoutSession.templateId
+    );
+  }
   renderFocusedWorkoutSession();
   $("focusedCurrentSet")?.focus();
   showToast("这一组已完成");
@@ -2629,6 +2676,13 @@ function keepFocusedWorkoutDraft() {
 }
 
 function abandonFocusedWorkout() {
+  if (activeWorkoutSession) {
+    recordLocalBetaEvent(
+      "workout_abandoned",
+      `${activeWorkoutSession.id}:abandoned_explicit`,
+      activeWorkoutSession.sourceTemplateId || activeWorkoutSession.templateId
+    );
+  }
   clearWorkoutDraft();
   closeFocusedFinishDialog();
   clearWorkoutForm();
@@ -2650,6 +2704,8 @@ function saveFocusedWorkout(event) {
   }
 
   try {
+    const completedSessionId = activeWorkoutSession.id;
+    const completedTemplateId = activeWorkoutSession.sourceTemplateId || activeWorkoutSession.templateId || "";
     const record = WorkoutSessionModel.toWorkoutRecord(activeWorkoutSession, {
       feeling,
       sessionRpe: numberOrNull($("focusedSummaryRpe").value),
@@ -2674,7 +2730,13 @@ function saveFocusedWorkout(event) {
     refreshExerciseLastUsed();
     lastWorkoutSummary = buildSavedWorkoutSummary(saved);
     clearWorkoutDraft();
-    saveState();
+    const savedLocally = saveState();
+    if (savedLocally) {
+      recordLocalBetaEvent("workout_completed", `${completedSessionId}:completed`, completedTemplateId);
+      if (nextPlan) {
+        recordLocalBetaEvent("next_plan_generated", `${nextPlan.id}:generated`, nextPlan.sourceTemplateId || nextPlan.id);
+      }
+    }
     closeFocusedFinishDialog();
     clearWorkoutForm();
     renderAll();
@@ -2719,6 +2781,13 @@ function showNextWorkoutResult(workout, plan = state.nextWorkoutPlan) {
         ${plan.source !== "recovery_override" && plan.exercises.length > 1 ? '<button id="removeNextWorkoutExerciseBtn" class="ghost-button" type="button">减少一个动作</button>' : ""}
         ${plan.source !== "recovery_override" ? '<button id="makeNextWorkoutRecoveryBtn" class="ghost-button" type="button">改成恢复训练</button>' : ""}
         <button id="selfDecideNextWorkoutBtn" class="text-button" type="button">这次我自己决定</button>
+      </div>
+      <div class="recommendation-feedback" role="group" aria-label="评价这次推荐">
+        <span>这次推荐是否合适？</span>
+        <button class="ghost-button" type="button" data-recommendation-feedback="helpful" aria-pressed="false">合适</button>
+        <button class="ghost-button" type="button" data-recommendation-feedback="too_easy" aria-pressed="false">偏轻</button>
+        <button class="ghost-button" type="button" data-recommendation-feedback="too_hard" aria-pressed="false">偏难</button>
+        <button class="ghost-button" type="button" data-recommendation-feedback="not_for_me" aria-pressed="false">不适合</button>
       </div>
     </section>
   ` : `<p class="muted">这次训练已保存；下次打开首页时会根据你的状态给出建议。</p>`;
@@ -2779,7 +2848,8 @@ function removeExerciseFromSuggestedNextWorkout() {
   });
   if (!next) return;
   state.nextWorkoutPlan = next;
-  persistState();
+  const saved = persistState();
+  if (saved) recordLocalBetaEvent("next_plan_modified", `${next.id}:modified`, next.sourceTemplateId || next.id);
   showNextWorkoutResult(sourceWorkout, next);
   showToast(`已减少一个动作：${removed.name}`);
 }
@@ -2798,7 +2868,8 @@ function changeSuggestedRotationDay(rotationDayId) {
   }
   if (isValidDateText(scheduledFor)) plan.scheduledFor = scheduledFor;
   state.nextWorkoutPlan = plan;
-  persistState();
+  const saved = persistState();
+  if (saved) recordLocalBetaEvent("next_plan_modified", `${plan.id}:modified`, plan.sourceTemplateId || plan.id);
   showNextWorkoutResult(sourceWorkout, plan);
 }
 
@@ -2822,13 +2893,16 @@ function makeSuggestedWorkoutRecovery() {
   const plan = buildNextWorkoutPlan(sourceWorkout, { forceRecovery: true });
   if (!plan) return;
   state.nextWorkoutPlan = plan;
-  persistState();
+  const saved = persistState();
+  if (saved) recordLocalBetaEvent("next_plan_modified", `${plan.id}:modified`, plan.sourceTemplateId || plan.id);
   showNextWorkoutResult(sourceWorkout, plan);
 }
 
 function chooseNextWorkoutMyself() {
+  const plan = state.nextWorkoutPlan;
   state.nextWorkoutPlan = null;
-  persistState();
+  const saved = persistState();
+  if (saved && plan) recordLocalBetaEvent("next_plan_modified", `${plan.id}:modified`, plan.sourceTemplateId || plan.id);
   closeNextWorkoutResult();
   renderAll();
   showToast("已取消自动计划，你可以随时从训练页开始");
@@ -2896,7 +2970,10 @@ function saveFirstWorkoutSetup(event) {
     trainingGoal,
     firstWorkoutSetupCompletedAt: new Date().toISOString()
   }, state.templates);
-  persistState();
+  const saved = persistState();
+  if (saved) {
+    recordLocalBetaEvent("onboarding_completed", "installation:onboarding_completed", state.settings.starterTemplateId);
+  }
   closeFirstWorkoutSetup();
   renderAll();
   startDailyCoachWorkout({ skipFirstWorkoutSetup: true });
@@ -3808,6 +3885,7 @@ function renderAll() {
   renderTrends();
   renderHistory();
   renderLibrary();
+  renderLocalBetaRecords();
   renderWorkoutExerciseOptions();
   renderAdvice();
   renderProgressEntry();
@@ -6825,6 +6903,74 @@ function exportData() {
   showToast("JSON 完整备份已导出");
 }
 
+function recordRecommendationFeedback(feedback) {
+  const plan = state.nextWorkoutPlan;
+  if (!plan || !LocalBetaFunnelModel.FEEDBACK_VALUES.includes(feedback)) return;
+  const recorded = recordLocalBetaEvent(
+    "recommendation_feedback",
+    `${plan.id}:recommendation_feedback`,
+    plan.sourceTemplateId || plan.id,
+    { feedback }
+  );
+  if (!recorded) return;
+  $("nextWorkoutResultDialog").querySelectorAll("[data-recommendation-feedback]").forEach(button => {
+    const selected = button.dataset.recommendationFeedback === feedback;
+    button.disabled = true;
+    button.setAttribute("aria-pressed", String(selected));
+  });
+  showToast("推荐反馈已保存在本机");
+}
+
+function renderLocalBetaRecords() {
+  const count = $("localBetaCount");
+  const list = $("localBetaEventList");
+  if (!count || !list) return;
+  const events = localBetaFunnel.list();
+  count.textContent = `${events.length} 条`;
+  list.innerHTML = events.length
+    ? events.slice(-8).reverse().map(event => `
+        <div class="local-beta-event">
+          <strong>${escapeHtml(event.name)}</strong>
+          <span>${escapeHtml(event.timestamp.slice(0, 19).replace("T", " "))}</span>
+          <small>${escapeHtml(event.templateId || "无模板")}</small>
+        </div>
+      `).join("")
+    : '<p class="muted">当前没有本地 Beta 事件。</p>';
+}
+
+function exportLocalBetaRecords() {
+  const payload = localBetaFunnel.exportPayload();
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `what-to-drill-local-beta-${today()}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+  showToast(`已导出 ${payload.events.length} 条本地 Beta 记录`);
+}
+
+function clearLocalBetaRecords() {
+  const button = $("clearLocalBetaBtn");
+  const confirmedAt = Number(button.dataset.confirmedAt || 0);
+  if (!confirmedAt || Date.now() - confirmedAt > 5000) {
+    const confirmationToken = String(Date.now());
+    button.dataset.confirmedAt = confirmationToken;
+    button.textContent = "再次点击确认清除";
+    window.setTimeout(() => {
+      if (button.dataset.confirmedAt !== confirmationToken) return;
+      delete button.dataset.confirmedAt;
+      button.textContent = "清除本地 Beta 记录";
+    }, 5000);
+    return;
+  }
+  const cleared = localBetaFunnel.clear();
+  delete button.dataset.confirmedAt;
+  button.textContent = "清除本地 Beta 记录";
+  renderLocalBetaRecords();
+  showToast(cleared ? "本地 Beta 记录已清除，训练数据未改变" : "无法清除本地 Beta 记录");
+}
+
 function buildBackupPayload() {
   return {
     ...buildCloudSnapshot(),
@@ -8729,12 +8875,14 @@ function resetAllData() {
   clearWorkoutForm();
   closeResetDataDialog();
   renderAll();
-  showToast("所有本地数据已清空");
+  showToast("训练与设置数据已清空；本地 Beta 记录仍保留，可单独清除");
 }
 
 function bindActions() {
   $("applyAppUpdateBtn").addEventListener("click", applyAppUpdate);
   $("dismissAppUpdateBtn").addEventListener("click", dismissAppUpdate);
+  $("exportLocalBetaBtn").addEventListener("click", exportLocalBetaRecords);
+  $("clearLocalBetaBtn").addEventListener("click", clearLocalBetaRecords);
   $("openSettingsBtn").addEventListener("click", openSettings);
   document.querySelectorAll("[data-mine-target], [data-mine-focus]").forEach(control => {
     control.addEventListener("click", () => {
@@ -8780,6 +8928,11 @@ function bindActions() {
     if (event.target.id === "nextWorkoutDaySelect") changeSuggestedRotationDay(event.target.value);
   });
   $("nextWorkoutResultDialog").addEventListener("click", event => {
+    const feedbackButton = event.target.closest("[data-recommendation-feedback]");
+    if (feedbackButton) {
+      recordRecommendationFeedback(feedbackButton.dataset.recommendationFeedback);
+      return;
+    }
     if (event.target.closest("#viewPersonalPatternsBtn")) {
       closeNextWorkoutResult();
       activateTab("insights");
