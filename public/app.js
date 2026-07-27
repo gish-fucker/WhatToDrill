@@ -12,6 +12,20 @@ const MAX_WORKOUT_CSV_BYTES = 5 * 1024 * 1024;
 const MAX_WORKOUT_CSV_ROWS = 20_000;
 const IS_STATIC_HOSTED_APP = window.location.hostname.endsWith(".github.io");
 const REST_SECONDS_BY_GOAL = Object.freeze({ general: 75, muscle_gain: 90, strength: 180, fat_loss: 60, recovery: 45 });
+const DEFAULT_RECORD_TYPES = Object.freeze({
+  "引体向上": "assisted_or_added_weight_reps",
+  "俯卧撑": "bodyweight_reps",
+  "臀桥": "bodyweight_reps",
+  "死虫": "bodyweight_reps",
+  "跑步": "duration_minutes",
+  "快走": "duration_minutes",
+  "动态拉伸": "bodyweight_reps",
+  "髋部活动": "bodyweight_reps",
+  "平板支撑": "duration_seconds",
+  "椅子深蹲": "bodyweight_reps",
+  "墙壁俯卧撑": "bodyweight_reps",
+  "鸟狗式": "bodyweight_reps"
+});
 
 const defaultSettings = {
   waterStepMl: 500,
@@ -75,7 +89,10 @@ const defaultExercises = [
   ,{ name: "单臂哑铃划船", category: "力量", lastUsed: "" }
   ,{ name: "器械推胸", category: "力量", lastUsed: "" }
   ,{ name: "哑铃卧推", category: "力量", lastUsed: "" }
-];
+].map(exercise => ({
+  ...exercise,
+  recordType: DEFAULT_RECORD_TYPES[exercise.name] || "weighted_reps"
+}));
 
 const beginnerTemplates = [
   {
@@ -283,7 +300,7 @@ let pendingSupportPartnerId = null;
 let appliedWeeklyTargetCalibration = null;
 let extendedDailyRecordRevealed = false;
 let activeWorkoutSession = null;
-let lastCompletedSetId = null;
+let lastWorkoutSetAction = null;
 let cloudSyncMetadata = loadCloudSyncMetadata();
 let cloudSyncTimer = null;
 let cloudSyncRetryTimer = null;
@@ -324,9 +341,9 @@ function loadState() {
     if (parsed) {
       return {
         dailyLogs: parsed.dailyLogs || [],
-        workouts: parsed.workouts || [],
+        workouts: normalizeWorkoutRecordTypes(parsed.workouts),
         exercises: mergeDefaultExercises(parsed.exercises),
-        templates: parsed.templates || [],
+        templates: normalizeTemplateRecordTypes(parsed.templates),
         adviceHistory: parsed.adviceHistory || [],
         settings: normalizeSettings(parsed.settings, parsed.templates),
         nextWorkoutPlan: normalizeNextWorkoutPlan(parsed.nextWorkoutPlan)
@@ -361,10 +378,18 @@ function normalizeNextWorkoutPlan(plan) {
     let id = typeof exercise?.id === "string" && exercise.id.trim() ? exercise.id.trim() : `next_exercise_${exerciseIndex + 1}`;
     while (usedExerciseIds.has(id)) id = `${id}_${exerciseIndex + 1}`;
     usedExerciseIds.add(id);
+    const recordType = WorkoutSessionModel.inferRecordType(
+      exercise?.recordType,
+      exercise?.metric,
+      sets[0]?.note,
+      exercise?.name,
+      sets[0] || {}
+    );
     return {
       id,
       name: typeof exercise?.name === "string" ? exercise.name.trim() : "",
-      metric: WorkoutSessionModel.inferMetric(exercise?.metric, sets[0]?.note, exercise?.name),
+      recordType,
+      metric: WorkoutSessionModel.legacyMetricForRecordType(recordType),
       cue: typeof exercise?.cue === "string" ? exercise.cue.trim() : "",
       sets,
       requiredEquipment: Array.isArray(exercise?.requiredEquipment)
@@ -434,13 +459,69 @@ function normalizeRecommendationDecision(decision) {
 }
 
 function mergeDefaultExercises(exercises = []) {
-  const merged = [...(Array.isArray(exercises) ? exercises : [])];
+  const merged = (Array.isArray(exercises) ? exercises : []).map(exercise => ({
+    ...exercise,
+    recordType: WorkoutSessionModel.inferRecordType(
+      exercise?.recordType || DEFAULT_RECORD_TYPES[exercise?.name],
+      exercise?.metric,
+      "",
+      exercise?.name,
+      exercise || {}
+    )
+  }));
   defaultExercises.forEach(exercise => {
     if (!merged.some(item => item.name === exercise.name)) {
       merged.push({ ...exercise });
+    } else {
+      const existing = merged.find(item => item.name === exercise.name);
+      if (!existing.recordType) existing.recordType = exercise.recordType;
     }
   });
   return merged;
+}
+
+function normalizeExerciseRecordTypes(exercise = {}) {
+  const sets = Array.isArray(exercise.sets) ? exercise.sets : [];
+  const recordType = WorkoutSessionModel.inferRecordType(
+    exercise.recordType,
+    exercise.metric,
+    sets[0]?.note,
+    exercise.name,
+    sets[0] || {}
+  );
+  return {
+    ...exercise,
+    recordType,
+    metric: WorkoutSessionModel.legacyMetricForRecordType(recordType),
+    sets: sets.map(set => {
+      const setRecordType = WorkoutSessionModel.inferRecordType(
+        set?.recordType || recordType,
+        set?.metric || exercise.metric,
+        set?.note,
+        exercise.name,
+        set || {}
+      );
+      return {
+        ...set,
+        recordType: setRecordType,
+        metric: WorkoutSessionModel.legacyMetricForRecordType(setRecordType)
+      };
+    })
+  };
+}
+
+function normalizeWorkoutRecordTypes(workouts = []) {
+  return (Array.isArray(workouts) ? workouts : []).map(workout => ({
+    ...workout,
+    exercises: (Array.isArray(workout?.exercises) ? workout.exercises : []).map(normalizeExerciseRecordTypes)
+  }));
+}
+
+function normalizeTemplateRecordTypes(templates = []) {
+  return (Array.isArray(templates) ? templates : []).map(template => ({
+    ...template,
+    exercises: (Array.isArray(template?.exercises) ? template.exercises : []).map(normalizeExerciseRecordTypes)
+  }));
 }
 
 function saveState() {
@@ -850,7 +931,58 @@ function exerciseOptions(selected = "") {
     .join("");
 }
 
+function recordTypeOptions(selected = "weighted_reps") {
+  return [
+    ["weighted_reps", "重量 + 次数"],
+    ["bodyweight_reps", "自重次数"],
+    ["assisted_or_added_weight_reps", "辅助 / 加重 + 次数"],
+    ["duration_seconds", "按秒"],
+    ["duration_minutes", "按分钟"],
+    ["completion_only", "仅完成"]
+  ].map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`).join("");
+}
+
+function recordTypeDisplayLabel(recordType) {
+  return {
+    weighted_reps: "重量 + 次数",
+    bodyweight_reps: "自重次数",
+    assisted_or_added_weight_reps: "辅助 / 加重",
+    duration_seconds: "按秒",
+    duration_minutes: "按分钟",
+    completion_only: "仅完成"
+  }[recordType] || "重量 + 次数";
+}
+
+function exerciseRecordType(exercise = {}) {
+  const libraryType = state.exercises.find(item => item.name === exercise.name)?.recordType;
+  return WorkoutSessionModel.inferRecordType(
+    exercise.recordType || libraryType,
+    exercise.metric,
+    exercise.sets?.[0]?.note,
+    exercise.name,
+    exercise.sets?.[0] || {}
+  );
+}
+
+function updateExerciseCardRecordType(card, recordType = card.querySelector(".exercise-record-type")?.value) {
+  if (!card) return;
+  const normalized = WorkoutSessionModel.inferRecordType(recordType, "", "", card.querySelector(".exercise-name")?.value, {});
+  const showWeight = ["weighted_reps", "assisted_or_added_weight_reps"].includes(normalized);
+  const showPrimary = normalized !== "completion_only";
+  const primaryLabel = normalized === "duration_seconds" ? "秒" : normalized === "duration_minutes" ? "分钟" : "次数";
+  card.dataset.recordType = normalized;
+  const selector = card.querySelector(".exercise-record-type");
+  if (selector) selector.value = normalized;
+  card.querySelectorAll(".set-weight-field, .set-weight-heading").forEach(node => { node.hidden = !showWeight; });
+  card.querySelectorAll(".set-primary-field, .set-primary-heading").forEach(node => { node.hidden = !showPrimary; });
+  card.querySelectorAll(".set-primary-label, .set-primary-heading").forEach(node => { node.textContent = primaryLabel; });
+  card.querySelectorAll(".set-weight-label, .set-weight-heading").forEach(node => {
+    node.textContent = normalized === "assisted_or_added_weight_reps" ? "辅助-/加重+ kg" : "重量";
+  });
+}
+
 function addExerciseCard(exercise = { name: state.exercises[0]?.name || "", sets: [{ weight: "", reps: "", rpe: 7, note: "" }] }) {
+  const recordType = exerciseRecordType(exercise);
   const card = document.createElement("article");
   card.className = "exercise-card";
   card.dataset.exerciseId = uid("exercise");
@@ -862,13 +994,17 @@ function addExerciseCard(exercise = { name: state.exercises[0]?.name || "", sets
           动作
           <select class="exercise-name">${exerciseOptions(exercise.name)}</select>
         </label>
+        <label>
+          记录方式
+          <select class="exercise-record-type">${recordTypeOptions(recordType)}</select>
+        </label>
         <button class="ghost-button remove-exercise" type="button">移除</button>
       </div>
     </header>
     <div class="exercise-history" aria-live="polite"></div>
     <div class="set-header">
-      <span>重量</span>
-      <span>次数</span>
+      <span class="set-weight-heading">重量</span>
+      <span class="set-primary-heading">次数</span>
       <span>RPE</span>
       <span>备注</span>
     </div>
@@ -878,6 +1014,7 @@ function addExerciseCard(exercise = { name: state.exercises[0]?.name || "", sets
   $("exerciseRows").appendChild(card);
   const sets = exercise.sets?.length ? exercise.sets : [{ weight: "", reps: "", rpe: 7, note: "" }];
   sets.forEach(set => addSetRow(card, set));
+  updateExerciseCardRecordType(card, recordType);
   renderExerciseHistory(card);
   updateExerciseIndexes();
   renderWorkoutExecution();
@@ -892,13 +1029,14 @@ function addSetRow(card, set = { weight: "", reps: "", rpe: 7, note: "" }) {
   const defaultNote = set.note ?? "";
   row.dataset.defaultReps = String(defaultReps);
   row.dataset.defaultNote = String(defaultNote);
+  row.dataset.confirmed = set.confirmed ? "true" : "false";
   row.innerHTML = `
-    <label>
-      <span class="set-label">重量</span>
-      <input class="set-weight" type="number" min="0" step="0.5" value="${escapeAttr(set.weight ?? "")}">
+    <label class="set-weight-field">
+      <span class="set-label set-weight-label">重量</span>
+      <input class="set-weight" type="number" step="0.5" value="${escapeAttr(set.weight ?? "")}">
     </label>
-    <label>
-      <span class="set-label">次数</span>
+    <label class="set-primary-field">
+      <span class="set-label set-primary-label">次数</span>
       <input class="set-reps" type="number" min="0" step="1" value="${escapeAttr(set.reps ?? "")}">
     </label>
     <label>
@@ -912,6 +1050,7 @@ function addSetRow(card, set = { weight: "", reps: "", rpe: 7, note: "" }) {
     <button class="ghost-button remove-set" type="button">删除</button>
   `;
   card.querySelector(".sets").appendChild(row);
+  updateExerciseCardRecordType(card);
 }
 
 function bindWorkoutRows() {
@@ -946,7 +1085,13 @@ function bindWorkoutRows() {
   });
   $("exerciseRows").addEventListener("change", event => {
     const card = event.target.closest(".exercise-card");
-    if (card && event.target.classList.contains("exercise-name")) renderExerciseHistory(card);
+    if (!card) return;
+    if (event.target.classList.contains("exercise-name")) {
+      const libraryType = state.exercises.find(item => item.name === event.target.value)?.recordType;
+      updateExerciseCardRecordType(card, libraryType || "weighted_reps");
+      renderExerciseHistory(card);
+    }
+    if (event.target.classList.contains("exercise-record-type")) updateExerciseCardRecordType(card, event.target.value);
   });
 }
 
@@ -1000,7 +1145,8 @@ function reuseLatestExerciseSets(card) {
     weight: set.weight ?? "",
     reps: set.reps ?? "",
     rpe: set.rpe ?? 7,
-    note: ""
+    note: "",
+    confirmed: true
   }));
   card.querySelector(".sets").innerHTML = "";
   sets.forEach(set => addSetRow(card, set));
@@ -1028,40 +1174,53 @@ function collectTemplateExercises() {
 function collectExerciseRows({ completedOnly }) {
   return Array.from(document.querySelectorAll(".exercise-card")).map(card => {
     const name = card.querySelector(".exercise-name").value;
+    const recordType = card.querySelector(".exercise-record-type")?.value || "weighted_reps";
     const sets = Array.from(card.querySelectorAll(".set-grid"))
-      .map(row => setFromRow(row))
-      .filter(set => completedOnly ? isCompletedSet(set) : hasPlannedSetValue(set))
-      .map(cleanSetForStorage);
-    return { name, sets };
+      .map(row => setFromRow(row, recordType))
+      .filter(set => completedOnly ? isCompletedSet(set, recordType) : hasPlannedSetValue(set, recordType))
+      .map(set => cleanSetForStorage(set, recordType));
+    return {
+      name,
+      recordType,
+      metric: WorkoutSessionModel.legacyMetricForRecordType(recordType),
+      sets
+    };
   }).filter(exercise => exercise.name && exercise.sets.length);
 }
 
-function setFromRow(row) {
+function setFromRow(row, recordType = "weighted_reps") {
+  const keepsWeight = ["weighted_reps", "assisted_or_added_weight_reps"].includes(recordType);
+  const keepsPrimary = recordType !== "completion_only";
   return {
-    weight: numberOrNull(row.querySelector(".set-weight").value),
-    reps: numberOrNull(row.querySelector(".set-reps").value),
+    weight: keepsWeight ? numberOrNull(row.querySelector(".set-weight").value) : null,
+    reps: keepsPrimary ? numberOrNull(row.querySelector(".set-reps").value) : null,
     rpe: numberOrNull(row.querySelector(".set-rpe").value),
     note: row.querySelector(".set-note").value.trim(),
     defaultReps: numberOrNull(row.dataset.defaultReps),
-    defaultNote: row.dataset.defaultNote || ""
+    defaultNote: row.dataset.defaultNote || "",
+    confirmed: row.dataset.confirmed === "true"
   };
 }
 
-function isCompletedSet(set) {
+function isCompletedSet(set, recordType = "weighted_reps") {
+  if (set.confirmed || recordType === "completion_only") return true;
   const repsChanged = set.reps !== null && set.reps !== set.defaultReps;
   return set.weight !== null || repsChanged || isActualSetNote(set.note, set.defaultNote);
 }
 
-function hasPlannedSetValue(set) {
+function hasPlannedSetValue(set, recordType = "weighted_reps") {
+  if (recordType === "completion_only") return true;
   return set.weight !== null || set.reps !== null || set.rpe !== null || Boolean(set.note);
 }
 
-function cleanSetForStorage(set) {
+function cleanSetForStorage(set, recordType = "weighted_reps") {
   return {
     weight: set.weight,
     reps: set.reps,
     rpe: set.rpe,
-    note: set.note
+    note: set.note,
+    recordType,
+    metric: WorkoutSessionModel.legacyMetricForRecordType(recordType)
   };
 }
 
@@ -1200,7 +1359,7 @@ function clearWorkoutDraft() {
   stopFocusedRestTicker();
   workoutDraftTimer = null;
   activeWorkoutSession = null;
-  lastCompletedSetId = null;
+  lastWorkoutSetAction = null;
   releaseWorkoutWakeLock();
   try {
     localStorage.removeItem(WORKOUT_DRAFT_KEY);
@@ -1216,12 +1375,12 @@ function restoreWorkoutDraft() {
     const draft = JSON.parse(raw);
     const savedAt = Date.parse(draft.savedAt);
     const expired = !Number.isFinite(savedAt) || Date.now() - savedAt > 14 * 86400000;
-    if (![1, 2, 3, WorkoutSessionModel.VERSION].includes(draft.version) || expired || !Array.isArray(draft.exercises)) {
+    if (![1, 2, 3, 4, WorkoutSessionModel.VERSION].includes(draft.version) || expired || !Array.isArray(draft.exercises)) {
       localStorage.removeItem(WORKOUT_DRAFT_KEY);
       return false;
     }
 
-    if ([2, 3, WorkoutSessionModel.VERSION].includes(draft.version)) {
+    if ([2, 3, 4, WorkoutSessionModel.VERSION].includes(draft.version)) {
       const hadCompanion = Boolean(draft.companion?.rest || draft.companion?.transition);
       activeWorkoutSession = WorkoutSessionModel.migrateDraft(draft);
       if (hadCompanion && !activeWorkoutSession.companion?.rest && !activeWorkoutSession.companion?.transition) {
@@ -1230,9 +1389,10 @@ function restoreWorkoutDraft() {
       activeWorkoutSession.rotationDayId = typeof draft.rotationDayId === "string" ? draft.rotationDayId : "";
       activeWorkoutSession.sourceTemplateId = typeof draft.sourceTemplateId === "string" ? draft.sourceTemplateId : activeWorkoutSession.templateId || "";
       activeWorkoutSession.nextPlanId = typeof draft.nextPlanId === "string" ? draft.nextPlanId : "";
-      lastCompletedSetId = activeWorkoutSession.companion?.transition?.sourceSetId
+      const restoredActionSetId = activeWorkoutSession.companion?.transition?.sourceSetId
         || activeWorkoutSession.companion?.rest?.sourceSetId
         || null;
+      lastWorkoutSetAction = restoredActionSetId ? { setId: restoredActionSetId, action: "completed" } : null;
       const legacyExercises = activeWorkoutSession.exercises.map(exercise => ({
         name: exercise.name,
         sets: exercise.sets.map(set => ({
@@ -1296,7 +1456,11 @@ function editWorkoutRecord(workoutId) {
   $("sessionRpeValue").textContent = $("sessionRpe").value;
   $("workoutNote").value = workout.note || "";
   $("exerciseRows").innerHTML = "";
-  workout.exercises.forEach(exercise => addExerciseCard(cloneExercise(exercise)));
+  workout.exercises.forEach(exercise => {
+    const cloned = cloneExercise(exercise);
+    cloned.sets = cloned.sets.map(set => ({ ...set, confirmed: true }));
+    addExerciseCard(cloned);
+  });
   lastWorkoutSummary = null;
   persistWorkoutDraft();
   renderWorkoutExecution();
@@ -1455,19 +1619,23 @@ function planExerciseSource(workout, session = null) {
   if (session?.exercises?.length) {
     return session.exercises.map(exercise => ({
       name: exercise.name,
-      metric: exercise.sets[0]?.metric || "reps",
+      recordType: exercise.recordType || exercise.sets[0]?.recordType || "weighted_reps",
+      metric: WorkoutSessionModel.legacyMetricForRecordType(exercise.recordType || exercise.sets[0]?.recordType || "weighted_reps"),
       cue: exercise.cue || "",
       sets: exercise.sets.map(set => ({
         weight: set.actual.weight ?? set.target.weight,
-        reps: set.metric === "completion" ? null : set.actual.reps ?? set.target.reps,
+        reps: set.recordType === "completion_only" ? null : set.actual.reps ?? set.target.reps,
         rpe: set.actual.rpe ?? set.target.rpe,
-        note: set.actual.note || set.target.note || ""
+        note: set.actual.note || set.target.note || "",
+        recordType: set.recordType,
+        metric: set.metric
       }))
     })).filter(exercise => exercise.sets.length);
   }
   return (workout.exercises || []).map(exercise => ({
     name: exercise.name,
-    metric: WorkoutSessionModel.inferMetric(exercise.metric, exercise.sets?.[0]?.note, exercise.name),
+    recordType: exerciseRecordType(exercise),
+    metric: WorkoutSessionModel.legacyMetricForRecordType(exerciseRecordType(exercise)),
     cue: "",
     sets: (exercise.sets || []).map(set => ({
       weight: numberOrNull(set.weight),
@@ -1510,7 +1678,13 @@ function buildNextWorkoutPlan(workout, options = {}) {
     title: result.title || result.template?.name || "下一次训练",
     exercises: result.exercises.map(exercise => ({
       ...exercise,
-      metric: WorkoutSessionModel.inferMetric(exercise.metric, exercise.sets?.[0]?.note, exercise.name)
+      recordType: exerciseRecordType(exercise),
+      metric: WorkoutSessionModel.legacyMetricForRecordType(exerciseRecordType(exercise)),
+      sets: (exercise.sets || []).map(set => ({
+        ...set,
+        recordType: exerciseRecordType(exercise),
+        metric: WorkoutSessionModel.legacyMetricForRecordType(exerciseRecordType(exercise))
+      }))
     })),
     adjustments: result.adjustments,
     reasons: result.reasons,
@@ -1648,9 +1822,16 @@ function fillWorkoutFromTemplate(template, title) {
 }
 
 function cloneExercise(exercise) {
+  const recordType = exerciseRecordType(exercise);
   return {
     name: exercise.name,
-    sets: (exercise.sets || []).map(set => ({ ...set }))
+    recordType,
+    metric: WorkoutSessionModel.legacyMetricForRecordType(recordType),
+    sets: (exercise.sets || []).map(set => ({
+      ...set,
+      recordType: set.recordType || recordType,
+      metric: set.metric || WorkoutSessionModel.legacyMetricForRecordType(recordType)
+    }))
   };
 }
 
@@ -1808,6 +1989,7 @@ function startNextWorkoutPlan() {
     nextPlanId: plan.id,
     exercises: plan.exercises.map(exercise => ({
       name: exercise.name,
+      recordType: exercise.recordType,
       metric: exercise.metric,
       cue: exercise.cue || exercise.adjustment,
       sets: exercise.sets
@@ -1858,6 +2040,7 @@ function continuePreviousWorkout() {
 }
 
 function startFocusedWorkoutSession(template, title) {
+  focusedSetCompletionLocked = false;
   const goalDefaultRest = REST_SECONDS_BY_GOAL[state.settings.trainingGoal] || REST_SECONDS_BY_GOAL.general;
   activeWorkoutSession = WorkoutSessionModel.createSession({
     date: today(),
@@ -1867,11 +2050,13 @@ function startFocusedWorkoutSession(template, title) {
     defaultRestSeconds: Number(template.restDurationSeconds ?? template.restSeconds) || goalDefaultRest,
     exercises: template.exercises.map(exercise => ({
       name: exercise.name,
-      metric: exercise.metric,
+      recordType: exerciseRecordType(exercise),
+      metric: WorkoutSessionModel.legacyMetricForRecordType(exerciseRecordType(exercise)),
       cue: exercise.cue || exercise.sets?.[0]?.note || "",
       restDurationSeconds: exercise.restDurationSeconds ?? exercise.restSeconds,
       sets: (exercise.sets || []).map(set => ({
-        metric: set.metric || exercise.metric,
+        recordType: set.recordType || exerciseRecordType(exercise),
+        metric: set.metric || WorkoutSessionModel.legacyMetricForRecordType(exerciseRecordType(exercise)),
         restDurationSeconds: set.restDurationSeconds ?? set.restSeconds,
         target: {
           weight: set.weight,
@@ -1885,7 +2070,7 @@ function startFocusedWorkoutSession(template, title) {
   activeWorkoutSession.rotationDayId = template.rotationDayId || "";
   activeWorkoutSession.sourceTemplateId = template.sourceTemplateId || template.id || "";
   activeWorkoutSession.nextPlanId = template.nextPlanId || "";
-  lastCompletedSetId = null;
+  lastWorkoutSetAction = null;
   persistWorkoutDraft();
   renderFocusedWorkoutSession();
 }
@@ -1899,10 +2084,10 @@ function currentWorkoutSet() {
   return workoutSessionEntries().find(item => item.set.id === activeWorkoutSession?.currentSetId) || null;
 }
 
-function workoutMetricLabel(metric) {
-  if (metric === "seconds") return "秒";
-  if (metric === "minutes") return "分钟";
-  if (metric === "completion") return "完成即可";
+function workoutMetricLabel(metricOrRecordType) {
+  if (["seconds", "duration_seconds"].includes(metricOrRecordType)) return "秒";
+  if (["minutes", "duration_minutes"].includes(metricOrRecordType)) return "分钟";
+  if (["completion", "completion_only"].includes(metricOrRecordType)) return "完成即可";
   return "次";
 }
 
@@ -1916,8 +2101,14 @@ function restDurationForCurrentSet(entry = currentWorkoutSet()) {
 
 function focusedTargetText(set) {
   const parts = [];
-  if (set.target.weight !== null) parts.push(`${formatMetric(set.target.weight)} kg`);
-  if (set.metric !== "completion" && set.target.reps !== null) parts.push(`${formatMetric(set.target.reps)} ${workoutMetricLabel(set.metric)}`);
+  if (set.target.weight !== null) {
+    if (set.recordType === "assisted_or_added_weight_reps") {
+      parts.push(`${set.target.weight < 0 ? "辅助" : "加重"} ${formatMetric(Math.abs(set.target.weight))} kg`);
+    } else {
+      parts.push(`${formatMetric(set.target.weight)} kg`);
+    }
+  }
+  if (set.recordType !== "completion_only" && set.target.reps !== null) parts.push(`${formatMetric(set.target.reps)} ${workoutMetricLabel(set.recordType)}`);
   return parts.join(" · ") || "按舒服的范围完成";
 }
 
@@ -2094,8 +2285,14 @@ function renderFocusedWorkoutSession() {
     return;
   }
 
+  if (activeWorkoutSession.companion?.rest && !WorkoutSessionModel.isRestLocked(activeWorkoutSession)) {
+    activeWorkoutSession = WorkoutSessionModel.clearRest(activeWorkoutSession);
+    persistWorkoutDraft();
+  }
+
   const modelProgress = WorkoutSessionModel.progress(activeWorkoutSession);
   const current = currentWorkoutSet();
+  const restLocked = WorkoutSessionModel.isRestLocked(activeWorkoutSession);
   const entries = workoutSessionEntries();
   const elapsed = WorkoutSessionModel.elapsedMinutes(activeWorkoutSession.startedAt) || 1;
   const planRows = entries.map(({ exercise, set, setIndex }) => `
@@ -2118,14 +2315,14 @@ function renderFocusedWorkoutSession() {
       </div>
     </div>
     ${current ? focusedCompanionMarkup() : ""}
-    ${current ? focusedCurrentSetMarkup(current) : `
+    ${current ? (restLocked ? focusedRestPreviewMarkup(current) : focusedCurrentSetMarkup(current)) : `
       <div class="focused-session-done">
         <strong>计划中的组已全部处理</strong>
         <p class="muted">已完成 ${modelProgress.completed} 组，跳过 ${modelProgress.skipped} 组。</p>
         <button id="finishFocusedWorkoutBtn" type="button" ${modelProgress.completed ? "" : "disabled"}>结束训练</button>
       </div>
     `}
-    ${lastCompletedSetId ? `<button id="undoFocusedSetBtn" class="text-button focused-undo" type="button">撤销上一组</button>` : ""}
+    ${lastWorkoutSetAction ? `<button id="undoFocusedSetBtn" class="text-button focused-undo" type="button">撤销上一操作</button>` : ""}
     <details class="focused-plan-details">
       <summary>查看完整训练计划</summary>
       <div class="focused-plan-list">${planRows}</div>
@@ -2137,12 +2334,14 @@ function renderFocusedWorkoutSession() {
 
 function focusedCurrentSetMarkup({ exercise, set, setIndex }) {
   const primaryValue = set.actual.reps ?? set.target.reps ?? "";
-  const weightValue = set.actual.weight ?? set.target.weight ?? "";
+  const signedWeightValue = set.actual.weight ?? set.target.weight ?? "";
+  const weightValue = signedWeightValue === "" ? "" : Math.abs(Number(signedWeightValue));
   const exerciseSetCount = exercise.sets.length;
   const cue = set.target.note || exercise.cue || "动作保持稳定，不需要做到力竭。";
-  const primaryStep = set.metric === "seconds" ? 5 : 1;
-  const primaryUnit = workoutMetricLabel(set.metric);
-  const hasWeight = set.metric === "reps" && !/俯卧撑|引体|椅子深蹲|分腿蹲|深蹲跳|开合跳|鸟狗|死虫|臀桥|卷腹|平板|拉伸|活动|快走|跑步/.test(exercise.name);
+  const primaryStep = set.recordType === "duration_seconds" ? 5 : 1;
+  const primaryUnit = workoutMetricLabel(set.recordType);
+  const hasWeight = ["weighted_reps", "assisted_or_added_weight_reps"].includes(set.recordType);
+  const assistedLoad = set.recordType === "assisted_or_added_weight_reps" && Number(signedWeightValue) < 0;
   const load = Number(set.actual.weight ?? set.target.weight);
   const weightStep = Number.isFinite(load) && load > 0 && load <= 10 ? 1 : 2.5;
   return `
@@ -2156,7 +2355,7 @@ function focusedCurrentSetMarkup({ exercise, set, setIndex }) {
       </div>
       <p class="focused-cue">${escapeHtml(cue)}</p>
       <div class="focused-set-inputs">
-        ${set.metric === "completion" ? `<p class="completion-only-cue">完成这段动作后直接确认即可。</p>` : `
+        ${set.recordType === "completion_only" ? `<p class="completion-only-cue">完成这段动作后直接确认即可。</p>` : `
           <label>
             实际${escapeHtml(workoutMetricLabel(set.metric))}
             <div class="focused-value-stepper">
@@ -2168,7 +2367,13 @@ function focusedCurrentSetMarkup({ exercise, set, setIndex }) {
         `}
         ${hasWeight ? `
           <label>
-            重量 kg（可不填）
+            <span id="focusedWeightLabel">${set.recordType === "assisted_or_added_weight_reps" ? `${assistedLoad ? "辅助" : "加重"} kg（可不填）` : "重量 kg（可不填）"}</span>
+            ${set.recordType === "assisted_or_added_weight_reps" ? `
+              <span class="focused-load-mode" role="group" aria-label="选择辅助或加重">
+                <button class="ghost-button" type="button" data-load-mode="assisted" aria-pressed="${assistedLoad}">辅助</button>
+                <button class="ghost-button" type="button" data-load-mode="added" aria-pressed="${!assistedLoad}">加重</button>
+              </span>
+            ` : ""}
             <div class="focused-value-stepper">
               <button id="decreaseFocusedWeightBtn" class="ghost-button" type="button" data-step="${weightStep}" aria-label="重量减少 ${weightStep} 千克">−${weightStep}</button>
               <input id="focusedWeightValue" type="number" min="0" step="0.5" value="${escapeAttr(weightValue)}" inputmode="decimal">
@@ -2261,12 +2466,43 @@ function skipFocusedRest() {
 }
 
 function focusedActualPatch() {
+  const set = currentWorkoutSet()?.set;
+  const rawWeight = numberOrNull($("focusedWeightValue")?.value);
+  const assisted = set?.recordType === "assisted_or_added_weight_reps"
+    && $("focusedWorkoutSession").querySelector('[data-load-mode="assisted"]')?.getAttribute("aria-pressed") === "true";
   return {
     reps: numberOrNull($("focusedPrimaryValue")?.value),
-    weight: numberOrNull($("focusedWeightValue")?.value),
+    weight: rawWeight === null ? null : assisted ? -Math.abs(rawWeight) : Math.abs(rawWeight),
     rpe: numberOrNull($("focusedSetRpe")?.value),
     note: $("focusedSetNote")?.value.trim() || ""
   };
+}
+
+function focusedRestPreviewMarkup({ exercise, set, setIndex }) {
+  const cue = set.target.note || exercise.cue || "动作保持稳定，不需要做到力竭。";
+  return `
+    <article id="focusedCurrentSet" class="focused-current-set focused-rest-preview" tabindex="-1" data-current-set-id="${escapeAttr(set.id)}" aria-label="下一组预览">
+      <div class="focused-set-heading">
+        <div>
+          <span>休息后 · 第 ${setIndex + 1} 组</span>
+          <h3>${escapeHtml(exercise.name)}</h3>
+        </div>
+        <strong>${escapeHtml(focusedTargetText(set))}</strong>
+      </div>
+      <p class="focused-cue">${escapeHtml(cue)}</p>
+      <p class="muted">休息结束或点击“立即开始下一组”后即可记录。</p>
+    </article>
+  `;
+}
+
+function setFocusedLoadMode(mode) {
+  if (!currentWorkoutSet() || !["assisted", "added"].includes(mode)) return;
+  $("focusedWorkoutSession").querySelectorAll("[data-load-mode]").forEach(button => {
+    button.setAttribute("aria-pressed", String(button.dataset.loadMode === mode));
+  });
+  const label = $("focusedWeightLabel");
+  if (label) label.textContent = `${mode === "assisted" ? "辅助" : "加重"} kg（可不填）`;
+  persistFocusedActual();
 }
 
 function persistFocusedActual() {
@@ -2280,7 +2516,7 @@ function persistFocusedActual() {
 }
 
 function completeFocusedSet() {
-  if (focusedSetCompletionLocked) return;
+  if (focusedSetCompletionLocked || WorkoutSessionModel.isRestLocked(activeWorkoutSession)) return;
   const current = currentWorkoutSet();
   if (!current) return;
   focusedSetCompletionLocked = true;
@@ -2291,7 +2527,7 @@ function completeFocusedSet() {
     restDurationSeconds: restDurationForCurrentSet(current)
   });
   activeWorkoutSession = WorkoutSessionModel.prefillCurrentWeight(activeWorkoutSession);
-  lastCompletedSetId = completedId;
+  lastWorkoutSetAction = { setId: completedId, action: "completed" };
   lastRestAlertKey = "";
   vibrateWorkout(35);
   persistWorkoutDraft();
@@ -2301,10 +2537,13 @@ function completeFocusedSet() {
 }
 
 function skipFocusedSet() {
+  if (WorkoutSessionModel.isRestLocked(activeWorkoutSession)) return;
   const current = currentWorkoutSet();
   if (!current) return;
+  const skippedId = current.set.id;
   activeWorkoutSession = WorkoutSessionModel.skipSet(activeWorkoutSession, current.set.id);
   activeWorkoutSession = WorkoutSessionModel.prefillCurrentWeight(activeWorkoutSession);
+  lastWorkoutSetAction = { setId: skippedId, action: "skipped" };
   persistWorkoutDraft();
   renderFocusedWorkoutSession();
   $("focusedCurrentSet")?.focus();
@@ -2312,10 +2551,10 @@ function skipFocusedSet() {
 }
 
 function undoFocusedSet() {
-  if (!lastCompletedSetId || !activeWorkoutSession) return;
-  activeWorkoutSession = WorkoutSessionModel.undoSet(activeWorkoutSession, lastCompletedSetId);
+  if (!lastWorkoutSetAction || !activeWorkoutSession) return;
+  activeWorkoutSession = WorkoutSessionModel.undoSet(activeWorkoutSession, lastWorkoutSetAction.setId);
   stopFocusedRestTicker();
-  lastCompletedSetId = null;
+  lastWorkoutSetAction = null;
   persistWorkoutDraft();
   renderFocusedWorkoutSession();
   $("focusedCurrentSet")?.focus();
@@ -2618,6 +2857,7 @@ function openFirstWorkoutSetup() {
   const form = $("firstWorkoutSetupForm");
   form.reset();
   $("firstWorkoutSetupError").hidden = true;
+  firstWorkoutChoice("firstWorkoutCondition", "bodyweight");
   firstWorkoutChoice("firstWorkoutExperience", state.settings.experienceLevel || "beginner");
   firstWorkoutChoice("firstWorkoutGoal", state.settings.trainingGoal || "general");
   const dialog = $("firstWorkoutSetupDialog");
@@ -2742,6 +2982,7 @@ function openExtendedDailyFromReadiness() {
 function addLibraryExercise() {
   const name = $("newExerciseName").value.trim();
   const category = $("newExerciseCategory").value;
+  const recordType = $("newExerciseRecordType").value;
   if (!name) {
     showToast("请输入动作名称");
     return;
@@ -2750,7 +2991,7 @@ function addLibraryExercise() {
     showToast("动作已存在");
     return;
   }
-  state.exercises.push({ name, category, lastUsed: "" });
+  state.exercises.push({ name, category, recordType, lastUsed: "" });
   $("newExerciseName").value = "";
   saveState();
   showToast("动作已添加");
@@ -2997,7 +3238,7 @@ function renderLibrary() {
       <article class="library-item">
         <div>
           <strong>${escapeHtml(item.name)}</strong>
-          <span class="muted">${escapeHtml(item.category)}</span>
+          <span class="muted">${escapeHtml(item.category)} · ${escapeHtml(recordTypeDisplayLabel(item.recordType))}</span>
         </div>
         <span class="type-pill">${item.lastUsed ? `最近 ${escapeHtml(item.lastUsed)}` : "未使用"}</span>
       </article>
@@ -7186,9 +7427,9 @@ function isValidDateText(value) {
 function normalizeImportedState(imported) {
   return {
     dailyLogs: Array.isArray(imported.dailyLogs) ? imported.dailyLogs : [],
-    workouts: Array.isArray(imported.workouts) ? imported.workouts : [],
+    workouts: normalizeWorkoutRecordTypes(imported.workouts),
     exercises: mergeDefaultExercises(imported.exercises),
-    templates: Array.isArray(imported.templates) ? imported.templates : [],
+    templates: normalizeTemplateRecordTypes(imported.templates),
     adviceHistory: Array.isArray(imported.adviceHistory) ? imported.adviceHistory : [],
     settings: normalizeSettings(imported.settings, imported.templates),
     nextWorkoutPlan: normalizeNextWorkoutPlan(imported.nextWorkoutPlan)
@@ -7219,12 +7460,12 @@ function confirmWorkoutCsvMigration() {
     return;
   }
 
-  const importedWorkouts = pendingImport.workouts;
+  const importedWorkouts = normalizeWorkoutRecordTypes(pendingImport.workouts);
   const existingExerciseNames = new Set(state.exercises.map(exercise => exercise.name));
   importedWorkouts.forEach(workout => {
     workout.exercises.forEach(exercise => {
       if (existingExerciseNames.has(exercise.name)) return;
-      state.exercises.push({ name: exercise.name, category: "其他", lastUsed: "" });
+      state.exercises.push({ name: exercise.name, category: "其他", recordType: exercise.recordType, lastUsed: "" });
       existingExerciseNames.add(exercise.name);
     });
   });
@@ -7603,7 +7844,7 @@ function applyNormalizedCloudState(normalized) {
     Object.assign(state, normalized);
     clearWorkoutDraft();
     activeWorkoutSession = null;
-    lastCompletedSetId = null;
+    lastWorkoutSetAction = null;
     persistState();
     clearWorkoutForm();
     renderAll();
@@ -8483,7 +8724,7 @@ function resetAllData() {
   pendingImport = null;
   lastWorkoutSummary = null;
   activeWorkoutSession = null;
-  lastCompletedSetId = null;
+  lastWorkoutSetAction = null;
   lastStorageIssue = "";
   clearWorkoutForm();
   closeResetDataDialog();
@@ -8845,7 +9086,16 @@ function bindActions() {
       if (event.target.id === "focusedWeightValue") refreshFocusedWeightStepControls();
     }
   });
+  $("focusedWorkoutSession").addEventListener("focusin", event => {
+    if (!event.target.matches("input[type='number']")) return;
+    window.requestAnimationFrame(() => event.target.scrollIntoView({ block: "center", behavior: preferredScrollBehavior() }));
+  });
   $("focusedWorkoutSession").addEventListener("click", event => {
+    const loadModeButton = event.target.closest("[data-load-mode]");
+    if (loadModeButton) {
+      setFocusedLoadMode(loadModeButton.dataset.loadMode);
+      return;
+    }
     if (event.target.closest("#decreaseFocusedPrimaryBtn")) {
       adjustFocusedValue("focusedPrimaryValue", -Number(event.target.closest("#decreaseFocusedPrimaryBtn").dataset.step || 1));
       return;

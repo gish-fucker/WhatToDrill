@@ -141,6 +141,8 @@ assert.equal(companion.companion.transition.targetSetId, companionSecond);
 assert.equal(companion.companion.rest.nextSetId, companionSecond);
 assert.equal(companion.companion.rest.restDurationSeconds, 90);
 assert.equal(model.remainingRestSeconds(companion, "2026-07-16T10:00:30.000Z"), 60);
+assert.equal(model.isRestLocked(companion, "2026-07-16T10:00:30.000Z"), true);
+assert.equal(model.isRestLocked(companion, "2026-07-16T10:02:00.000Z"), false);
 companion = model.prefillCurrentWeight(companion);
 assert.equal(companion.exercises[0].sets[1].actual.weight, 42.5, "The next set should reuse the nearest completed weight in the same exercise.");
 const extended = model.adjustRest(companion, 30, "2026-07-16T10:00:30.000Z");
@@ -184,6 +186,8 @@ assert.equal(undoneCompanion.companion.rest, null, "Undoing the source set shoul
 assert.equal(undoneCompanion.companion.transition, null);
 const manuallySelected = model.selectSet(companion, companionThird);
 assert.equal(manuallySelected.companion.transition, null, "Manual selection should clear stale transition context.");
+assert.deepEqual(model.completeSet(completedDefault, squatId, {}), completedDefault, "Repeating completion must be idempotent.");
+assert.deepEqual(model.skipSet(skipped, squatId), skipped, "Repeating skip must be idempotent.");
 
 const v2Draft = model.migrateDraft({ ...companion, version: 2, companion: undefined }, { idFactory, startedAt: companionNow });
 assert.equal(v2Draft.version, 5);

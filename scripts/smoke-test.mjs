@@ -2389,12 +2389,22 @@ async function run() {
     const firstWorkoutSetup = await evaluate(cdp, `(() => ({
       open: document.querySelector("#firstWorkoutSetupDialog").open,
       focusedName: document.activeElement?.name,
+      checkedCondition: document.querySelector('input[name="firstWorkoutCondition"]:checked')?.value,
+      checkedCount: document.querySelectorAll('input[name="firstWorkoutCondition"]:checked').length,
       conditions: document.querySelectorAll('input[name="firstWorkoutCondition"]').length,
       experiences: document.querySelectorAll('input[name="firstWorkoutExperience"]').length,
       goals: document.querySelectorAll('input[name="firstWorkoutGoal"]').length,
       painGateClosed: !document.querySelector("#painGateDialog").open
     }))()`);
-    assert(firstWorkoutSetup.open && firstWorkoutSetup.focusedName === "firstWorkoutCondition" && firstWorkoutSetup.conditions === 4 && firstWorkoutSetup.experiences === 2 && firstWorkoutSetup.goals === 5 && firstWorkoutSetup.painGateClosed, `First start should collect a compact environment profile before pain: ${JSON.stringify(firstWorkoutSetup)}.`);
+    assert(firstWorkoutSetup.open && firstWorkoutSetup.focusedName === "firstWorkoutCondition" && firstWorkoutSetup.checkedCondition === "bodyweight" && firstWorkoutSetup.checkedCount === 1 && firstWorkoutSetup.conditions === 4 && firstWorkoutSetup.experiences === 2 && firstWorkoutSetup.goals === 5 && firstWorkoutSetup.painGateClosed, `First start should expose one real default condition before pain: ${JSON.stringify(firstWorkoutSetup)}.`);
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "ArrowRight", code: "ArrowRight", windowsVirtualKeyCode: 39 });
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "ArrowRight", code: "ArrowRight", windowsVirtualKeyCode: 39 });
+    const keyboardCondition = await evaluate(cdp, `(() => ({
+      checked: document.querySelector('input[name="firstWorkoutCondition"]:checked')?.value,
+      legend: document.querySelector('#firstWorkoutSetupDialog fieldset legend')?.textContent,
+      focusedName: document.activeElement?.name
+    }))()`);
+    assert(keyboardCondition.checked === "dumbbells" && keyboardCondition.focusedName === "firstWorkoutCondition" && keyboardCondition.legend.includes("在哪里练"), `Condition radios should expose native keyboard and accessible group behavior: ${JSON.stringify(keyboardCondition)}.`);
     await evaluate(cdp, `(() => {
       document.querySelector('input[name="firstWorkoutCondition"][value="bodyweight"]').click();
       document.querySelector('input[name="firstWorkoutExperience"][value="experienced"]').click();
@@ -2445,7 +2455,7 @@ async function run() {
     assert(loadedWorkout.sets === "0/12", `The muscle-gain home routine should expose twelve planned sets: ${JSON.stringify(loadedWorkout)}.`);
     assert(loadedWorkout.collectedSets === 0, "Template cues should not count as completed workout sets.");
     assert(loadedWorkout.focusedVisible && loadedWorkout.currentExercise === "椅子深蹲" && loadedWorkout.currentSetText.includes("第 1 组 / 共 3 组") && loadedWorkout.currentSetText.includes("完成这组"), "Coach start should focus the first muscle-gain planned set.");
-    assert(loadedWorkout.legacyHidden && loadedWorkout.sessionVersion === 4 && loadedWorkout.currentStatus === "pending", "Focused training should hide the legacy editor and keep the set explicitly pending.");
+    assert(loadedWorkout.legacyHidden && loadedWorkout.sessionVersion === 5 && loadedWorkout.currentStatus === "pending", "Focused training should hide the legacy editor and keep the set explicitly pending.");
 
     const emptyFinish = await evaluate(cdp, `(() => {
       document.querySelector("#requestFinishFocusedWorkoutBtn").click();
@@ -2469,7 +2479,7 @@ async function run() {
         storedVersion: JSON.parse(localStorage.getItem(${JSON.stringify(workoutDraftKey)})).version
       };
     })()`);
-    assert(typedPending.status === "pending" && typedPending.actual === 9 && typedPending.storedVersion === 4, "Editing the current result should persist without implying completion.");
+    assert(typedPending.status === "pending" && typedPending.actual === 9 && typedPending.storedVersion === 5, "Editing the current result should persist without implying completion.");
 
     const completedFocusedSet = await evaluate(cdp, `(() => {
       const startedAt = activeWorkoutSession.startedAt;
@@ -2483,21 +2493,20 @@ async function run() {
         restTime: document.querySelector("#focusedRestTime")?.textContent,
         restContext: document.querySelector("#focusedRestContext")?.textContent,
         weightControlsHidden: !document.querySelector("#focusedWeightValue"),
-        quickControls: ["decreaseFocusedPrimaryBtn", "increaseFocusedPrimaryBtn", "toggleFocusedRestBtn", "extendFocusedRestBtn", "skipFocusedRestBtn", "startNextSetBtn"].every(id => Boolean(document.getElementById(id)))
+        inputLocked: !document.querySelector("#focusedPrimaryValue") && !document.querySelector("#completeFocusedSetBtn") && !document.querySelector("#skipFocusedSetBtn"),
+        quickControls: ["toggleFocusedRestBtn", "extendFocusedRestBtn", "skipFocusedRestBtn", "startNextSetBtn"].every(id => Boolean(document.getElementById(id)))
       };
     })()`);
     assert(completedFocusedSet.completed === 1 && completedFocusedSet.currentExercise === "椅子深蹲" && completedFocusedSet.undoVisible && completedFocusedSet.firstStatus === "completed", "Completing a set should advance, update progress, and expose undo.");
-    assert(completedFocusedSet.restTime === "01:30" && completedFocusedSet.restContext.includes("下一组") && completedFocusedSet.weightControlsHidden && completedFocusedSet.quickControls, `A completed bodyweight set should start guided rest, hide irrelevant weight input, and expose quick controls: ${JSON.stringify(completedFocusedSet)}.`);
+    assert(completedFocusedSet.restTime === "01:30" && completedFocusedSet.restContext.includes("下一组") && completedFocusedSet.weightControlsHidden && completedFocusedSet.inputLocked && completedFocusedSet.quickControls, `A completed bodyweight set should show a read-only preview and guided rest controls: ${JSON.stringify(completedFocusedSet)}.`);
     const adjustedFocusedSet = await evaluate(cdp, `(() => {
-      document.querySelector("#increaseFocusedPrimaryBtn").click();
-      document.querySelector("#decreaseFocusedPrimaryBtn").click();
       document.querySelector("#extendFocusedRestBtn").click();
       const extended = document.querySelector("#focusedRestTime")?.textContent;
       document.querySelector("#toggleFocusedRestBtn").click();
       const paused = WorkoutSessionModel.isRestPaused(activeWorkoutSession);
-      return { reps: document.querySelector("#focusedPrimaryValue").value, extended, paused };
+      return { inputsHidden: !document.querySelector("#focusedPrimaryValue"), extended, paused };
     })()`);
-    assert(adjustedFocusedSet.reps === "10" && adjustedFocusedSet.extended === "02:00" && adjustedFocusedSet.paused, `Quick adjustments and paused rest state should persist exact values: ${JSON.stringify(adjustedFocusedSet)}.`);
+    assert(adjustedFocusedSet.inputsHidden && adjustedFocusedSet.extended === "02:00" && adjustedFocusedSet.paused, `Paused rest state should persist while next-set inputs remain locked: ${JSON.stringify(adjustedFocusedSet)}.`);
     await reload(cdp);
     const restoredFocusedSession = await evaluate(cdp, `(() => ({
       visible: !document.querySelector("#focusedWorkoutSession").hidden,
@@ -2513,23 +2522,47 @@ async function run() {
       storedVersion: JSON.parse(localStorage.getItem(${JSON.stringify(workoutDraftKey)}))?.version
     }))()`);
     assert(restoredFocusedSession.visible && restoredFocusedSession.startedAt === completedFocusedSet.startedAt && restoredFocusedSession.completed === 1 && restoredFocusedSession.currentSetId && restoredFocusedSession.firstActual === 9, "Reload should restore focused progress, current set, actual input, and original start time.");
-    assert(restoredFocusedSession.version === 4 && restoredFocusedSession.storedVersion === 4 && restoredFocusedSession.restSourceSetId && restoredFocusedSession.restRemaining > 0 && restoredFocusedSession.restPaused && restoredFocusedSession.restVisible, `Version 4 draft recovery should restore a paused rest companion without resetting it: ${JSON.stringify(restoredFocusedSession)}.`);
+    assert(restoredFocusedSession.version === 5 && restoredFocusedSession.storedVersion === 5 && restoredFocusedSession.restSourceSetId && restoredFocusedSession.restRemaining > 0 && restoredFocusedSession.restPaused && restoredFocusedSession.restVisible, `Typed draft recovery should restore a paused rest companion without resetting it: ${JSON.stringify(restoredFocusedSession)}.`);
+
+    const pausedRestSnapshot = await evaluate(cdp, `(() => {
+      const snapshot = structuredClone(activeWorkoutSession);
+      activeWorkoutSession.companion.rest.restPausedAt = null;
+      activeWorkoutSession.companion.rest.restRemainingWhenPaused = null;
+      activeWorkoutSession.companion.rest.restEndsAt = new Date(Date.now() - 1000).toISOString();
+      persistWorkoutDraft();
+      return snapshot;
+    })()`);
+    await reload(cdp);
+    const expiredRestRecovery = await evaluate(cdp, `(() => ({
+      rest: activeWorkoutSession.companion.rest,
+      inputActive: Boolean(document.querySelector("#focusedPrimaryValue")),
+      completeActive: Boolean(document.querySelector("#completeFocusedSetBtn"))
+    }))()`);
+    assert(expiredRestRecovery.rest === null && expiredRestRecovery.inputActive && expiredRestRecovery.completeActive, `Expired rest should activate the next set after refresh: ${JSON.stringify(expiredRestRecovery)}.`);
+    await evaluate(cdp, `(() => {
+      activeWorkoutSession = ${JSON.stringify(pausedRestSnapshot)};
+      persistWorkoutDraft();
+      renderFocusedWorkoutSession();
+    })()`);
 
     const skippedFocusedRest = await evaluate(cdp, `(() => {
       const currentSetId = activeWorkoutSession.currentSetId;
       document.querySelector("#skipFocusedRestBtn").click();
+      document.querySelector("#increaseFocusedPrimaryBtn").click();
+      document.querySelector("#decreaseFocusedPrimaryBtn").click();
       return {
         currentSetId: activeWorkoutSession.currentSetId,
         rest: activeWorkoutSession.companion.rest,
         restPanelVisible: Boolean(document.querySelector("#focusedRestTime")),
-        storedRest: JSON.parse(localStorage.getItem(${JSON.stringify(workoutDraftKey)}))?.companion?.rest
+        storedRest: JSON.parse(localStorage.getItem(${JSON.stringify(workoutDraftKey)}))?.companion?.rest,
+        reps: document.querySelector("#focusedPrimaryValue")?.value
       };
     })()`);
-    assert(skippedFocusedRest.currentSetId === restoredFocusedSession.currentSetId && skippedFocusedRest.rest === null && !skippedFocusedRest.restPanelVisible && skippedFocusedRest.storedRest === null, `Skipping rest should keep the next set selected and clear rest from both UI and draft: ${JSON.stringify(skippedFocusedRest)}.`);
+    assert(skippedFocusedRest.currentSetId === restoredFocusedSession.currentSetId && skippedFocusedRest.rest === null && !skippedFocusedRest.restPanelVisible && skippedFocusedRest.storedRest === null && skippedFocusedRest.reps === "10", `Skipping rest should activate inputs without changing the selected set: ${JSON.stringify(skippedFocusedRest)}.`);
 
     const exerciseTransitionAndUndo = await evaluate(cdp, `(() => {
       const snapshot = structuredClone(activeWorkoutSession);
-      const previousLastCompletedSetId = lastCompletedSetId;
+      const previousLastWorkoutSetAction = lastWorkoutSetAction;
       const firstExercise = activeWorkoutSession.exercises[0];
       firstExercise.sets.forEach((set, index) => {
         set.status = index < firstExercise.sets.length - 1 ? "completed" : "pending";
@@ -2557,7 +2590,7 @@ async function run() {
         storedRest: JSON.parse(localStorage.getItem(${JSON.stringify(workoutDraftKey)}))?.companion?.rest
       };
       activeWorkoutSession = snapshot;
-      lastCompletedSetId = previousLastCompletedSetId;
+      lastWorkoutSetAction = previousLastWorkoutSetAction;
       persistWorkoutDraft();
       renderFocusedWorkoutSession();
       return { afterComplete, afterUndo };
@@ -2766,41 +2799,60 @@ async function run() {
         id: "metric-ui",
         name: "计量测试",
         exercises: [
-          { name: "平板支撑", metric: "seconds", sets: [{ reps: 30, note: "按秒完成" }] },
-          { name: "快走", metric: "minutes", sets: [{ reps: 10, note: "按分钟完成" }] },
-          { name: "放松", metric: "completion", sets: [{ reps: null, note: "完成即可" }] }
+          { name: "卧推", recordType: "weighted_reps", sets: [{ weight: 40, reps: 8 }] },
+          { name: "普通俯卧撑", recordType: "bodyweight_reps", sets: [{ reps: 12 }] },
+          { name: "引体向上", recordType: "assisted_or_added_weight_reps", sets: [{ weight: -20, reps: 6 }] },
+          { name: "平板支撑", recordType: "duration_seconds", sets: [{ reps: 30, note: "按秒完成" }] },
+          { name: "快走", recordType: "duration_minutes", sets: [{ reps: 10, note: "按分钟完成" }] },
+          { name: "放松", recordType: "completion_only", sets: [{ reps: null, note: "完成即可" }] }
         ]
       };
       startFocusedWorkoutSession(template, template.name);
       activateTab("workout", { scroll: false });
-      await new Promise(resolve => setTimeout(resolve, 400));
-      const seconds = document.querySelector("#focusedCurrentSet").innerText;
-      const secondsStep = document.querySelector("#increaseFocusedPrimaryBtn")?.dataset.step;
-      const secondsWeightHidden = !document.querySelector("#focusedWeightValue");
-      document.querySelector("#completeFocusedSetBtn").click();
-      await new Promise(resolve => setTimeout(resolve, 400));
-      const minutes = document.querySelector("#focusedCurrentSet").innerText;
-      const minutesStep = document.querySelector("#increaseFocusedPrimaryBtn")?.dataset.step;
-      const minutesWeightHidden = !document.querySelector("#focusedWeightValue");
-      document.querySelector("#completeFocusedSetBtn").click();
-      await new Promise(resolve => setTimeout(resolve, 400));
-      const completion = {
+      const capture = () => ({
         text: document.querySelector("#focusedCurrentSet").innerText,
         hasPrimary: Boolean(document.querySelector("#focusedPrimaryValue")),
-        hasWeight: Boolean(document.querySelector("#focusedWeightValue"))
+        hasWeight: Boolean(document.querySelector("#focusedWeightValue")),
+        loadModes: [...document.querySelectorAll("[data-load-mode]")].map(button => button.textContent.trim()),
+        weightLabel: document.querySelector("#focusedWeightLabel")?.textContent || "",
+        step: document.querySelector("#increaseFocusedPrimaryBtn")?.dataset.step || ""
+      });
+      const advance = async () => {
+        document.querySelector("#completeFocusedSetBtn").click();
+        await new Promise(resolve => setTimeout(resolve, 20));
+        document.querySelector("#startNextSetBtn")?.click();
+        await new Promise(resolve => setTimeout(resolve, 380));
       };
+      const weighted = capture();
+      await advance();
+      const bodyweight = capture();
+      await advance();
+      const assisted = capture();
+      await advance();
+      const seconds = capture();
+      const secondsStep = document.querySelector("#increaseFocusedPrimaryBtn")?.dataset.step;
+      const secondsWeightHidden = !document.querySelector("#focusedWeightValue");
+      await advance();
+      const minutes = capture();
+      const minutesStep = document.querySelector("#increaseFocusedPrimaryBtn")?.dataset.step;
+      const minutesWeightHidden = !document.querySelector("#focusedWeightValue");
+      await advance();
+      const completion = capture();
       document.querySelector("#completeFocusedSetBtn").click();
-      await new Promise(resolve => setTimeout(resolve, 400));
+      await new Promise(resolve => setTimeout(resolve, 20));
       const statusText = document.querySelector(".focused-plan-list").textContent;
       const progress = WorkoutSessionModel.progress(activeWorkoutSession);
       clearWorkoutDraft();
       renderFocusedWorkoutSession();
-      return { seconds, secondsStep, secondsWeightHidden, minutes, minutesStep, minutesWeightHidden, completion, statusText, progress };
+      return { weighted, bodyweight, assisted, seconds, secondsStep, secondsWeightHidden, minutes, minutesStep, minutesWeightHidden, completion, statusText, progress };
     })()`);
-    assert(metricUi.seconds.includes("实际秒") && metricUi.minutes.includes("实际分钟"), `Focused UI should label second- and minute-based targets in plain language: ${JSON.stringify(metricUi)}.`);
+    assert(metricUi.weighted.hasWeight && metricUi.weighted.hasPrimary, "Weighted reps should render weight and repetitions.");
+    assert(!metricUi.bodyweight.hasWeight && metricUi.bodyweight.hasPrimary, `Bodyweight reps should hide meaningless weight controls: ${JSON.stringify(metricUi.bodyweight)}.`);
+    assert(metricUi.assisted.hasWeight && metricUi.assisted.loadModes.join() === "辅助,加重" && metricUi.assisted.weightLabel.includes("辅助"), `Assisted pull-ups should expose assisted/added semantics: ${JSON.stringify(metricUi.assisted)}.`);
+    assert(metricUi.seconds.text.includes("实际秒") && metricUi.minutes.text.includes("实际分钟"), `Focused UI should label second- and minute-based targets in plain language: ${JSON.stringify(metricUi)}.`);
     assert(metricUi.secondsStep === "5" && metricUi.minutesStep === "1" && metricUi.secondsWeightHidden && metricUi.minutesWeightHidden, `Duration inputs should expose unit-aware quick steps and hide irrelevant weight fields: ${JSON.stringify(metricUi)}.`);
     assert(metricUi.completion.text.includes("完成这段动作") && !metricUi.completion.hasPrimary && !metricUi.completion.hasWeight, "Completion-only sets should not ask for repetitions or weight.");
-    assert(metricUi.progress.completed === 3 && metricUi.statusText.includes("✓ 已完成"), "Plan status should combine text, symbol, and color rather than color alone.");
+    assert(metricUi.progress.completed === 6 && metricUi.statusText.includes("✓ 已完成"), "Plan status should combine text, symbol, and color rather than color alone.");
 
     const painGateSaved = await evaluate(cdp, `(() => {
       const saved = state.dailyLogs.find(item => item.date === today());
@@ -2882,8 +2934,8 @@ async function run() {
     assert(blockedSave.toast.includes("请至少记录"), "Blocked save should explain missing set data.");
     assert(!blockedSave.hasSummary, "Blocked save should not show a completion summary.");
 
-    await evaluate(cdp, `document.querySelector(".set-weight").value = "20";
-      document.querySelector(".set-weight").dispatchEvent(new Event("input", { bubbles: true }));`);
+    await evaluate(cdp, `document.querySelector(".set-reps").value = "11";
+      document.querySelector(".set-reps").dispatchEvent(new Event("input", { bubbles: true }));`);
     await delay(250);
     const oneSetProgress = await evaluate(cdp, `(() => ({
       progress: document.querySelector(".progress-ring strong").textContent,
@@ -3179,7 +3231,7 @@ async function run() {
     })()`);
     assert(!previousSetHistory.before.hidden && previousSetHistory.before.button, "A repeated exercise should expose its latest history.");
     assert(previousSetHistory.before.text.includes(previousSetHistory.today) && previousSetHistory.before.text.includes("1 组"), "Exercise history should show the latest date and set count.");
-    assert(previousSetHistory.weight === "20" && previousSetHistory.reps === "8" && previousSetHistory.rpe === "7", "Reuse should fill weight, reps, and RPE from the latest muscle-gain rotation exercise.");
+    assert(previousSetHistory.weight === "" && previousSetHistory.reps === "11" && previousSetHistory.rpe === "7", `Reuse should preserve bodyweight semantics while filling repetitions and RPE from the latest exercise: ${JSON.stringify(previousSetHistory)}.`);
     assert(previousSetHistory.sets === 1 && previousSetHistory.collectedSets === 1, "Reuse should copy exactly the saved sets into the active workout.");
     assert(previousSetHistory.toast.includes("上次训练数据"), "Reuse should confirm what was filled.");
     assert(!previousSetHistory.overflow, "Exercise history should not overflow the workout layout.");
@@ -3192,13 +3244,14 @@ async function run() {
         activeTab: document.querySelector(".tab.active")?.dataset.tab,
         title: document.querySelector("#workoutTitle").value,
         weight: document.querySelector(".set-weight").value,
+        reps: document.querySelector(".set-reps").value,
         saveText: document.querySelector("#saveWorkoutBtn").textContent,
         finishText: document.querySelector("#finishWorkoutBtn").textContent,
         cancelHidden: document.querySelector("#cancelWorkoutEditBtn").hidden
       };
     })()`);
     assert(workoutEditLoaded.activeTab === "workout", "Editing history should open the workout tab.");
-    assert(workoutEditLoaded.weight === "20", "Editing history should load the original set values.");
+    assert(workoutEditLoaded.weight === "" && workoutEditLoaded.reps === "11", "Editing history should load the original typed set values.");
     assert(workoutEditLoaded.saveText === "保存修改" && workoutEditLoaded.finishText === "保存修改", "Edit mode should clearly label both save actions.");
     assert(!workoutEditLoaded.cancelHidden, "Edit mode should expose a cancel action.");
 
@@ -4526,35 +4579,58 @@ async function run() {
       window.scrollTo(0, 0);
     })()`);
     await delay(250);
-    const mobile = await evaluate(cdp, `(() => {
-      const companionControlIds = [
-        "decreaseFocusedPrimaryBtn",
-        "increaseFocusedPrimaryBtn",
-        "decreaseFocusedWeightBtn",
-        "increaseFocusedWeightBtn",
+    const mobile = await evaluate(cdp, `(async () => {
+      const restSnapshot = structuredClone(activeWorkoutSession);
+      const restControlIds = [
         "toggleFocusedRestBtn",
         "extendFocusedRestBtn",
         "skipFocusedRestBtn",
         "startNextSetBtn",
-        "completeFocusedSetBtn",
-        "skipFocusedSetBtn"
+        "undoFocusedSetBtn"
       ];
-      const controls = companionControlIds.map(id => {
+      const restControls = restControlIds.map(id => {
         const element = document.getElementById(id);
         return { id, present: Boolean(element), height: element?.getBoundingClientRect().height || 0 };
       });
+      const competingComplete = Boolean(document.querySelector("#completeFocusedSetBtn"));
+      document.querySelector("#startNextSetBtn").click();
+      const activeControlIds = ["decreaseFocusedPrimaryBtn", "increaseFocusedPrimaryBtn", "decreaseFocusedWeightBtn", "increaseFocusedWeightBtn", "completeFocusedSetBtn", "skipFocusedSetBtn"];
+      const activeControls = activeControlIds.map(id => {
+        const element = document.getElementById(id);
+        return { id, present: Boolean(element), height: element?.getBoundingClientRect().height || 0 };
+      });
+      const input = document.querySelector("#focusedPrimaryValue");
+      input.focus();
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const inputBounds = input.getBoundingClientRect();
+      const skippedId = activeWorkoutSession.currentSetId;
+      document.querySelector("#skipFocusedSetBtn").click();
+      const skippedStatus = workoutSessionEntries().find(entry => entry.set.id === skippedId)?.set.status;
+      document.querySelector("#undoFocusedSetBtn").click();
+      const undoneStatus = workoutSessionEntries().find(entry => entry.set.id === skippedId)?.set.status;
+      activeWorkoutSession = restSnapshot;
+      lastWorkoutSetAction = { setId: restSnapshot.companion.transition.sourceSetId, action: "completed" };
+      persistWorkoutDraft();
+      renderFocusedWorkoutSession();
       return {
         width: innerWidth,
         scrollWidth: document.documentElement.scrollWidth,
         overflow: document.documentElement.scrollWidth > innerWidth,
-        controls,
+        restControls,
+        activeControls,
+        competingComplete,
+        inputVisible: inputBounds.top >= 0 && inputBounds.bottom <= innerHeight,
+        skippedStatus,
+        undoneStatus,
         restPanelWidth: document.querySelector(".focused-rest-panel")?.getBoundingClientRect().width || 0,
         sessionWidth: document.querySelector("#focusedWorkoutSession")?.getBoundingClientRect().width || 0
       };
     })()`);
     assert(mobile.width === 390, "Mobile viewport should be active.");
     assert(!mobile.overflow, "Mobile workout layout should not overflow.");
-    assert(mobile.controls.every(control => control.present && control.height >= 44), `Mobile companion controls should all provide at least 44px touch targets: ${JSON.stringify(mobile.controls)}.`);
+    assert(mobile.restControls.every(control => control.present && control.height >= 44) && !mobile.competingComplete, `Rest should expose 44px controls without a competing completion action: ${JSON.stringify(mobile)}.`);
+    assert(mobile.activeControls.every(control => control.present && control.height >= 44) && mobile.inputVisible, `Activated set inputs should remain visible with 44px controls: ${JSON.stringify(mobile)}.`);
+    assert(mobile.skippedStatus === "skipped" && mobile.undoneStatus === "pending", "Skipping a set must remain reversible on mobile.");
     assert(mobile.restPanelWidth > 0 && mobile.restPanelWidth <= mobile.sessionWidth, `Mobile rest companion should fit inside the focused workout surface: ${JSON.stringify(mobile)}.`);
     const companionWidths = [];
     for (const width of [320, 375, 390, 430]) {

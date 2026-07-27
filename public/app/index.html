@@ -313,6 +313,17 @@
                   <option>康复</option>
                 </select>
               </label>
+              <label>
+                记录方式
+                <select id="newExerciseRecordType">
+                  <option value="weighted_reps">重量 + 次数</option>
+                  <option value="bodyweight_reps">自重次数</option>
+                  <option value="assisted_or_added_weight_reps">辅助 / 加重 + 次数</option>
+                  <option value="duration_seconds">按秒</option>
+                  <option value="duration_minutes">按分钟</option>
+                  <option value="completion_only">仅完成</option>
+                </select>
+              </label>
               <button id="addLibraryExerciseBtn" type="button">添加动作</button>
             </form>
             <div id="exerciseLibraryList" class="chip-list"></div>
@@ -785,7 +796,7 @@
           <fieldset class="readiness-question">
             <legend>今天在哪里练、能用什么？</legend>
             <div class="readiness-options first-workout-condition-options">
-              <label><input type="radio" name="firstWorkoutCondition" value="bodyweight"><span><strong>居家</strong><small>无器械</small></span></label>
+              <label><input type="radio" name="firstWorkoutCondition" value="bodyweight" checked><span><strong>居家</strong><small>无器械</small></span></label>
               <label><input type="radio" name="firstWorkoutCondition" value="dumbbells"><span><strong>居家或健身房</strong><small>有哑铃</small></span></label>
               <label><input type="radio" name="firstWorkoutCondition" value="machines"><span><strong>健身房</strong><small>固定器械</small></span></label>
               <label><input type="radio" name="firstWorkoutCondition" value="free_weights"><span><strong>健身房</strong><small>自由重量</small></span></label>

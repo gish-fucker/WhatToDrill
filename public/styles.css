@@ -1816,6 +1816,16 @@ input[type="checkbox"] {
   outline-offset: 3px;
 }
 
+.focused-rest-preview {
+  border-style: dashed;
+  background: var(--surface-raised);
+  box-shadow: none;
+}
+
+.focused-rest-preview .muted {
+  margin-bottom: 0;
+}
+
 .focused-set-heading {
   display: flex;
   align-items: flex-start;
@@ -1867,6 +1877,7 @@ input[type="checkbox"] {
   min-height: 58px;
   font-size: 22px;
   font-weight: 900;
+  scroll-margin-block: 30dvh;
 }
 
 .focused-set-inputs input[type="number"] {
@@ -1974,6 +1985,19 @@ input[type="checkbox"] {
 .focused-value-stepper input {
   width: 100%;
   min-width: 0;
+}
+
+.focused-load-mode {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.focused-load-mode button[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+  color: var(--primary-strong);
+  box-shadow: inset 0 0 0 1px var(--primary);
 }
 
 .exercise-transition {
@@ -2584,7 +2608,7 @@ input[type="checkbox"] {
 
 .exercise-title-row {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto;
+  grid-template-columns: minmax(180px, 1fr) minmax(170px, 0.7fr) auto;
   gap: 10px;
   width: 100%;
 }

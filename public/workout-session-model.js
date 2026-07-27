@@ -54,6 +54,7 @@
     if (/按分钟|分钟记录|快走|跑步/.test(cue)) return "duration_minutes";
     if (/完成即可|仅完成/.test(cue)) return "completion_only";
     if (/辅助引体|负重引体|引体向上|引体/.test(cue)) return "assisted_or_added_weight_reps";
+    if (optionalNumber(values?.weight) !== null) return "weighted_reps";
     if (/自重深蹲|徒手深蹲|俯卧撑|椅子深蹲|分腿蹲|深蹲跳|开合跳|鸟狗|死虫|臀桥|卷腹|徒手/.test(cue)) {
       return "bodyweight_reps";
     }
