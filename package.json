@@ -5,15 +5,16 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "check": "node --check public/workout-session-model.js && node --check public/training-rotation-model.js && node --check public/cloud-sync-model.js && node --check public/app.js && node --check server.js && node --check server/entitlements.js && node --check server/cloud-sync.js && npm.cmd run check:release-metadata",
+    "check": "node --check public/workout-session-model.js && node --check public/local-beta-funnel-model.js && node --check public/training-rotation-model.js && node --check public/cloud-sync-model.js && node --check public/app.js && node --check server.js && node --check server/entitlements.js && node --check server/cloud-sync.js && npm.cmd run check:release-metadata",
     "check:release-metadata": "node scripts/release-metadata-check.mjs",
     "build:pages": "node scripts/build-static-release.mjs",
     "test:workout-session": "node scripts/workout-session-test.mjs",
+    "test:local-beta-funnel": "node scripts/local-beta-funnel-test.mjs",
     "test:training-rotation": "node scripts/training-rotation-test.mjs",
     "test:training-recommendation": "node scripts/training-recommendation-golden-test.mjs",
     "test:entitlements": "node scripts/entitlements-test.mjs",
     "test:cloud-sync": "node scripts/cloud-sync-test.mjs",
     "test:cloud-sync-server": "node scripts/cloud-sync-server-test.mjs",
-    "test:smoke": "node scripts/workout-session-test.mjs && node scripts/training-rotation-test.mjs && node scripts/training-recommendation-golden-test.mjs && node scripts/entitlements-test.mjs && node scripts/cloud-sync-test.mjs && node scripts/cloud-sync-server-test.mjs && node scripts/smoke-test.mjs"
+    "test:smoke": "node scripts/workout-session-test.mjs && node scripts/local-beta-funnel-test.mjs && node scripts/training-rotation-test.mjs && node scripts/training-recommendation-golden-test.mjs && node scripts/entitlements-test.mjs && node scripts/cloud-sync-test.mjs && node scripts/cloud-sync-server-test.mjs && node scripts/smoke-test.mjs"
   }
 }
