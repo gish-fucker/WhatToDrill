@@ -8,7 +8,8 @@ vm.runInContext(source, context);
 const model = context.TrainingRotationModel;
 
 const templates = [
-  { id: "beginner_full_body", name: "全身入门" },
+  { id: "beginner_full_body", name: "全身 A" },
+  { id: "beginner_full_body_b", name: "全身 B" },
   { id: "beginner_upper", name: "上肢入门" },
   { id: "beginner_lower", name: "下肢入门" },
   { id: "custom_a", name: "上肢 A" },
@@ -16,7 +17,28 @@ const templates = [
 ];
 
 assert.equal(model.normalizeRotation({}, templates).mode, "full_body");
+assert.deepEqual(Array.from(model.normalizeRotation({}, templates).days, day => day.id), ["rotation_full_body", "rotation_full_body_b"]);
+assert.equal(model.advanceRotation(model.defaultRotation(), "rotation_full_body", templates).currentIndex, 1);
 assert.equal(model.resolveNextDay({ mode: "upper_lower", currentIndex: 1 }, templates).day.templateId, "beginner_lower");
+
+assert.equal(model.normalizeEnvironment("home", "bodyweight"), "home_bodyweight");
+assert.equal(model.normalizeEnvironment("home", "dumbbells"), "home_dumbbell");
+assert.notDeepEqual(model.routineTemplateIds("gym"), model.routineTemplateIds("home_bodyweight"));
+assert.equal(model.routineTemplateIds("home_bodyweight").join(","), "starter_home_bodyweight,starter_home_bodyweight_b");
+
+const prescriptionBase = {
+  id: "test",
+  exercises: [{ name: "深蹲", sets: Array.from({ length: 3 }, () => ({ weight: 20, reps: 10, rpe: 6, note: "" })) }]
+};
+const general = model.applyGoalPrescription(prescriptionBase, "general");
+const muscle = model.applyGoalPrescription(prescriptionBase, "muscle_gain");
+const strength = model.applyGoalPrescription(prescriptionBase, "strength");
+const fatLoss = model.applyGoalPrescription(prescriptionBase, "fat_loss");
+assert.equal(general.exercises[0].sets.length, 2);
+assert.equal(muscle.exercises[0].sets.length, 3);
+assert.equal(strength.exercises[0].sets[0].reps, 5);
+assert.equal(fatLoss.exercises.at(-1).name, "轻松快走");
+assert.match(muscle.progression, /先把每组次数/);
 
 const custom = model.normalizeRotation({
   mode: "custom",
@@ -44,6 +66,13 @@ const comparable = model.findComparableWorkout([
 ], custom.days[1]);
 assert.equal(comparable.id, "latest");
 assert.equal(model.findComparableWorkout([{ date: "2026-07-14", rotationDayId: "a" }], custom.days[1]), null);
+
+const latestExercise = model.findLatestExercisePerformance([
+  { id: "older", date: "2026-07-10", exercises: [{ name: "深蹲", sets: [{ weight: 30, reps: 10, rpe: 6 }] }] },
+  { id: "latest", date: "2026-07-14", exercises: [{ name: "深蹲", sets: [{ weight: 35, reps: 8, rpe: 7 }] }] }
+], "深蹲");
+assert.equal(latestExercise.workout.id, "latest");
+assert.equal(latestExercise.exercise.sets[0].weight, 35);
 
 const workouts = [
   { date: "2026-06-01", exercises: [{ name: "卧推" }] },

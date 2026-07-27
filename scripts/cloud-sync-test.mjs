@@ -26,7 +26,8 @@ assert.deepEqual(JSON.parse(JSON.stringify(empty)), {
   status: "disabled",
   pending: false,
   conflict: null,
-  error: ""
+  error: "",
+  localResetPending: false
 });
 
 const sanitized = model.normalizeMetadata({
@@ -158,6 +159,70 @@ assert.deepEqual(JSON.parse(JSON.stringify(conflicted.conflict)), {
   detectedAt: NOW,
   code: "REVISION_CONFLICT"
 });
+
+const remoteDeleted = model.markConflict(
+  model.markLocalChange(pushed, REPLACEMENT),
+  { revision: 2, exists: false, checksum: null, detectedAt: NOW, code: "REMOTE_DELETED" },
+  { expectedAccountId: "account-a" }
+);
+assert.deepEqual(JSON.parse(JSON.stringify(remoteDeleted.conflict)), {
+  revision: 2,
+  checksum: "",
+  detectedAt: NOW,
+  code: "REMOTE_DELETED",
+  exists: false
+});
+assert.equal(remoteDeleted.localChecksum, REPLACEMENT, "A remote tombstone must not erase the unsynced local snapshot.");
+assert.equal(model.markFailure(remoteDeleted, "offline", { expectedAccountId: "account-a", offline: true }).status, "conflict", "Ordinary failure handling must not clear a tombstone conflict.");
+const rebuildingAfterDelete = model.beginSync(remoteDeleted, {
+  resolveConflict: "keep-local",
+  conflictRevision: 2,
+  conflictChecksum: null,
+  remoteRevision: 2,
+  remoteChecksum: null,
+  remoteExists: false,
+  expectedAccountId: "account-a"
+});
+assert.equal(rebuildingAfterDelete.conflict.exists, false);
+const rebuiltAfterDelete = model.completePush(rebuildingAfterDelete, {
+  revision: 3,
+  checksum: REPLACEMENT,
+  syncedAt: NOW
+}, {
+  resolveConflict: "keep-local",
+  conflictRevision: 2,
+  conflictChecksum: null,
+  expectedAccountId: "account-a"
+});
+assert.equal(rebuiltAfterDelete.status, "synced");
+assert.equal(rebuiltAfterDelete.revision, 3);
+assert.equal(rebuiltAfterDelete.remoteChecksum, REPLACEMENT);
+
+const resetAgainstActiveRemote = model.markConflict(
+  model.normalizeMetadata({
+    accountId: "account-a",
+    enabled: true,
+    revision: 3,
+    localChecksum: LOCAL,
+    remoteChecksum: REMOTE,
+    localResetPending: true
+  }, "account-a"),
+  { revision: 4, checksum: REMOTE, detectedAt: NOW, code: "LOCAL_RESET" },
+  { expectedAccountId: "account-a" }
+);
+assert.equal(resetAgainstActiveRemote.conflict.code, "LOCAL_RESET", "An empty local reset must retain its explicit remote-restore/overwrite choice.");
+const restoredAfterReset = model.completePull(resetAgainstActiveRemote, {
+  revision: 4,
+  checksum: REMOTE,
+  schemaVersion: 1,
+  syncedAt: NOW
+}, {
+  resolveConflict: "use-cloud",
+  conflictRevision: 4,
+  conflictChecksum: REMOTE,
+  expectedAccountId: "account-a"
+});
+assert.equal(restoredAfterReset.localResetPending, false, "Restoring the active remote completes the local-reset boundary.");
 
 assert.throws(
   () => model.completePull(conflicted, {
@@ -331,7 +396,8 @@ assert.deepEqual(JSON.parse(JSON.stringify(accountB)), {
   status: "disabled",
   pending: false,
   conflict: null,
-  error: ""
+  error: "",
+  localResetPending: false
 });
 
 const hashA = await model.snapshotChecksum({ z: 1, nested: { b: 2, a: 1 }, list: [{ y: 2, x: 1 }] }, sha256);

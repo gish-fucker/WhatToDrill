@@ -1,7 +1,7 @@
 (function attachWorkoutSessionModel(global) {
   "use strict";
 
-  const VERSION = 3;
+  const VERSION = 4;
   const DEFAULT_REST_SECONDS = 90;
   const VALID_STATUSES = new Set(["pending", "completed", "skipped"]);
   const VALID_METRICS = new Set(["reps", "seconds", "minutes", "completion"]);
@@ -55,11 +55,20 @@
   }
 
   function normalizeCompanion(companion = {}) {
-    const rest = companion.rest?.sourceSetId && companion.rest?.startedAt && companion.rest?.endsAt
+    const sourceRest = companion.rest || {};
+    const restStartedAt = sourceRest.restStartedAt || sourceRest.startedAt;
+    const restEndsAt = sourceRest.restEndsAt || sourceRest.endsAt;
+    const duration = optionalNumber(sourceRest.restDurationSeconds ?? sourceRest.durationSeconds);
+    const remaining = optionalNumber(sourceRest.restRemainingWhenPaused ?? sourceRest.remainingWhenPaused);
+    const rest = sourceRest.sourceSetId && restStartedAt && restEndsAt
       ? {
-          sourceSetId: normalizeText(companion.rest.sourceSetId),
-          startedAt: companion.rest.startedAt,
-          endsAt: companion.rest.endsAt
+          sourceSetId: normalizeText(sourceRest.sourceSetId),
+          nextSetId: normalizeText(sourceRest.nextSetId || companion.transition?.targetSetId),
+          restStartedAt,
+          restEndsAt,
+          restDurationSeconds: duration && duration > 0 ? Math.round(duration) : DEFAULT_REST_SECONDS,
+          restPausedAt: sourceRest.restPausedAt || sourceRest.pausedAt || null,
+          restRemainingWhenPaused: remaining === null ? null : Math.max(0, Math.round(remaining))
         }
       : null;
     const transition = companion.transition?.sourceSetId && companion.transition?.targetSetId
@@ -79,6 +88,7 @@
       id: set.id || idFactory("set"),
       metric: inferMetric(set.metric || exercise.metric, targetSource.note, exercise.name),
       status: VALID_STATUSES.has(set.status) ? set.status : "pending",
+      restDurationSeconds: optionalNumber(set.restDurationSeconds ?? set.restSeconds),
       target: normalizeValues(targetSource),
       actual: normalizeValues(actualSource)
     };
@@ -89,7 +99,9 @@
       id: exercise.id || idFactory("exercise"),
       name: normalizeText(exercise.name) || "未命名动作",
       cue: normalizeText(exercise.cue),
+      restDurationSeconds: optionalNumber(exercise.restDurationSeconds ?? exercise.restSeconds),
       sets: (Array.isArray(exercise.sets) ? exercise.sets : [])
+        .filter(set => set && typeof set === "object")
         .map(set => normalizeSet(set, exercise, idFactory))
     };
   }
@@ -105,6 +117,7 @@
   function createSession(plan = {}, options = {}) {
     const idFactory = typeof options.idFactory === "function" ? options.idFactory : defaultId;
     const exercises = (Array.isArray(plan.exercises) ? plan.exercises : [])
+      .filter(exercise => exercise && typeof exercise === "object")
       .map(exercise => normalizeExercise(exercise, idFactory));
     const session = {
       version: VERSION,
@@ -112,6 +125,8 @@
       date: normalizeText(plan.date) || options.date || new Date().toISOString().slice(0, 10),
       title: normalizeText(plan.title) || "本次训练",
       templateId: normalizeText(plan.templateId),
+      trainingGoal: normalizeText(plan.trainingGoal),
+      defaultRestSeconds: optionalNumber(plan.defaultRestSeconds),
       startedAt: plan.startedAt || options.startedAt || new Date().toISOString(),
       currentSetId: plan.currentSetId || null,
       companion: normalizeCompanion(plan.companion),
@@ -123,13 +138,19 @@
     }
     const source = findSet(session, session.companion.transition?.sourceSetId);
     const target = findSet(session, session.companion.transition?.targetSetId);
-    const restStart = Date.parse(session.companion.rest?.startedAt);
-    const restEnd = Date.parse(session.companion.rest?.endsAt);
+    const restStart = Date.parse(session.companion.rest?.restStartedAt);
+    const restEnd = Date.parse(session.companion.rest?.restEndsAt);
     const companionValid = source?.set.status === "completed"
       && target?.set.status === "pending"
       && target.set.id === session.currentSetId;
     if (!companionValid) session.companion = emptyCompanion();
-    else if (session.companion.rest && (!Number.isFinite(restStart) || !Number.isFinite(restEnd) || restEnd < restStart)) {
+    else if (session.companion.rest && (
+      !Number.isFinite(restStart)
+      || !Number.isFinite(restEnd)
+      || restEnd < restStart
+      || session.companion.rest.nextSetId !== session.currentSetId
+      || (session.companion.rest.restPausedAt && !Number.isFinite(Date.parse(session.companion.rest.restPausedAt)))
+    )) {
       session.companion.rest = null;
     }
     return session;
@@ -185,10 +206,18 @@
       const safeStartedAt = Number.isFinite(startedMs) ? startedAt : new Date().toISOString();
       const source = findSet(draft, setId);
       const target = findSet(draft, targetSetId);
+      const requestedDuration = optionalNumber(options.restDurationSeconds);
+      const restDurationSeconds = requestedDuration && requestedDuration > 0
+        ? Math.round(requestedDuration)
+        : DEFAULT_REST_SECONDS;
       draft.companion.rest = {
         sourceSetId: setId,
-        startedAt: safeStartedAt,
-        endsAt: new Date(Date.parse(safeStartedAt) + DEFAULT_REST_SECONDS * 1000).toISOString()
+        nextSetId: targetSetId,
+        restStartedAt: safeStartedAt,
+        restEndsAt: new Date(Date.parse(safeStartedAt) + restDurationSeconds * 1000).toISOString(),
+        restDurationSeconds,
+        restPausedAt: null,
+        restRemainingWhenPaused: null
       };
       draft.companion.transition = {
         sourceSetId: setId,
@@ -224,7 +253,9 @@
   }
 
   function remainingRestSeconds(session, now = new Date().toISOString()) {
-    const end = Date.parse(session.companion?.rest?.endsAt);
+    const rest = session.companion?.rest;
+    if (rest?.restPausedAt) return Math.max(0, optionalNumber(rest.restRemainingWhenPaused) || 0);
+    const end = Date.parse(rest?.restEndsAt);
     const current = Date.parse(now);
     return Number.isFinite(end) && Number.isFinite(current)
       ? Math.max(0, Math.ceil((end - current) / 1000))
@@ -234,11 +265,16 @@
   function adjustRest(session, deltaSeconds, now = new Date().toISOString()) {
     const next = clone(session);
     next.companion = normalizeCompanion(next.companion);
-    const end = Date.parse(next.companion.rest?.endsAt);
+    const rest = next.companion.rest;
+    if (!rest) return next;
     const current = Date.parse(now);
     const delta = Number(deltaSeconds);
-    if (Number.isFinite(end) && Number.isFinite(current) && Number.isFinite(delta)) {
-      next.companion.rest.endsAt = new Date(Math.max(end, current) + delta * 1000).toISOString();
+    if (!Number.isFinite(current) || !Number.isFinite(delta)) return next;
+    if (rest.restPausedAt) {
+      rest.restRemainingWhenPaused = Math.max(0, (optionalNumber(rest.restRemainingWhenPaused) || 0) + delta);
+    } else {
+      const end = Date.parse(rest.restEndsAt);
+      if (Number.isFinite(end)) rest.restEndsAt = new Date(Math.max(end, current) + delta * 1000).toISOString();
     }
     return next;
   }
@@ -249,9 +285,42 @@
     if (!next.companion.rest) return next;
     const current = Date.parse(now);
     if (!Number.isFinite(current)) return next;
-    next.companion.rest.startedAt = now;
-    next.companion.rest.endsAt = new Date(current + DEFAULT_REST_SECONDS * 1000).toISOString();
+    const duration = next.companion.rest.restDurationSeconds || DEFAULT_REST_SECONDS;
+    next.companion.rest.restStartedAt = now;
+    next.companion.rest.restEndsAt = new Date(current + duration * 1000).toISOString();
+    next.companion.rest.restPausedAt = null;
+    next.companion.rest.restRemainingWhenPaused = null;
     return next;
+  }
+
+  function pauseRest(session, now = new Date().toISOString()) {
+    const next = clone(session);
+    next.companion = normalizeCompanion(next.companion);
+    const rest = next.companion.rest;
+    if (!rest || rest.restPausedAt) return next;
+    const current = Date.parse(now);
+    if (!Number.isFinite(current)) return next;
+    rest.restRemainingWhenPaused = remainingRestSeconds(next, now);
+    rest.restPausedAt = now;
+    return next;
+  }
+
+  function resumeRest(session, now = new Date().toISOString()) {
+    const next = clone(session);
+    next.companion = normalizeCompanion(next.companion);
+    const rest = next.companion.rest;
+    if (!rest?.restPausedAt) return next;
+    const current = Date.parse(now);
+    if (!Number.isFinite(current)) return next;
+    const remaining = Math.max(0, optionalNumber(rest.restRemainingWhenPaused) || 0);
+    rest.restEndsAt = new Date(current + remaining * 1000).toISOString();
+    rest.restPausedAt = null;
+    rest.restRemainingWhenPaused = null;
+    return next;
+  }
+
+  function isRestPaused(session) {
+    return Boolean(session.companion?.rest?.restPausedAt);
   }
 
   function clearRest(session) {
@@ -344,6 +413,7 @@
 
   function migrateDraft(draft = {}, options = {}) {
     if (draft.version === VERSION) return createSession(draft, options);
+    if (draft.version === 3) return createSession(draft, options);
     if (draft.version === 2) return createSession({ ...draft, companion: emptyCompanion() }, options);
     const migrated = {
       id: draft.id,
@@ -386,6 +456,9 @@
     remainingRestSeconds,
     adjustRest,
     resetRest,
+    pauseRest,
+    resumeRest,
+    isRestPaused,
     clearRest,
     prefillCurrentWeight,
     toWorkoutRecord

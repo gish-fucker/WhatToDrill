@@ -5,7 +5,7 @@
   const SUPPORTED_SNAPSHOT_SCHEMA_VERSION = 1;
   const CHECKSUM_PATTERN = /^[a-f0-9]{64}$/;
   const VALID_STATUSES = new Set(["disabled", "synced", "pending", "syncing", "conflict", "error"]);
-  const VALID_CONFLICT_CODES = new Set(["REVISION_CONFLICT", "INTEGRITY_CONFLICT"]);
+  const VALID_CONFLICT_CODES = new Set(["REVISION_CONFLICT", "INTEGRITY_CONFLICT", "REMOTE_DELETED", "LOCAL_RESET"]);
   const FORBIDDEN_RECORD_KEYS = new Set(["__proto__", "prototype", "constructor"]);
   const REALM_OBJECT_PROTOTYPE = Object.getPrototypeOf({});
   const REALM_ARRAY_PROTOTYPE = Object.getPrototypeOf([]);
@@ -21,7 +21,10 @@
     status: "disabled",
     pending: false,
     conflict: null,
-    error: ""
+    error: "",
+    // A local reset must never turn an existing remote backup into an
+    // implicit empty overwrite on the next enable.
+    localResetPending: false
   });
 
   function codedError(code, message, ErrorType = Error) {
@@ -80,15 +83,18 @@
 
   function normalizeConflict(value) {
     if (!isPlainDataRecord(value)) return null;
-    const checksum = cleanChecksum(ownValue(value, "checksum", ""));
-    if (!checksum) return null;
-    const code = ownValue(value, "code", "REVISION_CONFLICT");
-    return {
+    const exists = ownValue(value, "exists", true) !== false;
+    const checksum = exists ? cleanChecksum(ownValue(value, "checksum", "")) : "";
+    if (exists && !checksum) return null;
+    const code = exists ? ownValue(value, "code", "REVISION_CONFLICT") : "REMOTE_DELETED";
+    const conflict = {
       revision: cleanRevision(ownValue(value, "revision", 0)),
       checksum,
       detectedAt: cleanTimestamp(ownValue(value, "detectedAt", "")),
       code: VALID_CONFLICT_CODES.has(code) ? code : "REVISION_CONFLICT"
     };
+    if (!exists) conflict.exists = false;
+    return conflict;
   }
 
   function normalizeMetadata(metadata = {}, expectedAccountId) {
@@ -114,10 +120,13 @@
       ? {
           ...candidateConflict,
           code: candidateConflict.revision === revision
+            && candidateConflict.exists !== false
+            && candidateConflict.code !== "LOCAL_RESET"
             ? "INTEGRITY_CONFLICT"
             : candidateConflict.code
         }
       : null;
+    const localResetPending = ownValue(source, "localResetPending", false) === true;
     const requestedStatus = ownValue(source, "status", "");
     const requestedError = cleanText(ownValue(source, "error", ""));
     const dirty = Boolean(localChecksum) && localChecksum !== remoteChecksum;
@@ -154,7 +163,8 @@
       status: VALID_STATUSES.has(status) ? status : "disabled",
       pending,
       conflict,
-      error
+      error,
+      localResetPending
     };
   }
 
@@ -320,7 +330,9 @@
       throw codedError("UNRESOLVED_CONFLICT", "An explicit, current conflict resolution is required.");
     }
     const revision = cleanRevision(ownValue(options, "conflictRevision", -1));
-    const checksum = cleanChecksum(ownValue(options, "conflictChecksum", ""));
+    const checksum = current.conflict.exists === false
+      ? (ownValue(options, "conflictChecksum", null) === null || ownValue(options, "conflictChecksum", "") === "" ? "" : "invalid")
+      : cleanChecksum(ownValue(options, "conflictChecksum", ""));
     if (revision !== current.conflict.revision || checksum !== current.conflict.checksum) {
       throw codedError("STALE_CONFLICT_RESOLUTION", "The cloud conflict changed before it was resolved.");
     }
@@ -334,21 +346,25 @@
       if (ownValue(options, "resolveConflict", "") !== "keep-local") return current;
       validateConflictIdentity(current, options, "keep-local");
       const remoteRevision = cleanRevision(ownValue(options, "remoteRevision", -1));
-      const remoteChecksum = cleanChecksum(ownValue(options, "remoteChecksum", ""));
-      if (!remoteChecksum || remoteRevision < current.conflict.revision) {
+      const remoteExists = ownValue(options, "remoteExists", true) !== false;
+      const remoteChecksum = remoteExists ? cleanChecksum(ownValue(options, "remoteChecksum", "")) : "";
+      if ((remoteExists && !remoteChecksum) || remoteRevision < current.conflict.revision) {
         throw codedError("STALE_CONFLICT_RESOLUTION", "Keep-local resolution requires a current cloud revision.");
       }
-      if (remoteRevision === current.conflict.revision && remoteChecksum !== current.conflict.checksum) {
+      if (remoteRevision === current.conflict.revision
+        && (remoteExists !== (current.conflict.exists !== false) || remoteChecksum !== current.conflict.checksum)) {
         throw codedError("INTEGRITY_CONFLICT", "The same cloud revision was returned with different content.");
       }
+      const refreshedConflict = {
+        revision: remoteRevision,
+        checksum: remoteChecksum,
+        detectedAt: current.conflict.detectedAt,
+        code: remoteExists ? current.conflict.code : "REMOTE_DELETED"
+      };
+      if (!remoteExists) refreshedConflict.exists = false;
       return {
         ...current,
-        conflict: {
-          revision: remoteRevision,
-          checksum: remoteChecksum,
-          detectedAt: current.conflict.detectedAt,
-          code: current.conflict.code
-        }
+        conflict: refreshedConflict
       };
     }
     return normalizeMetadata({ ...current, status: "syncing", error: "" });
@@ -387,7 +403,8 @@
       status: "synced",
       pending: false,
       conflict: null,
-      error: ""
+      error: "",
+      localResetPending: false
     });
   }
 
@@ -451,7 +468,8 @@
       status: "synced",
       pending: false,
       conflict: null,
-      error: ""
+      error: "",
+      localResetPending: false
     });
   }
 
@@ -460,25 +478,30 @@
     const current = transitionMetadata(metadata, expectation);
     if (!current.enabled) return current;
     if (!isPlainDataRecord(remote)) throw new TypeError("Plain conflict details are required.");
-    const checksum = cleanChecksum(ownValue(remote, "checksum", ""));
+    const exists = ownValue(remote, "exists", true) !== false;
+    const checksum = exists ? cleanChecksum(ownValue(remote, "checksum", "")) : "";
     const revision = cleanRevision(ownValue(remote, "revision", -1));
-    if (!checksum || revision < current.revision) {
+    if ((exists && !checksum) || revision < current.revision) {
       throw codedError("STALE_SYNC_RESULT", "Conflict details contain a stale cloud revision.");
     }
-    const inferredCode = revision === current.revision && checksum !== current.remoteChecksum
+    const inferredCode = !exists
+      ? "REMOTE_DELETED"
+      : revision === current.revision && checksum !== current.remoteChecksum
       ? "INTEGRITY_CONFLICT"
       : "REVISION_CONFLICT";
     const requestedCode = ownValue(remote, "code", inferredCode);
+    const conflict = {
+      revision,
+      checksum,
+      detectedAt: cleanTimestamp(ownValue(remote, "detectedAt", "")) || new Date().toISOString(),
+      code: VALID_CONFLICT_CODES.has(requestedCode) ? requestedCode : inferredCode
+    };
+    if (!exists) conflict.exists = false;
     return normalizeMetadata({
       ...current,
       status: "conflict",
       pending: true,
-      conflict: {
-        revision,
-        checksum,
-        detectedAt: cleanTimestamp(ownValue(remote, "detectedAt", "")) || new Date().toISOString(),
-        code: VALID_CONFLICT_CODES.has(requestedCode) ? requestedCode : inferredCode
-      },
+      conflict,
       error: ""
     });
   }

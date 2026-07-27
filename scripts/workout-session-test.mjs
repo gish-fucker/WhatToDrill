@@ -24,7 +24,7 @@ assert.equal(model.inferMetric(null, "按秒记录在次数里", "平板支撑")
 assert.equal(model.inferMetric(null, "按分钟记录在次数里", "快走"), "minutes");
 
 const initial = createPlan();
-assert.equal(initial.version, 3, "New sessions should use the workout-companion schema.");
+assert.equal(initial.version, 4, "New sessions should use the resumable-rest schema.");
 assert.deepEqual(initial.companion, { rest: null, transition: null });
 assert.deepEqual(model.progress(initial), { total: 4, completed: 0, skipped: 0, pending: 4, percent: 0 });
 assert.equal(model.canFinish(initial), false, "A session with no completed set cannot finish.");
@@ -98,7 +98,7 @@ const legacy = model.migrateDraft({
     ]
   }]
 }, { idFactory, startedAt });
-assert.equal(legacy.version, 3);
+assert.equal(legacy.version, 4);
 assert.equal(legacy.exercises[0].sets[0].status, "completed", "Legacy weight is strong evidence of completion.");
 assert.equal(legacy.exercises[0].sets[1].status, "pending", "Ambiguous legacy values must remain pending.");
 assert.equal(legacy.exercises[0].sets[1].actual.reps, 12, "Legacy input should remain visible after migration.");
@@ -122,6 +122,8 @@ const companionThird = companion.exercises[1].sets[0].id;
 companion = model.completeSet(companion, companionFirst, { weight: 42.5, reps: 8 }, { now: companionNow });
 assert.equal(companion.companion.transition.kind, "set");
 assert.equal(companion.companion.transition.targetSetId, companionSecond);
+assert.equal(companion.companion.rest.nextSetId, companionSecond);
+assert.equal(companion.companion.rest.restDurationSeconds, 90);
 assert.equal(model.remainingRestSeconds(companion, "2026-07-16T10:00:30.000Z"), 60);
 companion = model.prefillCurrentWeight(companion);
 assert.equal(companion.exercises[0].sets[1].actual.weight, 42.5, "The next set should reuse the nearest completed weight in the same exercise.");
@@ -129,6 +131,14 @@ const extended = model.adjustRest(companion, 30, "2026-07-16T10:00:30.000Z");
 assert.equal(model.remainingRestSeconds(extended, "2026-07-16T10:00:30.000Z"), 90);
 const reset = model.resetRest(extended, "2026-07-16T10:01:00.000Z");
 assert.equal(model.remainingRestSeconds(reset, "2026-07-16T10:01:00.000Z"), 90);
+const paused = model.pauseRest(reset, "2026-07-16T10:01:20.000Z");
+assert.equal(model.isRestPaused(paused), true);
+assert.equal(model.remainingRestSeconds(paused, "2026-07-16T12:00:00.000Z"), 70, "Paused rest must survive elapsed wall time.");
+const pausedExtended = model.adjustRest(paused, 30, "2026-07-16T12:00:00.000Z");
+assert.equal(model.remainingRestSeconds(pausedExtended, "2026-07-16T13:00:00.000Z"), 100);
+const resumed = model.resumeRest(pausedExtended, "2026-07-16T14:00:00.000Z");
+assert.equal(model.isRestPaused(resumed), false);
+assert.equal(model.remainingRestSeconds(resumed, "2026-07-16T14:00:30.000Z"), 70, "Resume must recalibrate from its timestamp.");
 assert.equal(model.clearRest(reset).companion.rest, null);
 const revived = model.adjustRest(companion, 30, "2026-07-16T10:02:00.000Z");
 assert.equal(model.remainingRestSeconds(revived, "2026-07-16T10:02:00.000Z"), 30, "Adding time after expiry should start from now.");
@@ -148,6 +158,11 @@ const finishedCompanion = model.completeSet(movedExercise, companionThird, { wei
 assert.equal(finishedCompanion.companion.rest, null, "The final pending set should not start rest.");
 assert.equal(finishedCompanion.companion.transition, null);
 
+const strengthSession = model.createSession({ exercises: [{ name: "硬拉", sets: [{ reps: 5 }, { reps: 5 }] }] }, { idFactory, startedAt: companionNow });
+const strengthRest = model.completeSet(strengthSession, strengthSession.currentSetId, null, { now: companionNow, restDurationSeconds: 180 });
+assert.equal(strengthRest.companion.rest.restDurationSeconds, 180, "Callers must be able to apply goal/template rest overrides.");
+assert.equal(model.remainingRestSeconds(strengthRest, "2026-07-16T10:01:00.000Z"), 120);
+
 const undoneCompanion = model.undoSet(companion, companionFirst);
 assert.equal(undoneCompanion.companion.rest, null, "Undoing the source set should clear its rest timer.");
 assert.equal(undoneCompanion.companion.transition, null);
@@ -155,12 +170,21 @@ const manuallySelected = model.selectSet(companion, companionThird);
 assert.equal(manuallySelected.companion.transition, null, "Manual selection should clear stale transition context.");
 
 const v2Draft = model.migrateDraft({ ...companion, version: 2, companion: undefined }, { idFactory, startedAt: companionNow });
-assert.equal(v2Draft.version, 3);
+assert.equal(v2Draft.version, 4);
 assert.deepEqual(v2Draft.companion, { rest: null, transition: null });
 const corruptCompanion = model.createSession({
   ...companion,
   companion: { rest: { sourceSetId: "missing", startedAt: "bad", endsAt: "bad" }, transition: { sourceSetId: "missing", targetSetId: companionThird, kind: "exercise" } }
 }, { idFactory, startedAt: companionNow });
 assert.deepEqual(corruptCompanion.companion, { rest: null, transition: null }, "Invalid restored companion references must be discarded.");
+
+const partiallyCorruptDraft = model.migrateDraft({
+  version: 4,
+  title: "部分损坏草稿",
+  exercises: [null, { name: "可恢复动作", sets: [null, { target: { reps: 8 }, actual: { reps: 7 } }] }]
+}, { idFactory, startedAt: companionNow });
+assert.equal(partiallyCorruptDraft.exercises.length, 1, "Invalid exercise fragments should be dropped without losing legal data.");
+assert.equal(partiallyCorruptDraft.exercises[0].name, "可恢复动作");
+assert.equal(partiallyCorruptDraft.exercises[0].sets[0].actual.reps, 7);
 
 console.log("Workout session model tests passed.");

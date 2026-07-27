@@ -1891,6 +1891,15 @@ input[type="checkbox"] {
   background: linear-gradient(135deg, var(--primary-soft) 0%, #f6faf8 100%);
 }
 
+#focusedWorkoutSession button {
+  min-height: 44px;
+}
+
+.focused-rest-panel.rest-ready {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent);
+}
+
 .focused-rest-status {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -1925,8 +1934,20 @@ input[type="checkbox"] {
 
 .focused-rest-actions {
   display: grid;
-  grid-template-columns: repeat(3, auto);
+  grid-template-columns: repeat(2, minmax(104px, auto));
   gap: 8px;
+}
+
+.sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
 }
 
 .focused-rest-actions button {
@@ -4226,7 +4247,9 @@ input[type="checkbox"] {
 
 .account-form[hidden],
 .account-signed-in[hidden],
-.account-entitlements[hidden] {
+.account-entitlements[hidden],
+.cloud-sync-panel[hidden],
+.cloud-sync-actions [hidden] {
   display: none;
 }
 
@@ -4272,6 +4295,48 @@ input[type="checkbox"] {
   margin-top: 14px;
   border-top: 1px solid var(--line);
   padding-top: 14px;
+}
+
+.cloud-sync-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.cloud-sync-heading {
+  display: grid;
+  gap: 7px;
+}
+
+.cloud-sync-heading > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cloud-sync-heading p,
+.cloud-sync-boundary {
+  margin: 0;
+}
+
+.cloud-sync-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.cloud-sync-actions button {
+  min-height: 44px;
+  min-width: 132px;
+}
+
+.cloud-sync-boundary {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .account-entitlement-heading,
@@ -4382,6 +4447,21 @@ input[type="checkbox"] {
   .account-signed-in {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .cloud-sync-heading > div {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .cloud-sync-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cloud-sync-actions button {
+    width: 100%;
+    min-width: 0;
   }
 }
 
@@ -5234,7 +5314,7 @@ input[type="checkbox"] {
   }
 
   .focused-rest-actions {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 6px;
   }
 
@@ -5244,6 +5324,10 @@ input[type="checkbox"] {
     min-height: 44px;
     padding-inline: 5px;
     font-size: 13px;
+  }
+
+  .focused-rest-actions #startNextSetBtn {
+    grid-column: 1 / -1;
   }
 
   .focused-value-stepper {
@@ -5304,6 +5388,18 @@ input[type="checkbox"] {
 
   .settings-data-actions button {
     width: 100%;
+  }
+}
+
+@media (max-width: 360px) {
+  .focused-session-header,
+  .focused-set-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .focused-value-stepper {
+    grid-template-columns: 58px minmax(0, 1fr) 58px;
   }
 }
 

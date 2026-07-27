@@ -4,12 +4,12 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#1f725f">
-    <meta name="description" content="WhatToDrill · 今天练什么：根据恢复状态安排下一次训练，并逐组记录表现。">
+    <meta name="description" content="WhatToDrill · 今天练什么：根据恢复状态安排下一次训练，并带你逐组完成。">
     <title>WhatToDrill · 今天练什么</title>
     <link rel="icon" href="../app-icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="../app-icon-180.png" sizes="180x180">
     <link rel="manifest" href="../manifest.webmanifest">
-    <link rel="stylesheet" href="../styles.css?v=20260716-next-plan-edit-v1">
+    <link rel="stylesheet" href="../styles.css?v=20260727-workout-companion-v2">
   </head>
   <body class="app-initializing">
     <a class="skip-link" href="#mainContent">跳到主要内容</a>
@@ -350,7 +350,8 @@
                 训练环境
                 <select id="preferredEnvironment">
                   <option value="gym">健身房</option>
-                  <option value="home">居家</option>
+                  <option value="home_bodyweight">居家无器械</option>
+                  <option value="home_dumbbell">居家哑铃</option>
                   <option value="mixed">都可以</option>
                 </select>
               </label>
@@ -414,6 +415,10 @@
               <label class="preference-toggle">
                 <input id="conservativeMode" type="checkbox">
                 <span>保守建议模式</span>
+              </label>
+              <label class="preference-toggle">
+                <input id="hapticsEnabled" type="checkbox">
+                <span>训练完成与休息结束时轻振动</span>
               </label>
               <div class="reminder-settings">
                 <div>
@@ -572,9 +577,27 @@
             <div id="accountSignedIn" class="account-signed-in" hidden>
               <div>
                 <strong id="accountEmailSummary">身份已连接</strong>
-                <p class="muted">账号只用于身份与未来服务权益，本机训练和健康记录尚未同步。</p>
+                <p id="accountDataScopeSummary" class="muted">登录本身不会上传记录；只有你主动开启云备份后才会同步。</p>
               </div>
               <button id="signOutAccountBtn" class="ghost-button" type="button">退出账号</button>
+            </div>
+            <div id="cloudSyncPanel" class="cloud-sync-panel" hidden>
+              <div class="cloud-sync-heading">
+                <div>
+                  <strong>云备份与多设备同步</strong>
+                  <span id="cloudSyncStatus" class="confidence-pill low">未开启</span>
+                </div>
+                <p id="cloudSyncSummary" class="muted">云备份默认关闭。</p>
+              </div>
+              <div class="cloud-sync-actions" aria-label="云备份操作">
+                <button id="enableCloudSyncBtn" type="button">开启云备份</button>
+                <button id="disableCloudSyncBtn" class="ghost-button" type="button" hidden>停止自动同步</button>
+                <button id="syncCloudNowBtn" class="ghost-button" type="button" hidden>立即同步</button>
+                <button id="useCloudVersionBtn" type="button" hidden>使用云端版本</button>
+                <button id="keepLocalVersionBtn" class="ghost-button" type="button" hidden>保留本机并覆盖云端</button>
+                <button id="deleteCloudDataBtn" class="danger-button" type="button" hidden>删除云端备份</button>
+              </div>
+              <p class="cloud-sync-boundary">同步采用本地优先：断网时继续记录，联网后重试。停止同步、退出账号、清空本机与删除云端是四个不同操作。</p>
             </div>
             <div id="accountEntitlements" class="account-entitlements" hidden>
               <div class="account-entitlement-heading">
@@ -591,7 +614,7 @@
               <p id="accountQuotaReset" class="muted"></p>
             </div>
             <p id="accountFeedback" class="account-feedback" role="status" aria-live="polite"></p>
-            <p class="account-boundary">无需登录即可使用本地记录、导出和安全提示。登录或退出都不会上传、删除或改写当前设备的数据。</p>
+            <p class="account-boundary">无需登录即可使用本地记录、导出和安全提示。登录本身不会上传；退出不会删除或改写本机与云端已有数据。</p>
           </section>
 
           <section class="help-panel">
@@ -1011,6 +1034,18 @@
       </div>
     </dialog>
 
+    <dialog id="deleteCloudDataDialog" class="confirm-dialog" aria-labelledby="deleteCloudDataTitle" aria-describedby="deleteCloudDataDescription">
+      <div class="confirm-dialog-body">
+        <p class="eyebrow">Cloud deletion</p>
+        <h2 id="deleteCloudDataTitle">只删除云端备份？</h2>
+        <p id="deleteCloudDataDescription">当前设备里的训练和状态记录会保留，自动同步会停止。其他设备再次同步时会看到云端已删除；此操作不能撤销。</p>
+        <div class="confirm-dialog-actions">
+          <button id="cancelDeleteCloudDataBtn" class="ghost-button" type="button">取消</button>
+          <button id="confirmDeleteCloudDataBtn" class="danger-button" type="button">确认删除云端备份</button>
+        </div>
+      </div>
+    </dialog>
+
     <dialog id="deleteWorkoutDialog" class="confirm-dialog" aria-labelledby="deleteWorkoutTitle" aria-describedby="deleteWorkoutDescription">
       <div class="confirm-dialog-body">
         <p class="eyebrow">Workout history</p>
@@ -1038,8 +1073,9 @@
     </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="../workout-session-model.js?v=20260716-next-plan-edit-v1"></script>
-    <script src="../training-rotation-model.js?v=20260716-next-plan-edit-v1"></script>
-    <script src="../app.js?v=20260716-next-plan-edit-v1"></script>
+    <script src="../workout-session-model.js?v=20260727-workout-companion-v2"></script>
+    <script src="../training-rotation-model.js?v=20260727-workout-companion-v2"></script>
+    <script src="../cloud-sync-model.js?v=20260727-workout-companion-v2"></script>
+    <script src="../app.js?v=20260727-workout-companion-v2"></script>
   </body>
 </html>

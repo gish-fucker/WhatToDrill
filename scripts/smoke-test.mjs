@@ -18,6 +18,7 @@ const outputDir = resolve("output", "playwright");
 const profileDir = resolve(outputDir, "smoke-profile");
 const storageKey = "habit_fitness_app_v1";
 const workoutDraftKey = "habit_fitness_workout_draft_v1";
+const cloudSyncMetadataKey = "what_to_drill_cloud_sync_v1";
 const fakeAccountUser = { id: "11111111-1111-4111-8111-111111111111", email: "smoke@example.com" };
 const deleteSyncEnvelopeBytes = 256;
 
@@ -54,6 +55,8 @@ function createFakeAccountProvider(calls, cloud) {
       }
       const body = await readFakeAuthBody(req);
       cloud.calls.push({ path: url.pathname, body });
+      const requestDelay = Number(cloud.delayByPath?.[url.pathname] || 0);
+      if (requestDelay > 0) await delay(requestDelay);
       if (cloud.mode === "timeout") return;
       if (cloud.mode === "failure") {
         sendFakeAuthJson(res, 500, { message: "PRIVATE_UPSTREAM_MESSAGE" });
@@ -360,6 +363,49 @@ async function screenshot(cdp, filename) {
   await writeFile(resolve(outputDir, filename), Buffer.from(shot.data, "base64"));
 }
 
+async function createIsolatedPage(browserCdp, contextName) {
+  const { browserContextId } = await browserCdp.send("Target.createBrowserContext");
+  const { targetId } = await browserCdp.send("Target.createTarget", {
+    url: "about:blank",
+    browserContextId
+  });
+  let target;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const targets = await getJson(`http://localhost:${chromePort}/json/list`);
+    target = targets.find(item => item.id === targetId);
+    if (target?.webSocketDebuggerUrl) break;
+    await delay(50);
+  }
+  if (!target?.webSocketDebuggerUrl) throw new Error(`Unable to attach isolated ${contextName} browser context.`);
+  const page = new CdpClient(target.webSocketDebuggerUrl);
+  await page.ready();
+  await page.send("Page.enable");
+  await page.send("Runtime.enable");
+  await page.send("Network.enable");
+  for (const [name, value] of [["hf_account_access", "smoke-access-token"], ["hf_account_refresh", "smoke-refresh-token"]]) {
+    const result = await page.send("Network.setCookie", {
+      name,
+      value,
+      url: baseUrl,
+      path: "/",
+      httpOnly: true,
+      sameSite: "Strict"
+    });
+    assert(result.success, `Unable to seed the isolated ${contextName} account cookie.`);
+  }
+  await navigate(page, appUrl);
+  return { browserContextId, targetId, page };
+}
+
+async function waitForEvaluation(cdp, expression, message, timeoutMs = 10_000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (await evaluate(cdp, expression)) return;
+    await delay(100);
+  }
+  throw new Error(message);
+}
+
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
@@ -430,6 +476,10 @@ async function run() {
   let chrome;
   let cloudUnconfiguredServer;
   let cdp;
+  let browserCdp;
+  let cloudDeviceA;
+  let cloudDeviceB;
+  let cloudBrowserSync;
   try {
     await mkdir(outputDir, { recursive: true });
     await mkdir(profileDir, { recursive: true });
@@ -469,7 +519,8 @@ async function run() {
     checksum: null,
     payload: null,
     updatedAt: new Date().toISOString(),
-    calls: []
+    calls: [],
+    delayByPath: {}
   };
     authServer = createFakeAccountProvider(authProviderCalls, cloudProvider);
   await new Promise((resolveListen, rejectListen) => {
@@ -483,13 +534,13 @@ async function run() {
       ...process.env,
       HOST: "127.0.0.1",
       PORT: String(appPort),
-      APP_VERSION: "1.22.0",
+      APP_VERSION: "1.23.0",
       OPENAI_API_KEY: "",
       ADVICE_RATE_LIMIT: "10",
       ACCOUNT_RATE_LIMIT: "5",
       CLOUD_SYNC_IP_RATE_LIMIT: "5",
       CLOUD_SYNC_ACCOUNT_RATE_LIMIT: "20",
-      CLOUD_SYNC_RATE_WINDOW_MS: "60000",
+      CLOUD_SYNC_RATE_WINDOW_MS: "1000",
       SUPABASE_URL: `http://127.0.0.1:${authPort}`,
       SUPABASE_ANON_KEY: "smoke-anon-key",
       SUPABASE_SERVICE_ROLE_KEY: "smoke-service-role",
@@ -1011,6 +1062,7 @@ async function run() {
       landingReady: landingHtml.includes("今天练什么，不用再猜") && landingHtml.includes("WhatToDrill") && landingHtml.includes('href="./app/"'),
       appStatus: appResponse.status,
       appReady: appHtml.includes('id="mainContent"') && appHtml.includes('../app.js'),
+      cloudSyncModelBeforeApp: appHtml.indexOf("../cloud-sync-model.js") >= 0 && appHtml.indexOf("../cloud-sync-model.js") < appHtml.indexOf("../app.js"),
       privacyStatus: privacyResponse.status,
       privacyCache: privacyResponse.headers.get("cache-control"),
       termsStatus: termsResponse.status,
@@ -1019,6 +1071,9 @@ async function run() {
       iconCacheEntries: Object.keys(iconChecks).every(name => serviceWorkerSource.includes(name)),
       scopeAwareShell: serviceWorkerSource.includes("self.registration.scope") && serviceWorkerSource.includes("cache.put(request"),
       relativeWorkerRegistration: appSource.includes('serviceWorker.register("../sw.js")'),
+      cloudSyncModelCached: serviceWorkerSource.includes("cloud-sync-model.js"),
+      syncApiNeverCached: serviceWorkerSource.includes('url.pathname.startsWith("/api/")'),
+      staticSyncOptOut: appSource.includes("IS_STATIC_HOSTED_APP") && appSource.includes("!IS_STATIC_HOSTED_APP && cloudSyncConfigured"),
       manifestIcons: manifest.icons,
       manifestId: manifest.id,
       manifestStartUrl: manifest.start_url,
@@ -1060,18 +1115,21 @@ async function run() {
     assert(serverHttp.csp?.includes("frame-ancestors 'none'"), "Static responses should include a restrictive CSP.");
     assert(serverHttp.frameOptions === "DENY", "Static responses should prevent framing.");
     assert(/^[0-9a-f-]{36}$/i.test(serverHttp.requestId), "API responses should expose a generated request ID.");
-    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.22.0", "Health response should expose status and release version.");
+    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.23.0", "Health response should expose status and release version.");
     assert(Number.isInteger(serverHttp.health.uptimeSeconds) && serverHttp.health.uptimeSeconds >= 0, "Health response should expose a valid uptime.");
     assert(serverHttp.health.openaiConfigured === false && serverHttp.health.accountConfigured === true && serverHttp.health.entitlementConfigured === false && serverHttp.health.cloudSyncConfigured === true && serverHttp.health.aiAccessMode === "deployment_shared" && serverHttp.health.model === "gpt-5-mini", "Health response should expose independent, non-secret service configuration state.");
     assert(serverHttp.indexCache === "no-cache", "HTML should revalidate instead of using a stale shell.");
     assert(serverHttp.landingReady, "Root should serve the beginner landing page with an app entry.");
     assert(serverHttp.appStatus === 200 && serverHttp.appReady, "The app route should serve the application shell with parent-relative assets.");
+    assert(serverHttp.cloudSyncModelBeforeApp, "The app shell should load the cloud sync model before browser synchronization code.");
     assert(serverHttp.privacyStatus === 200 && serverHttp.termsStatus === 200, "Legal pages should be served as public product pages.");
     assert(serverHttp.privacyCache === "no-cache", "Privacy policy should revalidate so users receive policy updates.");
     assert(serverHttp.termsCsp?.includes("frame-ancestors 'none'"), "Legal pages should receive the same security headers as the app.");
     assert(serverHttp.updateMessageHandler, "Service worker should support user-confirmed activation.");
     assert(serverHttp.iconCacheEntries, "PWA app shell should cache every raster install icon.");
     assert(serverHttp.scopeAwareShell && serverHttp.relativeWorkerRegistration, "PWA registration and shell caching should follow the actual deployment scope.");
+    assert(serverHttp.cloudSyncModelCached && serverHttp.syncApiNeverCached, "The PWA shell should cache the sync model but never intercept account sync API requests.");
+    assert(serverHttp.staticSyncOptOut, "Static hosting should keep cloud enablement hidden and local-only.");
     assert(serverHttp.manifestId === "./app/" && serverHttp.manifestStartUrl === "./app/" && serverHttp.manifestScope === "./" && serverHttp.manifestIcons.every(icon => icon.src.startsWith("./")), "Manifest URLs should keep the app start route and deployment-relative scope.");
     assert(serverHttp.subpathManifest.id === "/Daily-Workout-Record/app/" && serverHttp.subpathManifest.startUrl === "/Daily-Workout-Record/app/" && serverHttp.subpathManifest.scope === "/Daily-Workout-Record/" && serverHttp.subpathManifest.icons.every(path => path.startsWith("/Daily-Workout-Record/")), "Manifest URLs should resolve the app inside a GitHub Pages project subpath.");
     assert(serverHttp.manifestIcons.some(icon => icon.sizes === "192x192" && icon.purpose === "any"), "Manifest should declare a standard 192px icon.");
@@ -1105,6 +1163,337 @@ async function run() {
     assert(Number(serverHttp.retryAfter) > 0, "Rate limit responses should include Retry-After.");
 
     await waitForHttp(`http://localhost:${chromePort}/json/version`);
+    await delay(1_150);
+    Object.assign(cloudProvider, {
+      mode: "normal",
+      revision: 0,
+      exists: false,
+      schemaVersion: null,
+      checksum: null,
+      payload: null,
+      updatedAt: new Date().toISOString()
+    });
+    cloudProvider.calls.length = 0;
+    cloudProvider.delayByPath = {};
+
+    const browserVersion = await getJson(`http://localhost:${chromePort}/json/version`);
+    browserCdp = new CdpClient(browserVersion.webSocketDebuggerUrl);
+    await browserCdp.ready();
+    cloudDeviceA = await createIsolatedPage(browserCdp, "device A");
+    cloudDeviceB = await createIsolatedPage(browserCdp, "device B");
+    await Promise.all([
+      waitForEvaluation(cloudDeviceA.page, `accountSession.signedIn && cloudSyncConfigured`, "Device A did not establish an authenticated sync-capable session."),
+      waitForEvaluation(cloudDeviceB.page, `accountSession.signedIn && cloudSyncConfigured`, "Device B did not establish an authenticated sync-capable session.")
+    ]);
+
+    const revisionOne = await evaluate(cloudDeviceA.page, `(async () => {
+      state.dailyLogs = [{ id: "cloud-a-log", date: today(), sleepHours: 7.5, energy: 4, soreness: 1, pain: 0, waterMl: 2000, note: "device-a", updatedAt: new Date().toISOString() }];
+      saveState();
+      await enableCloudSync();
+      return { metadata: cloudSyncMetadata, snapshot: CloudSyncModel.serializeSnapshot(buildCloudSnapshot()), status: document.querySelector("#cloudSyncStatus")?.textContent };
+    })()`);
+    assert(revisionOne.metadata.enabled && revisionOne.metadata.revision === 1 && revisionOne.metadata.status === "synced" && revisionOne.status === "已备份", "Device A opt-in should create revision 1 and render a backed-up state.");
+
+    const deviceBPull = await evaluate(cloudDeviceB.page, `(async () => {
+      const before = localStorage.getItem(${JSON.stringify(storageKey)});
+      await enableCloudSync();
+      return { before, metadata: cloudSyncMetadata, snapshot: CloudSyncModel.serializeSnapshot(buildCloudSnapshot()), logs: state.dailyLogs.length };
+    })()`);
+    assert(deviceBPull.metadata.revision === 1 && deviceBPull.metadata.status === "synced" && deviceBPull.logs === 1 && deviceBPull.snapshot === revisionOne.snapshot, "A fresh isolated device B should restore the exact normalized revision 1 snapshot.");
+
+    const revisionTwo = await evaluate(cloudDeviceB.page, `(async () => {
+      state.settings.waterTargetMl = 2300;
+      persistState();
+      window.clearTimeout(cloudSyncTimer); cloudSyncTimer = null;
+      await pushCloudState();
+      return { revision: cloudSyncMetadata.revision, status: cloudSyncMetadata.status, target: state.settings.waterTargetMl };
+    })()`);
+    assert(revisionTwo.revision === 2 && revisionTwo.status === "synced", "Device B should upload revision 2 after a local edit.");
+    const deviceAForeground = await evaluate(cloudDeviceA.page, `(async () => {
+      await syncCloudNow();
+      return { revision: cloudSyncMetadata.revision, status: cloudSyncMetadata.status, target: state.settings.waterTargetMl };
+    })()`);
+    assert(deviceAForeground.revision === 2 && deviceAForeground.status === "synced" && deviceAForeground.target === 2300, "Device A foreground synchronization should pull revision 2.");
+
+    const concurrent = await Promise.all([
+      evaluate(cloudDeviceA.page, `(async () => { state.settings.waterTargetMl = 2400; persistState(); window.clearTimeout(cloudSyncTimer); cloudSyncTimer = null; await pushCloudState(); return { status: cloudSyncMetadata.status, local: state.settings.waterTargetMl, revision: cloudSyncMetadata.revision }; })()`),
+      evaluate(cloudDeviceB.page, `(async () => { state.settings.waterTargetMl = 2500; persistState(); window.clearTimeout(cloudSyncTimer); cloudSyncTimer = null; await pushCloudState(); return { status: cloudSyncMetadata.status, local: state.settings.waterTargetMl, revision: cloudSyncMetadata.revision }; })()`)
+    ]);
+    const conflictIndex = concurrent.findIndex(result => result.status === "conflict");
+    assert(conflictIndex >= 0 && concurrent.filter(result => result.status === "synced").length === 1, `Simultaneous edits should preserve one explicit 409 conflict: ${JSON.stringify(concurrent)}.`);
+    const conflictPage = conflictIndex === 0 ? cloudDeviceA.page : cloudDeviceB.page;
+    const winnerPage = conflictIndex === 0 ? cloudDeviceB.page : cloudDeviceA.page;
+    const conflictLocalValue = concurrent[conflictIndex].local;
+    const useCloudResult = await evaluate(conflictPage, `(async () => { const before = state.settings.waterTargetMl; await resolveCloudConflict("use-cloud"); return { before, after: state.settings.waterTargetMl, metadata: cloudSyncMetadata }; })()`);
+    const winnerValue = await evaluate(winnerPage, `state.settings.waterTargetMl`);
+    assert(useCloudResult.before === conflictLocalValue && useCloudResult.after === winnerValue && useCloudResult.metadata.status === "synced", "Use-cloud resolution should apply the validated remote snapshot only after explicit choice.");
+    await delay(1_100);
+
+    const secondConcurrent = await Promise.all([
+      evaluate(cloudDeviceA.page, `(async () => { state.settings.waterTargetMl = 2600; persistState(); window.clearTimeout(cloudSyncTimer); cloudSyncTimer = null; await pushCloudState(); return { status: cloudSyncMetadata.status, local: state.settings.waterTargetMl }; })()`),
+      evaluate(cloudDeviceB.page, `(async () => { state.settings.waterTargetMl = 2700; persistState(); window.clearTimeout(cloudSyncTimer); cloudSyncTimer = null; await pushCloudState(); return { status: cloudSyncMetadata.status, local: state.settings.waterTargetMl }; })()`)
+    ]);
+    const secondConflictIndex = secondConcurrent.findIndex(result => result.status === "conflict");
+    assert(secondConflictIndex >= 0, `A second simultaneous edit should expose a conflict for keep-local resolution: ${JSON.stringify(secondConcurrent)}.`);
+    const keepLocalPage = secondConflictIndex === 0 ? cloudDeviceA.page : cloudDeviceB.page;
+    const otherAfterKeepPage = secondConflictIndex === 0 ? cloudDeviceB.page : cloudDeviceA.page;
+    const keptValue = secondConcurrent[secondConflictIndex].local;
+    const keepLocalResult = await evaluate(keepLocalPage, `(async () => { await resolveCloudConflict("keep-local"); return { value: state.settings.waterTargetMl, metadata: cloudSyncMetadata }; })()`);
+    assert(keepLocalResult.value === keptValue && keepLocalResult.metadata.status === "synced" && cloudProvider.payload.settings.waterTargetMl === keptValue, "Keep-local resolution should explicitly overwrite the current remote revision.");
+    const convergedAfterKeep = await evaluate(otherAfterKeepPage, `(async () => { await syncCloudNow(); return { value: state.settings.waterTargetMl, status: cloudSyncMetadata.status, revision: cloudSyncMetadata.revision }; })()`);
+    assert(convergedAfterKeep.value === keptValue && convergedAfterKeep.status === "synced", "The uncontested device should converge after keep-local creates a new revision.");
+    await delay(1_100);
+
+    await cloudDeviceA.page.send("Network.emulateNetworkConditions", { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 });
+    const offlinePending = await evaluate(cloudDeviceA.page, `(async () => { state.settings.waterStepMl = 650; persistState(); window.clearTimeout(cloudSyncTimer); cloudSyncTimer = null; await pushCloudState(); return { metadata: cloudSyncMetadata, local: state.settings.waterStepMl, label: document.querySelector("#cloudSyncStatus")?.textContent }; })()`);
+    assert(offlinePending.local === 650 && offlinePending.metadata.pending && offlinePending.label === "离线待同步", "Offline edits should remain usable and visibly pending.");
+    await cloudDeviceA.page.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+    await evaluate(cloudDeviceA.page, `window.dispatchEvent(new Event("online"))`);
+    await waitForEvaluation(cloudDeviceA.page, `cloudSyncMetadata.status === "synced"`, "Online recovery did not retry the pending local snapshot.", 12_000);
+
+    cloudProvider.mode = "failure";
+    const providerFailure = await evaluate(cloudDeviceA.page, `(async () => { window.__whatToDrillCloudSyncRetryConfig = { baseMs: 40, maxMs: 40, jitter: 0, random: () => 0.5 }; state.settings.waterStepMl = 700; persistState(); window.clearTimeout(cloudSyncTimer); cloudSyncTimer = null; await pushCloudState(); return { status: cloudSyncMetadata.status, pending: cloudSyncMetadata.pending, local: state.settings.waterStepMl, retryScheduled: Boolean(cloudSyncRetryTimer) }; })()`);
+    assert(providerFailure.status === "error" && providerFailure.pending && providerFailure.local === 700 && providerFailure.retryScheduled, "A provider 503/502 failure should preserve the dirty local snapshot and schedule one retry.");
+    cloudProvider.mode = "normal";
+    await waitForEvaluation(cloudDeviceA.page, `cloudSyncMetadata.status === "synced" && cloudSyncRetryTimer === null`, "Provider recovery did not automatically synchronize the pending snapshot.");
+
+    const putsBeforeNoop = cloudProvider.calls.filter(call => call.path.endsWith("put_cloud_sync_state")).length;
+    await evaluate(cloudDeviceA.page, `syncCloudNow()`);
+    const putsAfterNoop = cloudProvider.calls.filter(call => call.path.endsWith("put_cloud_sync_state")).length;
+    assert(putsAfterNoop === putsBeforeNoop, "An unchanged checksum should not create another cloud revision.");
+
+    const canonicalBeforeManualExport = await evaluate(cloudDeviceA.page, `CloudSyncModel.serializeSnapshot(buildCloudSnapshot())`);
+    const putsBeforeManualExport = cloudProvider.calls.filter(call => call.path.endsWith("put_cloud_sync_state")).length;
+    await evaluate(cloudDeviceA.page, `exportData()`);
+    await delay(1_100);
+    const canonicalAfterManualExport = await evaluate(cloudDeviceA.page, `CloudSyncModel.serializeSnapshot(buildCloudSnapshot())`);
+    const putsAfterManualExport = cloudProvider.calls.filter(call => call.path.endsWith("put_cloud_sync_state")).length;
+    assert(canonicalBeforeManualExport === canonicalAfterManualExport && putsAfterManualExport === putsBeforeManualExport, "Manual export must not change the canonical cloud snapshot or create a cloud PUT.");
+
+    const importSync = await evaluate(cloudDeviceA.page, `(async () => {
+      const imported = buildCloudSnapshot();
+      imported.settings.waterStepMl = 750;
+      pendingImport = { mode: "backup", imported, preview: validateImportPayload(imported, "cloud-import.json") };
+      confirmImportData();
+      window.clearTimeout(cloudSyncTimer); cloudSyncTimer = null;
+      await pushCloudState();
+      const exported = buildBackupPayload();
+      return { status: cloudSyncMetadata.status, value: state.settings.waterStepMl, exportedKeys: Object.keys(exported), exportedText: JSON.stringify(exported) };
+    })()`);
+    assert(importSync.status === "synced" && importSync.value === 750 && !importSync.exportedKeys.includes("cloudSyncMetadata") && !importSync.exportedText.includes("smoke-access-token") && !importSync.exportedText.includes(cloudSyncMetadataKey), "Imported data should join synchronization while manual export excludes sync metadata and tokens.");
+
+    cloudProvider.delayByPath = { "/rest/v1/rpc/get_cloud_sync_state": 280 };
+    const editDuringPull = await evaluate(cloudDeviceA.page, `(async () => {
+      const pull = pullCloudState({ allowPush: false });
+      await new Promise(resolve => setTimeout(resolve, 60));
+      state.settings.waterTargetMl = 2900;
+      persistState();
+      await pull;
+      return { value: state.settings.waterTargetMl, status: cloudSyncMetadata.status, conflict: cloudSyncMetadata.conflict, pending: cloudSyncMetadata.pending };
+    })()`);
+    cloudProvider.delayByPath = {};
+    assert(editDuringPull.value === 2900 && editDuringPull.status === "conflict" && editDuringPull.conflict?.exists !== false && editDuringPull.pending, "An edit made while a delayed GET is in flight must stay local and require an explicit active-record conflict choice.");
+    const latestKeepLocal = await evaluate(cloudDeviceA.page, `(async () => {
+      state.settings.waterStepMl = 700;
+      persistState();
+      await resolveCloudConflict("keep-local");
+      return { metadata: cloudSyncMetadata, target: state.settings.waterTargetMl, step: state.settings.waterStepMl };
+    })()`);
+    assert(latestKeepLocal.metadata.status === "synced" && cloudProvider.payload.settings.waterTargetMl === 2900 && cloudProvider.payload.settings.waterStepMl === 700, `Keep-local must serialize the newest local fields at confirmation time, not an old conflict snapshot: ${JSON.stringify({ latestKeepLocal, provider: cloudProvider.payload?.settings })}`);
+
+    await delay(1_100);
+    cloudProvider.delayByPath = { "/rest/v1/rpc/get_cloud_sync_state": 280 };
+    const lateAccountSwitch = await evaluate(cloudDeviceB.page, `(async () => {
+      const before = CloudSyncModel.serializeSnapshot(buildCloudSnapshot());
+      const pull = pullCloudState({ allowPush: false });
+      await new Promise(resolve => setTimeout(resolve, 60));
+      accountSession = { loading: false, configured: true, signedIn: true, unavailable: false, user: { id: "22222222-2222-4222-8222-222222222222", email: "other@example.com" } };
+      cloudSyncGeneration += 1;
+      cloudSyncMetadata = CloudSyncModel.normalizeMetadata({}, accountSession.user.id);
+      await pull;
+      return { before, after: CloudSyncModel.serializeSnapshot(buildCloudSnapshot()), metadata: cloudSyncMetadata, accountId: activeCloudAccountId() };
+    })()`);
+    cloudProvider.delayByPath = {};
+    assert(lateAccountSwitch.before === lateAccountSwitch.after && lateAccountSwitch.accountId === "22222222-2222-4222-8222-222222222222" && lateAccountSwitch.metadata.accountId === lateAccountSwitch.accountId, "A delayed old-account pull must not apply data or metadata after an account switch.");
+    await reload(cloudDeviceB.page);
+    await waitForEvaluation(cloudDeviceB.page, `accountSession.signedIn && activeCloudAccountId() === ${JSON.stringify(fakeAccountUser.id)}`, "Reload did not restore the original authenticated account after the account-switch race test.");
+    await delay(1_100);
+    cloudProvider.delayByPath = { "/rest/v1/rpc/get_cloud_sync_state": 280 };
+    const lateSignout = await evaluate(cloudDeviceB.page, `(async () => {
+      const before = CloudSyncModel.serializeSnapshot(buildCloudSnapshot());
+      const pull = pullCloudState({ allowPush: false });
+      await new Promise(resolve => setTimeout(resolve, 60));
+      cloudSyncGeneration += 1;
+      accountSession = { loading: false, configured: true, signedIn: false, unavailable: false, user: null };
+      await pull;
+      return { before, after: CloudSyncModel.serializeSnapshot(buildCloudSnapshot()), signedIn: accountSession.signedIn };
+    })()`);
+    cloudProvider.delayByPath = {};
+    assert(lateSignout.before === lateSignout.after && !lateSignout.signedIn, "A delayed pull must not apply old-account data after sign-out.");
+    await reload(cloudDeviceB.page);
+    await waitForEvaluation(cloudDeviceB.page, `accountSession.signedIn && activeCloudAccountId() === ${JSON.stringify(fakeAccountUser.id)}`, "Reload did not restore the original authenticated account after the sign-out race test.");
+    await delay(1_100);
+    await evaluate(cloudDeviceB.page, `syncCloudNow()`);
+    await waitForEvaluation(cloudDeviceB.page, `cloudSyncMetadata.status === "synced"`, "The device did not settle before the delayed PUT edit test.");
+    cloudProvider.delayByPath = { "/rest/v1/rpc/put_cloud_sync_state": 280 };
+    const editDuringPush = await evaluate(cloudDeviceB.page, `(async () => {
+      state.settings.waterTargetMl = 3000;
+      persistState();
+      const push = pushCloudState();
+      await new Promise(resolve => setTimeout(resolve, 60));
+      state.settings.waterStepMl = 600;
+      persistState();
+      await push;
+      return { target: state.settings.waterTargetMl, step: state.settings.waterStepMl, metadata: cloudSyncMetadata };
+    })()`);
+    cloudProvider.delayByPath = {};
+    assert(editDuringPush.target === 3000 && editDuringPush.step === 600 && editDuringPush.metadata.pending, "An edit during an in-flight PUT must remain pending instead of being marked as uploaded.");
+    await waitForEvaluation(cloudDeviceB.page, `cloudSyncMetadata.status === "synced" && cloudSyncMetadata.localChecksum === cloudSyncMetadata.remoteChecksum`, "An edit made during a PUT did not queue and finish a subsequent revision.", 12_000);
+    assert(cloudProvider.payload.settings.waterTargetMl === 3000 && cloudProvider.payload.settings.waterStepMl === 600, "The next revision after an in-flight edit must contain the newest local fields.");
+
+    cloudProvider.delayByPath = { "/rest/v1/rpc/get_cloud_sync_state": 180, "/rest/v1/rpc/put_cloud_sync_state": 180 };
+    const callsBeforeDedupedSync = cloudProvider.calls.length;
+    const dedupedSync = await evaluate(cloudDeviceB.page, `(async () => {
+      state.settings.waterTargetMl = 3050;
+      persistState();
+      window.clearTimeout(cloudSyncTimer); cloudSyncTimer = null;
+      const operations = [syncCloudNow(), syncCloudNow(), syncCloudNow()];
+      await new Promise(resolve => setTimeout(resolve, 45));
+      const busyButtons = ["enableCloudSyncBtn", "disableCloudSyncBtn", "syncCloudNowBtn", "useCloudVersionBtn", "keepLocalVersionBtn", "deleteCloudDataBtn"].map(id => {
+        const button = document.querySelector("#" + id);
+        return { id, hidden: button.hidden, disabled: button.disabled, busy: button.getAttribute("aria-busy") };
+      });
+      await Promise.all(operations);
+      return { busy: cloudSyncBusy, status: cloudSyncMetadata.status, busyButtons };
+    })()`);
+    cloudProvider.delayByPath = {};
+    const dedupedCalls = cloudProvider.calls.slice(callsBeforeDedupedSync).map(call => call.path);
+    assert(!dedupedSync.busy && dedupedSync.status === "synced" && dedupedSync.busyButtons.every(button => button.hidden || (button.disabled && button.busy === "true")) && dedupedCalls.filter(path => path.endsWith("get_cloud_sync_state")).length === 1 && dedupedCalls.filter(path => path.endsWith("put_cloud_sync_state")).length === 1, `Rapid Sync now presses must share one operation and render a busy state: ${JSON.stringify({ dedupedSync, dedupedCalls })}`);
+
+
+    await cloudDeviceA.page.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
+    await evaluate(cloudDeviceA.page, `activateTab("help"); document.querySelector("#cloudSyncPanel")?.scrollIntoView({ block: "center" })`);
+    await screenshot(cloudDeviceA.page, "cloud-sync-desktop.png");
+    await cloudDeviceB.page.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+    await evaluate(cloudDeviceB.page, `activateTab("help"); document.querySelector("#cloudSyncPanel")?.scrollIntoView({ block: "center" })`);
+    const cloudMobileLayout = await evaluate(cloudDeviceB.page, `(() => ({ overflow: document.documentElement.scrollWidth > innerWidth, buttons: [...document.querySelectorAll("#cloudSyncPanel button:not([hidden])")].map(button => button.getBoundingClientRect().height) }))()`);
+    assert(!cloudMobileLayout.overflow && cloudMobileLayout.buttons.every(height => height >= 44), "The 390px cloud controls should not overflow and every visible action should be at least 44px high.");
+    await screenshot(cloudDeviceB.page, "cloud-sync-mobile.png");
+
+    const providerBeforeSignout = { revision: cloudProvider.revision, checksum: cloudProvider.checksum };
+    const signoutPreservation = await evaluate(cloudDeviceA.page, `(async () => { const local = localStorage.getItem(${JSON.stringify(storageKey)}); const metadata = localStorage.getItem(${JSON.stringify("what_to_drill_cloud_sync_v1")}); await signOutAccount(); return { localBefore: local, localAfter: localStorage.getItem(${JSON.stringify(storageKey)}), metadataBefore: metadata, metadataAfter: localStorage.getItem(${JSON.stringify("what_to_drill_cloud_sync_v1")}), signedIn: accountSession.signedIn }; })()`);
+    assert(!signoutPreservation.signedIn && signoutPreservation.localBefore === signoutPreservation.localAfter && signoutPreservation.metadataBefore === signoutPreservation.metadataAfter && cloudProvider.revision === providerBeforeSignout.revision && cloudProvider.checksum === providerBeforeSignout.checksum, "Sign out should preserve local data, sync metadata, and cloud content.");
+
+    await delay(1_100);
+    const localBeforeCloudDelete = await evaluate(cloudDeviceB.page, `localStorage.getItem(${JSON.stringify(storageKey)})`);
+    const deleteConfirmation = await evaluate(cloudDeviceB.page, `(() => { openDeleteCloudDialog(); return { open: document.querySelector("#deleteCloudDataDialog").open, focused: document.activeElement?.id }; })()`);
+    assert(deleteConfirmation.open && deleteConfirmation.focused === "cancelDeleteCloudDataBtn", "Cloud deletion should require a keyboard-safe dedicated confirmation dialog.");
+    await evaluate(cloudDeviceB.page, `deleteCloudData()`);
+    await waitForEvaluation(cloudDeviceB.page, `cloudSyncMetadata.enabled === false`, "Cloud deletion did not stop synchronization on the deleting device.");
+    const localAfterCloudDelete = await evaluate(cloudDeviceB.page, `localStorage.getItem(${JSON.stringify(storageKey)})`);
+    assert(!cloudProvider.exists && cloudProvider.revision === providerBeforeSignout.revision + 1 && localAfterCloudDelete === localBeforeCloudDelete, "Cloud deletion should create a tombstone while preserving local data.");
+
+    const tombstoneRevision = cloudProvider.revision;
+    await delay(1_100);
+    for (const [name, value] of [["hf_account_access", "smoke-access-token"], ["hf_account_refresh", "smoke-refresh-token"]]) {
+      await cloudDeviceA.page.send("Network.setCookie", { name, value, url: baseUrl, path: "/", httpOnly: true, sameSite: "Strict" });
+    }
+    await reload(cloudDeviceA.page);
+    await waitForEvaluation(cloudDeviceA.page, `accountSession.signedIn && cloudSyncMetadata.enabled === false && cloudSyncMetadata.revision === ${tombstoneRevision}`, "A clean signed-back-in device did not accept the newer cloud tombstone.");
+    const remoteDeleteOnOtherDevice = await evaluate(cloudDeviceA.page, `({ local: localStorage.getItem(${JSON.stringify(storageKey)}), metadata: cloudSyncMetadata, summary: document.querySelector("#cloudSyncSummary")?.textContent })`);
+    assert(remoteDeleteOnOtherDevice.local === signoutPreservation.localAfter && !remoteDeleteOnOtherDevice.metadata.enabled && remoteDeleteOnOtherDevice.metadata.revision === tombstoneRevision, "A clean other device should retain local records and stop sync after observing a remote tombstone.");
+
+    const recreatedByA = await evaluate(cloudDeviceA.page, `(async () => { await enableCloudSync(); return { metadata: cloudSyncMetadata, target: state.settings.waterTargetMl }; })()`);
+    assert(recreatedByA.metadata.enabled && recreatedByA.metadata.status === "synced" && cloudProvider.exists, "A user may explicitly rebuild a backup after accepting a remote tombstone.");
+
+    // A separate browser install has neither business data nor remembered
+    // account-scoped sync metadata.  Keep the authenticated cookie so this
+    // still exercises the same account from an isolated device context.
+    await evaluate(cloudDeviceB.page, `resetAllData(); localStorage.removeItem(${JSON.stringify(cloudSyncMetadataKey)});`);
+    await reload(cloudDeviceB.page);
+    await waitForEvaluation(cloudDeviceB.page, `accountSession.signedIn && cloudSyncConfigured`, "The isolated fresh device did not restore its authenticated session.");
+    const restoredForDirtyDelete = await evaluate(cloudDeviceB.page, `(async () => { await enableCloudSync(); return { metadata: cloudSyncMetadata, target: state.settings.waterTargetMl }; })()`);
+    assert(restoredForDirtyDelete.metadata.status === "synced" && restoredForDirtyDelete.target === recreatedByA.target, `A fresh second device should be able to restore the rebuilt cloud snapshot: ${JSON.stringify({ restoredForDirtyDelete, recreatedByA, provider: cloudProvider.payload?.settings })}`);
+    const dirtyLocalBeforeDelete = await evaluate(cloudDeviceB.page, `(() => { state.settings.waterTargetMl = 2999; persistState(); return CloudSyncModel.serializeSnapshot(buildCloudSnapshot()); })()`);
+    await evaluate(cloudDeviceA.page, `deleteCloudData()`);
+    await waitForEvaluation(cloudDeviceA.page, `cloudSyncMetadata.enabled === false && cloudSyncMetadata.revision > ${tombstoneRevision}`, "A second cloud deletion did not create a newer tombstone.");
+    const tombstoneDeleteUi = await evaluate(cloudDeviceA.page, `({ hidden: document.querySelector("#deleteCloudDataBtn").hidden, enabled: cloudSyncMetadata.enabled, checksum: cloudSyncMetadata.remoteChecksum })`);
+    assert(tombstoneDeleteUi.hidden && !tombstoneDeleteUi.enabled && !tombstoneDeleteUi.checksum, "A completed deletion tombstone must hide the repeatable delete action.");
+    const dirtyTombstone = await evaluate(cloudDeviceB.page, `(async () => { await pullCloudState({ allowPush: false }); return { metadata: cloudSyncMetadata, target: state.settings.waterTargetMl, useLabel: document.querySelector("#useCloudVersionBtn").textContent, keepLabel: document.querySelector("#keepLocalVersionBtn").textContent }; })()`);
+    assert(dirtyTombstone.metadata.status === "conflict" && dirtyTombstone.metadata.conflict?.code === "REMOTE_DELETED" && dirtyTombstone.target === 2999 && dirtyTombstone.useLabel.includes("接受云端删除") && dirtyTombstone.keepLabel.includes("重建"), "A dirty device that observes a tombstone must preserve local records and require one of the two explicit deletion choices.");
+    const acceptTombstone = await evaluate(cloudDeviceB.page, `(async () => { const operation = resolveCloudConflict("use-cloud"); const started = { inFlight: Boolean(cloudSyncInFlight), queued: Boolean(cloudSyncQueuedOperation), busy: cloudSyncBusy }; await operation; return { metadata: cloudSyncMetadata, target: state.settings.waterTargetMl, started, settled: { inFlight: Boolean(cloudSyncInFlight), queued: Boolean(cloudSyncQueuedOperation), busy: cloudSyncBusy } }; })()`);
+    assert(!acceptTombstone.metadata.enabled && acceptTombstone.target === 2999, `Accepting a remote deletion must keep local data and stop synchronization: ${JSON.stringify(acceptTombstone)}`);
+
+    const resetBoundary = await evaluate(cloudDeviceB.page, `(() => { resetAllData(); return { enabled: cloudSyncMetadata.enabled, local: JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)}) || "null"), metadata: JSON.parse(localStorage.getItem(${JSON.stringify("what_to_drill_cloud_sync_v1")}) || "null") }; })()`);
+    assert(!resetBoundary.enabled && resetBoundary.local === null && resetBoundary.metadata && !cloudProvider.exists, "Local reset should stop this device's synchronization without deleting or recreating the cloud tombstone.");
+    const rebuiltAfterReset = await evaluate(cloudDeviceB.page, `(async () => {
+      state.dailyLogs = [{ id: "rebuilt-from-tombstone", date: today(), sleepHours: 7, energy: 3, soreness: 1, pain: 0, waterMl: 1900, note: "latest-after-tombstone", updatedAt: new Date().toISOString() }];
+      persistState();
+      await new Promise(resolve => setTimeout(resolve, 1_100));
+      await enableCloudSync();
+      return { metadata: cloudSyncMetadata, note: state.dailyLogs[0].note };
+    })()`);
+    assert(rebuiltAfterReset.metadata.status === "synced" && cloudProvider.exists && cloudProvider.payload.dailyLogs[0].note === "latest-after-tombstone", `Recreating after a tombstone must use the latest local record and the latest tombstone revision: ${JSON.stringify({ rebuiltAfterReset, provider: cloudProvider.payload?.dailyLogs })}`);
+
+    const activeResetGuard = await evaluate(cloudDeviceB.page, `(async () => {
+      const before = { revision: cloudSyncMetadata.revision, checksum: cloudSyncMetadata.remoteChecksum, note: state.dailyLogs[0]?.note || "" };
+      resetAllData();
+      const afterReset = { enabled: cloudSyncMetadata.enabled, pending: cloudSyncMetadata.localResetPending, logs: state.dailyLogs.length };
+      await enableCloudSync();
+      return {
+        before,
+        afterReset,
+        metadata: cloudSyncMetadata,
+        logs: state.dailyLogs.length,
+        labels: [document.querySelector("#useCloudVersionBtn").textContent, document.querySelector("#keepLocalVersionBtn").textContent]
+      };
+    })()`);
+    assert(!activeResetGuard.afterReset.enabled && activeResetGuard.afterReset.pending && activeResetGuard.afterReset.logs === 0 && activeResetGuard.metadata.status === "conflict" && activeResetGuard.metadata.conflict?.code === "LOCAL_RESET" && activeResetGuard.logs === 0 && activeResetGuard.labels[0].includes("恢复云端") && activeResetGuard.labels[1].includes("空本机") && cloudProvider.revision === activeResetGuard.before.revision && cloudProvider.checksum === activeResetGuard.before.checksum, `A reset device must not overwrite an active remote before an explicit choice: ${JSON.stringify(activeResetGuard)}`);
+    const restoredAfterActiveReset = await evaluate(cloudDeviceB.page, `(async () => { await resolveCloudConflict("use-cloud"); return { metadata: cloudSyncMetadata, note: state.dailyLogs[0]?.note || "" }; })()`);
+    assert(restoredAfterActiveReset.metadata.status === "synced" && !restoredAfterActiveReset.metadata.localResetPending && restoredAfterActiveReset.note === activeResetGuard.before.note && cloudProvider.checksum === activeResetGuard.before.checksum, "Choosing restore cloud after reset must restore local data without changing the remote backup.");
+    const explicitEmptyOverwrite = await evaluate(cloudDeviceB.page, `(async () => { resetAllData(); await enableCloudSync(); const before = cloudSyncMetadata.conflict?.code; await resolveCloudConflict("keep-local"); return { before, metadata: cloudSyncMetadata, logs: state.dailyLogs.length }; })()`);
+    assert(explicitEmptyOverwrite.before === "LOCAL_RESET" && explicitEmptyOverwrite.metadata.status === "synced" && !explicitEmptyOverwrite.metadata.localResetPending && explicitEmptyOverwrite.logs === 0 && cloudProvider.payload.dailyLogs.length === 0, "Only the explicit empty-local choice may overwrite an active remote backup after reset.");
+
+    cloudProvider.delayByPath = { "/rest/v1/rpc/put_cloud_sync_state": 260 };
+    const callsBeforeDeleteRace = cloudProvider.calls.length;
+    const deleteAfterPut = await evaluate(cloudDeviceB.page, `(async () => {
+      state.settings.waterStepMl = 610;
+      persistState();
+      window.clearTimeout(cloudSyncTimer); cloudSyncTimer = null;
+      const push = pushCloudState();
+      await new Promise(resolve => setTimeout(resolve, 45));
+      const deletion = deleteCloudData();
+      await Promise.all([push, deletion]);
+      return { enabled: cloudSyncMetadata.enabled, status: cloudSyncMetadata.status, busy: cloudSyncBusy, exists: cloudSyncMetadata.remoteChecksum !== "" };
+    })()`);
+    cloudProvider.delayByPath = {};
+    const deleteRaceCalls = cloudProvider.calls.slice(callsBeforeDeleteRace).map(call => call.path);
+    assert(!deleteAfterPut.enabled && deleteAfterPut.status === "disabled" && !deleteAfterPut.busy && !deleteAfterPut.exists && deleteRaceCalls.filter(path => path.endsWith("put_cloud_sync_state")).length === 1 && deleteRaceCalls.filter(path => path.endsWith("delete_cloud_sync_state")).length === 1 && deleteRaceCalls.findIndex(path => path.endsWith("put_cloud_sync_state")) < deleteRaceCalls.findIndex(path => path.endsWith("delete_cloud_sync_state")), `Delete must wait for the in-flight PUT and then delete without overlap: ${JSON.stringify({ deleteAfterPut, deleteRaceCalls })}`);
+
+    cloudBrowserSync = {
+      revisionOne: revisionOne.metadata.revision,
+      deviceBPull: deviceBPull.metadata.revision,
+      revisionTwo: revisionTwo.revision,
+      conflictChoices: [useCloudResult.metadata.status, keepLocalResult.metadata.status],
+      offlinePending: offlinePending.metadata.pending,
+      providerFailure: providerFailure.status,
+      sameChecksumNoop: putsAfterNoop === putsBeforeNoop,
+      signoutPreserved: signoutPreservation.localBefore === signoutPreservation.localAfter,
+      tombstoneRevision,
+      dirtyTombstoneConflict: dirtyTombstone.metadata.conflict?.code,
+      remoteDeletePreservedLocal: remoteDeleteOnOtherDevice.local === signoutPreservation.localAfter,
+      mobileNoOverflow: !cloudMobileLayout.overflow
+    };
+
+    cloudDeviceA.page.close();
+    cloudDeviceB.page.close();
+    await browserCdp.send("Target.disposeBrowserContext", { browserContextId: cloudDeviceA.browserContextId });
+    await browserCdp.send("Target.disposeBrowserContext", { browserContextId: cloudDeviceB.browserContextId });
+    cloudDeviceA = null;
+    cloudDeviceB = null;
+    browserCdp.close();
+    browserCdp = null;
+
     const pages = await getJson(`http://localhost:${chromePort}/json/list`);
     const page = pages.find(item => item.type === "page") || pages[0];
     cdp = new CdpClient(page.webSocketDebuggerUrl);
@@ -1931,7 +2320,7 @@ async function run() {
       const snapshot = JSON.parse(JSON.stringify(state));
       activateTab("mine", { scroll: false });
       renderPreferences();
-      document.querySelector("#preferredEnvironment").value = "home";
+      document.querySelector("#preferredEnvironment").value = "mixed";
       document.querySelector("#availableEquipment").value = "dumbbells";
       document.querySelector("#experienceLevel").value = "experienced";
       document.querySelector("#trainingRotationMode").value = "full_body";
@@ -1979,7 +2368,7 @@ async function run() {
       starterTemplateId: state.settings.starterTemplateId
     }))()`);
     assert(painGate.open && painGate.focused === "noPainBtn" && painGate.activeTab === "today" && painGate.setupClosed, "Completing setup should still open the focused binary pain gate.");
-    assert(painGate.equipment === "bodyweight" && painGate.environment === "home" && painGate.experience === "experienced" && painGate.goal === "muscle_gain" && painGate.starterTemplateId === "starter_home_bodyweight", `First-workout choices should persist compatibly: ${JSON.stringify(painGate)}.`);
+    assert(painGate.equipment === "bodyweight" && painGate.environment === "home_bodyweight" && painGate.experience === "experienced" && painGate.goal === "muscle_gain" && painGate.starterTemplateId === "starter_home_bodyweight", `First-workout choices should persist compatibly: ${JSON.stringify(painGate)}.`);
     await evaluate(cdp, `closePainGate()`);
     await reload(cdp);
     const refreshedSetup = await evaluate(cdp, `(() => ({
@@ -2011,7 +2400,7 @@ async function run() {
     assert(loadedWorkout.sets === "0/8", "Loaded home template should expose eight planned sets.");
     assert(loadedWorkout.collectedSets === 0, "Template cues should not count as completed workout sets.");
     assert(loadedWorkout.focusedVisible && loadedWorkout.currentExercise === "椅子深蹲" && loadedWorkout.currentSetText.includes("第 1 组 / 共 2 组") && loadedWorkout.currentSetText.includes("完成这组"), "Coach start should focus the first compatible planned set.");
-    assert(loadedWorkout.legacyHidden && loadedWorkout.sessionVersion === 3 && loadedWorkout.currentStatus === "pending", "Focused training should hide the legacy editor and keep the set explicitly pending.");
+    assert(loadedWorkout.legacyHidden && loadedWorkout.sessionVersion === 4 && loadedWorkout.currentStatus === "pending", "Focused training should hide the legacy editor and keep the set explicitly pending.");
 
     const emptyFinish = await evaluate(cdp, `(() => {
       document.querySelector("#requestFinishFocusedWorkoutBtn").click();
@@ -2029,15 +2418,13 @@ async function run() {
     const typedPending = await evaluate(cdp, `(() => {
       document.querySelector("#focusedPrimaryValue").value = "9";
       document.querySelector("#focusedPrimaryValue").dispatchEvent(new Event("input", { bubbles: true }));
-      document.querySelector("#focusedWeightValue").value = "42.5";
-      document.querySelector("#focusedWeightValue").dispatchEvent(new Event("input", { bubbles: true }));
       return {
         status: activeWorkoutSession.exercises[0].sets[0].status,
         actual: activeWorkoutSession.exercises[0].sets[0].actual.reps,
         storedVersion: JSON.parse(localStorage.getItem(${JSON.stringify(workoutDraftKey)})).version
       };
     })()`);
-    assert(typedPending.status === "pending" && typedPending.actual === 9 && typedPending.storedVersion === 3, "Editing the current result should persist without implying completion.");
+    assert(typedPending.status === "pending" && typedPending.actual === 9 && typedPending.storedVersion === 4, "Editing the current result should persist without implying completion.");
 
     const completedFocusedSet = await evaluate(cdp, `(() => {
       const startedAt = activeWorkoutSession.startedAt;
@@ -2050,24 +2437,22 @@ async function run() {
         firstStatus: activeWorkoutSession.exercises[0].sets[0].status,
         restTime: document.querySelector("#focusedRestTime")?.textContent,
         restContext: document.querySelector("#focusedRestContext")?.textContent,
-        inheritedWeight: document.querySelector("#focusedWeightValue")?.value,
-        quickControls: ["decreaseFocusedPrimaryBtn", "increaseFocusedPrimaryBtn", "decreaseFocusedWeightBtn", "increaseFocusedWeightBtn", "extendFocusedRestBtn", "resetFocusedRestBtn", "skipFocusedRestBtn"].every(id => Boolean(document.getElementById(id)))
+        weightControlsHidden: !document.querySelector("#focusedWeightValue"),
+        quickControls: ["decreaseFocusedPrimaryBtn", "increaseFocusedPrimaryBtn", "toggleFocusedRestBtn", "extendFocusedRestBtn", "skipFocusedRestBtn", "startNextSetBtn"].every(id => Boolean(document.getElementById(id)))
       };
     })()`);
     assert(completedFocusedSet.completed === 1 && completedFocusedSet.currentExercise === "椅子深蹲" && completedFocusedSet.undoVisible && completedFocusedSet.firstStatus === "completed", "Completing a set should advance, update progress, and expose undo.");
-    assert(completedFocusedSet.restTime === "01:30" && completedFocusedSet.restContext.includes("下一组") && completedFocusedSet.inheritedWeight === "42.5" && completedFocusedSet.quickControls, `A completed set should start guided rest, preserve weight, and expose quick controls: ${JSON.stringify(completedFocusedSet)}.`);
+    assert(completedFocusedSet.restTime === "01:30" && completedFocusedSet.restContext.includes("下一组") && completedFocusedSet.weightControlsHidden && completedFocusedSet.quickControls, `A completed bodyweight set should start guided rest, hide irrelevant weight input, and expose quick controls: ${JSON.stringify(completedFocusedSet)}.`);
     const adjustedFocusedSet = await evaluate(cdp, `(() => {
       document.querySelector("#increaseFocusedPrimaryBtn").click();
       document.querySelector("#decreaseFocusedPrimaryBtn").click();
-      document.querySelector("#increaseFocusedWeightBtn").click();
-      document.querySelector("#decreaseFocusedWeightBtn").click();
       document.querySelector("#extendFocusedRestBtn").click();
       const extended = document.querySelector("#focusedRestTime")?.textContent;
-      document.querySelector("#resetFocusedRestBtn").click();
-      const reset = document.querySelector("#focusedRestTime")?.textContent;
-      return { reps: document.querySelector("#focusedPrimaryValue").value, weight: document.querySelector("#focusedWeightValue").value, extended, reset };
+      document.querySelector("#toggleFocusedRestBtn").click();
+      const paused = WorkoutSessionModel.isRestPaused(activeWorkoutSession);
+      return { reps: document.querySelector("#focusedPrimaryValue").value, extended, paused };
     })()`);
-    assert(adjustedFocusedSet.reps === "10" && adjustedFocusedSet.weight === "42.5" && adjustedFocusedSet.extended === "02:00" && adjustedFocusedSet.reset === "01:30", `Quick adjustments and rest controls should persist exact values: ${JSON.stringify(adjustedFocusedSet)}.`);
+    assert(adjustedFocusedSet.reps === "10" && adjustedFocusedSet.extended === "02:00" && adjustedFocusedSet.paused, `Quick adjustments and paused rest state should persist exact values: ${JSON.stringify(adjustedFocusedSet)}.`);
     await reload(cdp);
     const restoredFocusedSession = await evaluate(cdp, `(() => ({
       visible: !document.querySelector("#focusedWorkoutSession").hidden,
@@ -2078,11 +2463,12 @@ async function run() {
       firstActual: activeWorkoutSession?.exercises[0]?.sets[0]?.actual?.reps,
       restSourceSetId: activeWorkoutSession?.companion?.rest?.sourceSetId,
       restRemaining: WorkoutSessionModel.remainingRestSeconds(activeWorkoutSession),
+      restPaused: WorkoutSessionModel.isRestPaused(activeWorkoutSession),
       restVisible: Boolean(document.querySelector("#focusedRestTime")),
       storedVersion: JSON.parse(localStorage.getItem(${JSON.stringify(workoutDraftKey)}))?.version
     }))()`);
     assert(restoredFocusedSession.visible && restoredFocusedSession.startedAt === completedFocusedSet.startedAt && restoredFocusedSession.completed === 1 && restoredFocusedSession.currentSetId && restoredFocusedSession.firstActual === 9, "Reload should restore focused progress, current set, actual input, and original start time.");
-    assert(restoredFocusedSession.version === 3 && restoredFocusedSession.storedVersion === 3 && restoredFocusedSession.restSourceSetId && restoredFocusedSession.restRemaining > 0 && restoredFocusedSession.restVisible, `Version 3 draft recovery should restore the active rest companion without resetting it: ${JSON.stringify(restoredFocusedSession)}.`);
+    assert(restoredFocusedSession.version === 4 && restoredFocusedSession.storedVersion === 4 && restoredFocusedSession.restSourceSetId && restoredFocusedSession.restRemaining > 0 && restoredFocusedSession.restPaused && restoredFocusedSession.restVisible, `Version 4 draft recovery should restore a paused rest companion without resetting it: ${JSON.stringify(restoredFocusedSession)}.`);
 
     const skippedFocusedRest = await evaluate(cdp, `(() => {
       const currentSetId = activeWorkoutSession.currentSetId;
@@ -2162,6 +2548,9 @@ async function run() {
           }
         }
       });
+      state.settings.hapticsEnabled = false;
+      vibrateWorkout(99);
+      state.settings.hapticsEnabled = true;
       vibrateWorkout(35);
       activateTab("workout", { scroll: false });
       await syncWorkoutWakeLock();
@@ -2243,7 +2632,7 @@ async function run() {
       const snapshot = JSON.parse(JSON.stringify(state));
       const date = today();
       const baseWorkout = {
-        id: "rule-workout", date, title: "规则训练", sessionRpe: 4, feeling: "easy", sourceTemplateId: "starter_gym_machines",
+        id: "rule-workout", date, title: "健身房全身 A", sessionRpe: 4, feeling: "easy", rotationDayId: "rotation_full_body", sourceTemplateId: "beginner_full_body",
         completionSummary: { completed: 2, skipped: 0, pending: 0 },
         exercises: [{ name: "腿举", sets: [{ weight: 20, reps: 8, rpe: 4, note: "" }, { weight: 20, reps: 8, rpe: 4, note: "" }] }]
       };
@@ -2276,16 +2665,53 @@ async function run() {
       };
       state.workouts = [baseWorkout, lowerHistory];
       const rotated = buildNextWorkoutPlan(baseWorkout);
+      state.settings = normalizeSettings({
+        ...state.settings,
+        preferredEnvironment: "home_bodyweight",
+        availableEquipment: "bodyweight",
+        trainingGoal: "general",
+        trainingRotation: { mode: "full_body", currentIndex: 0 }
+      }, state.templates);
+      const homeGeneral = resolveTrainingDay(state.settings.trainingRotation, getAllTemplates());
+      state.settings.trainingRotation = TrainingRotationModel.normalizeRotation({ mode: "upper_lower", currentIndex: 1 }, getAllTemplates());
+      const homeUpperLower = resolveTrainingDay(state.settings.trainingRotation, getAllTemplates());
+      state.settings.trainingRotation = TrainingRotationModel.normalizeRotation({ mode: "full_body", currentIndex: 0 }, getAllTemplates());
+      state.settings = normalizeSettings({ ...state.settings, preferredEnvironment: "gym", availableEquipment: "machines" }, state.templates);
+      const gymGeneral = resolveTrainingDay(state.settings.trainingRotation, getAllTemplates());
+      state.settings = normalizeSettings({ ...state.settings, trainingGoal: "muscle_gain" }, state.templates);
+      const gymMuscle = resolveTrainingDay(state.settings.trainingRotation, getAllTemplates());
+      state.settings = normalizeSettings({ ...state.settings, trainingGoal: "strength" }, state.templates);
+      const gymStrength = resolveTrainingDay(state.settings.trainingRotation, getAllTemplates());
+      state.settings = normalizeSettings({ ...state.settings, trainingGoal: "general", trainingRotation: { mode: "full_body", currentIndex: 1 } }, state.templates);
+      const rdlHistory = {
+        id: "rdl-latest", date: addLocalDays(date, -2), title: "手动训练", sessionRpe: 6,
+        exercises: [{ name: "罗马尼亚硬拉", sets: [{ weight: 45, reps: 8, rpe: 6, note: "" }] }]
+      };
+      state.workouts = [baseWorkout, rdlHistory];
+      state.dailyLogs = [{ id: "rule-rotation", date, sleepHours: 7, energy: 4, soreness: 1, pain: 0 }];
+      const fullBodyB = buildNextWorkoutPlan(baseWorkout);
+      state.dailyLogs = [{ id: "rule-rotation-pain", date, sleepHours: 7, energy: 2, soreness: 2, pain: 4 }];
+      const recoveryOverride = buildNextWorkoutPlan(baseWorkout);
+      state.dailyLogs = [{ id: "rule-after-recovery", date, sleepHours: 7, energy: 3, soreness: 1, pain: 0 }];
+      const afterRecovery = buildNextWorkoutPlan({ ...baseWorkout, id: "recovery-complete", title: "恢复优先训练", sourceTemplateId: "beginner_recovery", exercises: [{ name: "动态拉伸", sets: [{ weight: null, reps: 8, rpe: 3, note: "" }] }] });
+      const legacyHome = normalizeSettings({ preferredEnvironment: "home", availableEquipment: "bodyweight" }, []);
       Object.assign(state, normalizeImportedState(snapshot));
       renderAll();
-      return { easy, hard, lowRecovery, pain, incomplete, rotated };
+      return { easy, hard, lowRecovery, pain, incomplete, rotated, homeGeneral, homeUpperLower, gymGeneral, gymMuscle, gymStrength, fullBodyB, recoveryOverride, afterRecovery, legacyHome };
     })()`);
     assert(nextWorkoutRules.easy.exercises[0].sets[0].weight === 22.5 && nextWorkoutRules.easy.adjustments[0].includes("小幅增加"), "Easy completed sessions should make a small, explainable progression.");
     assert(nextWorkoutRules.hard.exercises[0].sets[0].weight === 20 && nextWorkoutRules.hard.adjustments[0].includes("保持"), "Hard sessions should hold load rather than push progression.");
     assert(nextWorkoutRules.lowRecovery.exercises[0].sets.length === 1 && nextWorkoutRules.lowRecovery.adjustments[0].includes("少做一组"), "Poor recovery should reduce volume before increasing load.");
     assert(nextWorkoutRules.pain.title === "恢复优先训练" && nextWorkoutRules.pain.reasons[0].includes("安全优先"), "High pain should replace loading with a recovery plan.");
     assert(nextWorkoutRules.incomplete.exercises[0].sets[0].weight === 20 && nextWorkoutRules.incomplete.adjustments[0].includes("稳定完成"), "Incomplete sessions should hold the same-day load instead of progressing it.");
-    assert(nextWorkoutRules.rotated.title === "下肢训练" && nextWorkoutRules.rotated.sourceComparableWorkoutId === "lower-history" && nextWorkoutRules.rotated.exercises[0].sets[0].weight === 35, "Rotation should choose the next training day and reuse that day's own history.");
+    assert(nextWorkoutRules.rotated.title === "下肢 A" && nextWorkoutRules.rotated.sourceComparableWorkoutId === "lower-history" && nextWorkoutRules.rotated.exercises[0].sets[0].weight === 35, "Rotation should choose the next training day and reuse that day's own history.");
+    assert(nextWorkoutRules.homeGeneral.template.id === "starter_home_bodyweight" && !nextWorkoutRules.homeGeneral.template.exercises.some(exercise => ["腿举", "坐姿划船", "卧推"].includes(exercise.name)), "Home bodyweight recommendations must not include gym-only exercises.");
+    assert(nextWorkoutRules.homeUpperLower.template.id === "starter_home_bodyweight_b" && !nextWorkoutRules.homeUpperLower.template.exercises.some(exercise => ["腿举", "坐姿划船", "卧推"].includes(exercise.name)), "Non-gym upper/lower preferences must safely use the selected environment's A/B routine.");
+    assert(nextWorkoutRules.gymGeneral.template.id === "beginner_full_body" && nextWorkoutRules.gymGeneral.template.id !== nextWorkoutRules.homeGeneral.template.id, "Gym and home environments must select different templates.");
+    assert(nextWorkoutRules.gymGeneral.template.exercises[0].sets.length === 2 && nextWorkoutRules.gymMuscle.template.exercises[0].sets.length === 3 && nextWorkoutRules.gymStrength.template.exercises[0].sets[0].reps === 5, "General, muscle gain, and strength goals must produce materially different prescriptions.");
+    assert(nextWorkoutRules.fullBodyB.rotationDayId === "rotation_full_body_b" && nextWorkoutRules.fullBodyB.sourceTemplateId === "beginner_full_body_b" && nextWorkoutRules.fullBodyB.exercises[0].sets[0].weight === 45, "Completing full-body A must rotate to B and use the exercise's latest real completion data.");
+    assert(nextWorkoutRules.recoveryOverride.source === "recovery_override" && nextWorkoutRules.afterRecovery.rotationDayId === "rotation_full_body_b", "Pain recovery must not permanently advance or disrupt the normal rotation.");
+    assert(nextWorkoutRules.legacyHome.preferredEnvironment === "home_bodyweight", "Legacy home environments must migrate safely to home bodyweight.");
 
     const metricUi = await evaluate(cdp, `(async () => {
       const template = {
@@ -2301,9 +2727,13 @@ async function run() {
       activateTab("workout", { scroll: false });
       await new Promise(resolve => setTimeout(resolve, 400));
       const seconds = document.querySelector("#focusedCurrentSet").innerText;
+      const secondsStep = document.querySelector("#increaseFocusedPrimaryBtn")?.dataset.step;
+      const secondsWeightHidden = !document.querySelector("#focusedWeightValue");
       document.querySelector("#completeFocusedSetBtn").click();
       await new Promise(resolve => setTimeout(resolve, 400));
       const minutes = document.querySelector("#focusedCurrentSet").innerText;
+      const minutesStep = document.querySelector("#increaseFocusedPrimaryBtn")?.dataset.step;
+      const minutesWeightHidden = !document.querySelector("#focusedWeightValue");
       document.querySelector("#completeFocusedSetBtn").click();
       await new Promise(resolve => setTimeout(resolve, 400));
       const completion = {
@@ -2317,9 +2747,10 @@ async function run() {
       const progress = WorkoutSessionModel.progress(activeWorkoutSession);
       clearWorkoutDraft();
       renderFocusedWorkoutSession();
-      return { seconds, minutes, completion, statusText, progress };
+      return { seconds, secondsStep, secondsWeightHidden, minutes, minutesStep, minutesWeightHidden, completion, statusText, progress };
     })()`);
     assert(metricUi.seconds.includes("实际秒") && metricUi.minutes.includes("实际分钟"), `Focused UI should label second- and minute-based targets in plain language: ${JSON.stringify(metricUi)}.`);
+    assert(metricUi.secondsStep === "5" && metricUi.minutesStep === "1" && metricUi.secondsWeightHidden && metricUi.minutesWeightHidden, `Duration inputs should expose unit-aware quick steps and hide irrelevant weight fields: ${JSON.stringify(metricUi)}.`);
     assert(metricUi.completion.text.includes("完成这段动作") && !metricUi.completion.hasPrimary && !metricUi.completion.hasWeight, "Completion-only sets should not ask for repetitions or weight.");
     assert(metricUi.progress.completed === 3 && metricUi.statusText.includes("✓ 已完成"), "Plan status should combine text, symbol, and color rather than color alone.");
 
@@ -3304,7 +3735,7 @@ async function run() {
         exercises: [{ name: "腿举", sets: [{ weight: 20, reps: 10, rpe: 6, note: "" }] }]
       }));
       document.querySelector("#trainingGoal").value = "fat_loss";
-      document.querySelector("#preferredEnvironment").value = "home";
+      document.querySelector("#preferredEnvironment").value = "home_bodyweight";
       document.querySelector("#weeklyWorkoutTarget").value = "3";
       document.querySelector("#waterTargetMl").value = "2400";
       document.querySelector("#conservativeMode").checked = true;
@@ -3341,7 +3772,7 @@ async function run() {
       };
     })()`);
     assert(preferences.settings.trainingGoal === "fat_loss", "Preferences should save training goal.");
-    assert(preferences.settings.preferredEnvironment === "home", "Preferences should save preferred environment.");
+    assert(preferences.settings.preferredEnvironment === "home_bodyweight", "Preferences should save preferred environment.");
     assert(preferences.settings.weeklyWorkoutTarget === 3, "Preferences should save weekly workout target.");
     assert(preferences.settings.waterTargetMl === 2400, "Preferences should save water target.");
     assert(preferences.settings.conservativeMode, "Preferences should save conservative mode.");
@@ -3913,7 +4344,7 @@ async function run() {
         overflow: document.documentElement.scrollWidth > innerWidth
       };
     })()`);
-    assert(updateFlow.version.includes("v1.22.0"), "Help should display the current semantic app version.");
+    assert(updateFlow.version.includes("v1.23.0"), "Help should display the current semantic app version.");
     assert(updateFlow.shown && updateFlow.dismissed, "App update banner should be visible and dismissible.");
     assert(updateFlow.message?.type === "SKIP_WAITING" && updateFlow.buttonText === "更新中", "Confirmed update should activate the waiting service worker with clear feedback.");
     assert(!updateFlow.overflow, "Update banner should not cause desktop overflow.");
@@ -4036,9 +4467,10 @@ async function run() {
         "increaseFocusedPrimaryBtn",
         "decreaseFocusedWeightBtn",
         "increaseFocusedWeightBtn",
+        "toggleFocusedRestBtn",
         "extendFocusedRestBtn",
-        "resetFocusedRestBtn",
         "skipFocusedRestBtn",
+        "startNextSetBtn",
         "completeFocusedSetBtn",
         "skipFocusedSetBtn"
       ];
@@ -4059,6 +4491,23 @@ async function run() {
     assert(!mobile.overflow, "Mobile workout layout should not overflow.");
     assert(mobile.controls.every(control => control.present && control.height >= 44), `Mobile companion controls should all provide at least 44px touch targets: ${JSON.stringify(mobile.controls)}.`);
     assert(mobile.restPanelWidth > 0 && mobile.restPanelWidth <= mobile.sessionWidth, `Mobile rest companion should fit inside the focused workout surface: ${JSON.stringify(mobile)}.`);
+    const companionWidths = [];
+    for (const width of [320, 375, 390, 430]) {
+      await cdp.send("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 2, mobile: true });
+      await delay(80);
+      companionWidths.push(await evaluate(cdp, `(() => ({
+        width: innerWidth,
+        overflow: document.documentElement.scrollWidth > innerWidth,
+        panelWidth: document.querySelector(".focused-rest-panel")?.getBoundingClientRect().width || 0,
+        sessionWidth: document.querySelector("#focusedWorkoutSession")?.getBoundingClientRect().width || 0,
+        shortTargets: [...document.querySelectorAll("#focusedWorkoutSession button")].filter(button => {
+          const height = button.getBoundingClientRect().height;
+          return height > 0 && height < 44;
+        }).map(button => button.id)
+      }))()`));
+    }
+    assert(companionWidths.every(result => !result.overflow && result.panelWidth <= result.sessionWidth && result.shortTargets.length === 0), `Focused workout must fit 320/375/390/430px with 44px controls: ${JSON.stringify(companionWidths)}.`);
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 900, deviceScaleFactor: 2, mobile: true });
     await screenshot(cdp, "smoke-mobile.png");
     await evaluate(cdp, `clearWorkoutDraft(); renderFocusedWorkoutSession();`);
 
@@ -4089,7 +4538,7 @@ async function run() {
       return result;
     })()`);
     assert(mobileAccount.width <= mobileAccount.viewportWidth && !mobileAccount.overflow, "Account boundary should fit the mobile viewport without horizontal overflow.");
-    assert(mobileAccount.entitlement.includes("Free") && mobileAccount.entitlement.includes("剩余 1") && mobileAccount.boundary.includes("不会上传、删除或改写"), "Mobile account UI should fit verified quota and preserve the local data boundary.");
+    assert(mobileAccount.entitlement.includes("Free") && mobileAccount.entitlement.includes("剩余 1") && mobileAccount.boundary.includes("登录本身不会上传") && mobileAccount.boundary.includes("退出不会删除"), "Mobile account UI should fit verified quota and preserve the distinct login, local-data, and cloud-data boundaries.");
     await screenshot(cdp, "smoke-mobile-account-boundary.png");
     await evaluate(cdp, `accountSession = window.__mobileLiveSession; accountEntitlements = window.__mobileLiveEntitlements; delete window.__mobileLiveSession; delete window.__mobileLiveEntitlements; renderAccountPanel();`);
 
@@ -4343,6 +4792,7 @@ async function run() {
       checks: {
         serverHttp,
         cloudSyncHttp,
+        cloudBrowserSync,
         shutdownResult,
         today: todayCheck,
         supportAgreement,
@@ -4364,6 +4814,8 @@ async function run() {
       },
       screenshots: [
         "output/playwright/smoke-desktop.png",
+        "output/playwright/cloud-sync-desktop.png",
+        "output/playwright/cloud-sync-mobile.png",
         "output/playwright/smoke-desktop-pro-longitudinal.png",
         "output/playwright/smoke-mobile.png",
         "output/playwright/smoke-mobile-insights.png",
@@ -4383,6 +4835,13 @@ async function run() {
       ]
     }, null, 2));
   } finally {
+    cloudDeviceA?.page?.close();
+    cloudDeviceB?.page?.close();
+    if (browserCdp) {
+      if (cloudDeviceA?.browserContextId) await browserCdp.send("Target.disposeBrowserContext", { browserContextId: cloudDeviceA.browserContextId }).catch(() => {});
+      if (cloudDeviceB?.browserContextId) await browserCdp.send("Target.disposeBrowserContext", { browserContextId: cloudDeviceB.browserContextId }).catch(() => {});
+      browserCdp.close();
+    }
     if (cdp) cdp.close();
     await stopChild(chrome, "Chrome");
     await stopChild(cloudUnconfiguredServer, "Cloud-unconfigured app server");

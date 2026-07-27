@@ -1,7 +1,7 @@
 {
   "name": "WhatToDrill · 今天练什么",
   "short_name": "WhatToDrill",
-  "description": "根据恢复状态安排下一次训练，并逐组记录表现。",
+  "description": "根据恢复状态安排下一次训练，并带你逐组完成。",
   "id": "./app/",
   "start_url": "./app/",
   "scope": "./",

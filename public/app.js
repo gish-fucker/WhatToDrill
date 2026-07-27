@@ -1,11 +1,17 @@
 const STORAGE_KEY = "habit_fitness_app_v1";
 const WORKOUT_DRAFT_KEY = "habit_fitness_workout_draft_v1";
-const APP_VERSION = "1.22.0";
+const CLOUD_SYNC_METADATA_KEY = "what_to_drill_cloud_sync_v1";
+const CLOUD_SYNC_DEBOUNCE_MS = 900;
+const CLOUD_SYNC_RETRY_BASE_MS = 1000;
+const CLOUD_SYNC_RETRY_MAX_MS = 60_000;
+const CLOUD_SYNC_RETRY_JITTER = 0.2;
+const APP_VERSION = "1.23.0";
 const CLOUD_ADVICE_CONSENT_VERSION = 1;
 const BACKUP_SCHEMA_VERSION = 1;
 const MAX_WORKOUT_CSV_BYTES = 5 * 1024 * 1024;
 const MAX_WORKOUT_CSV_ROWS = 20_000;
 const IS_STATIC_HOSTED_APP = window.location.hostname.endsWith(".github.io");
+const REST_SECONDS_BY_GOAL = Object.freeze({ general: 75, muscle_gain: 90, strength: 180, fat_loss: 60, recovery: 45 });
 
 const defaultSettings = {
   waterStepMl: 500,
@@ -21,6 +27,8 @@ const defaultSettings = {
   starterTemplateId: "",
   firstWorkoutSetupCompletedAt: "",
   conservativeMode: false,
+  hapticsEnabled: true,
+  soundEnabled: false,
   dailyReminderEnabled: false,
   dailyReminderTime: "20:30",
   workoutReminderEnabled: false,
@@ -72,7 +80,7 @@ const defaultExercises = [
 const beginnerTemplates = [
   {
     id: "starter_home_bodyweight",
-    name: "居家无器械全身",
+    name: "居家无器械全身 A",
     duration: 24,
     sessionRpe: 5,
     environment: "居家 · 无器械",
@@ -84,8 +92,21 @@ const beginnerTemplates = [
     ]
   },
   {
+    id: "starter_home_bodyweight_b",
+    name: "居家无器械全身 B",
+    duration: 24,
+    sessionRpe: 5,
+    environment: "居家 · 无器械",
+    exercises: [
+      { name: "分腿蹲", metric: "reps", sets: beginnerSets(2, "", 8, 5, "每侧完成，扶稳固家具保持平衡") },
+      { name: "斜板俯卧撑", metric: "reps", sets: beginnerSets(2, "", 8, 5, "双手撑稳固桌沿，身体保持一条直线") },
+      { name: "单腿臀桥", metric: "reps", sets: beginnerSets(2, "", 8, 5, "每侧完成，顶端停一秒") },
+      { name: "死虫", metric: "reps", sets: beginnerSets(2, "", 8, 5, "腰背贴稳地面，左右交替") }
+    ]
+  },
+  {
     id: "starter_dumbbell_full_body",
-    name: "哑铃全身",
+    name: "哑铃全身 A",
     duration: 28,
     sessionRpe: 6,
     environment: "居家或健身房 · 哑铃",
@@ -94,6 +115,19 @@ const beginnerTemplates = [
       { name: "哑铃地板卧推", metric: "reps", sets: beginnerSets(3, "", 10, 6, "手肘轻触地面后平稳推起") },
       { name: "单臂哑铃划船", metric: "reps", sets: beginnerSets(3, "", 10, 6, "每侧完成目标次数") },
       { name: "罗马尼亚硬拉", metric: "reps", sets: beginnerSets(2, "", 10, 6, "髋部向后，背部保持中立") }
+    ]
+  },
+  {
+    id: "starter_dumbbell_full_body_b",
+    name: "哑铃全身 B",
+    duration: 28,
+    sessionRpe: 6,
+    environment: "居家或健身房 · 哑铃",
+    exercises: [
+      { name: "哑铃反向弓步", metric: "reps", sets: beginnerSets(3, "", 8, 6, "每侧完成，步幅以稳定为先") },
+      { name: "哑铃肩推", metric: "reps", sets: beginnerSets(3, "", 8, 6, "肋骨收住，不要后仰") },
+      { name: "哑铃相扑硬拉", metric: "reps", sets: beginnerSets(3, "", 10, 6, "髋膝同时伸展，背部保持中立") },
+      { name: "单臂哑铃划船", metric: "reps", sets: beginnerSets(2, "", 10, 6, "每侧完成，控制回放") }
     ]
   },
   {
@@ -124,7 +158,7 @@ const beginnerTemplates = [
   },
   {
     id: "beginner_full_body",
-    name: "全身入门",
+    name: "健身房全身 A",
     duration: 35,
     sessionRpe: 6,
     environment: "健身房",
@@ -133,6 +167,19 @@ const beginnerTemplates = [
       { name: "卧推", sets: beginnerSets(3, "", 8, 6, "先用轻重量找轨迹") },
       { name: "坐姿划船", sets: beginnerSets(3, "", 10, 6, "肩胛向后收，不耸肩") },
       { name: "平板支撑", sets: beginnerSets(2, "", 30, 6, "按秒记录在次数里") }
+    ]
+  },
+  {
+    id: "beginner_full_body_b",
+    name: "健身房全身 B",
+    duration: 35,
+    sessionRpe: 6,
+    environment: "健身房",
+    exercises: [
+      { name: "罗马尼亚硬拉", sets: beginnerSets(3, "", 8, 6, "先用轻重量掌握髋部后移") },
+      { name: "器械推胸", sets: beginnerSets(3, "", 10, 6, "肩膀放松，控制回程") },
+      { name: "高位下拉", sets: beginnerSets(3, "", 10, 6, "把手拉向锁骨，避免后仰") },
+      { name: "死虫", sets: beginnerSets(2, "", 10, 5, "腰背贴稳，慢速交替") }
     ]
   },
   {
@@ -159,6 +206,32 @@ const beginnerTemplates = [
       { name: "罗马尼亚硬拉", sets: beginnerSets(3, "", 8, 6, "背部保持中立") },
       { name: "臀桥", sets: beginnerSets(3, "", 12, 6, "顶峰停 1 秒") },
       { name: "死虫", sets: beginnerSets(2, "", 10, 5, "慢一点更有效") }
+    ]
+  },
+  {
+    id: "beginner_upper_b",
+    name: "上肢 B",
+    duration: 30,
+    sessionRpe: 6,
+    environment: "健身房",
+    exercises: [
+      { name: "器械推胸", sets: beginnerSets(3, "", 10, 6, "肩膀放松，控制回程") },
+      { name: "单臂哑铃划船", sets: beginnerSets(3, "", 10, 6, "每侧完成，避免身体旋转") },
+      { name: "哑铃肩推", sets: beginnerSets(2, "", 8, 6, "核心收紧，不要后仰") },
+      { name: "高位下拉", sets: beginnerSets(2, "", 10, 6, "控制回放") }
+    ]
+  },
+  {
+    id: "beginner_lower_b",
+    name: "下肢 B",
+    duration: 32,
+    sessionRpe: 6,
+    environment: "健身房",
+    exercises: [
+      { name: "高脚杯深蹲", sets: beginnerSets(3, "", 10, 6, "保持脚掌稳定") },
+      { name: "罗马尼亚硬拉", sets: beginnerSets(3, "", 8, 6, "髋部向后，背部保持中立") },
+      { name: "分腿蹲", sets: beginnerSets(2, "", 8, 6, "每侧完成，动作幅度以稳定为先") },
+      { name: "鸟狗式", sets: beginnerSets(2, "", 8, 5, "骨盆保持稳定") }
     ]
   },
   {
@@ -198,6 +271,7 @@ let historyExpanded = false;
 let pendingAppUpdate = null;
 let updateReloadRequested = false;
 let cloudAdviceConfigured = false;
+let cloudSyncConfigured = false;
 let aiAccessMode = "deployment_shared";
 let accountSession = { loading: true, configured: false, signedIn: false, unavailable: false, user: null };
 let accountEntitlements = { loading: false, configured: false, unavailable: false, plan: null, quota: null };
@@ -210,6 +284,15 @@ let appliedWeeklyTargetCalibration = null;
 let extendedDailyRecordRevealed = false;
 let activeWorkoutSession = null;
 let lastCompletedSetId = null;
+let cloudSyncMetadata = loadCloudSyncMetadata();
+let cloudSyncTimer = null;
+let cloudSyncRetryTimer = null;
+let cloudSyncRetryAttempt = 0;
+let cloudSyncGeneration = 0;
+let cloudSyncApplyingRemote = false;
+let cloudSyncInFlight = null;
+let cloudSyncQueuedOperation = null;
+let cloudSyncBusy = false;
 const onboardingTouched = {
   energy: false,
   soreness: false,
@@ -328,6 +411,7 @@ function persistState() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     lastStorageIssue = "";
+    if (!cloudSyncApplyingRemote) queueCloudPush();
     return true;
   } catch (error) {
     lastStorageIssue = isStorageQuotaError(error)
@@ -480,7 +564,7 @@ function sanitizeReminderTime(value, fallback) {
 
 function normalizeSettings(settings = {}, customTemplates = []) {
   const goalIds = ["general", "fat_loss", "muscle_gain", "strength", "recovery"];
-  const environmentIds = ["gym", "home", "mixed"];
+  const environmentIds = TrainingRotationModel.VALID_ENVIRONMENTS;
   const equipmentIds = ["bodyweight", "dumbbells", "machines", "free_weights"];
   const experienceIds = ["beginner", "experienced"];
   const starterTemplateIds = [
@@ -506,7 +590,9 @@ function normalizeSettings(settings = {}, customTemplates = []) {
       ...(Array.isArray(customTemplates) ? customTemplates : [])
     ]),
     trainingGoal: goalIds.includes(settings.trainingGoal) ? settings.trainingGoal : defaultSettings.trainingGoal,
-    preferredEnvironment: environmentIds.includes(settings.preferredEnvironment) ? settings.preferredEnvironment : defaultSettings.preferredEnvironment,
+    preferredEnvironment: environmentIds.includes(TrainingRotationModel.normalizeEnvironment(settings.preferredEnvironment, settings.availableEquipment))
+      ? TrainingRotationModel.normalizeEnvironment(settings.preferredEnvironment, settings.availableEquipment)
+      : defaultSettings.preferredEnvironment,
     availableEquipment: equipmentIds.includes(settings.availableEquipment) ? settings.availableEquipment : "",
     experienceLevel: experienceIds.includes(settings.experienceLevel) ? settings.experienceLevel : "",
     starterTemplateId: starterTemplateIds.includes(settings.starterTemplateId) ? settings.starterTemplateId : "",
@@ -514,6 +600,8 @@ function normalizeSettings(settings = {}, customTemplates = []) {
       ? new Date(settings.firstWorkoutSetupCompletedAt).toISOString()
       : "",
     conservativeMode: Boolean(settings.conservativeMode),
+    hapticsEnabled: settings.hapticsEnabled !== false,
+    soundEnabled: Boolean(settings.soundEnabled),
     dailyReminderEnabled: Boolean(settings.dailyReminderEnabled),
     dailyReminderTime: sanitizeReminderTime(settings.dailyReminderTime ?? defaultSettings.dailyReminderTime, defaultSettings.dailyReminderTime),
     workoutReminderEnabled: Boolean(settings.workoutReminderEnabled),
@@ -595,9 +683,23 @@ function goalLabel(goal = state.settings.trainingGoal) {
 function environmentLabel(environment = state.settings.preferredEnvironment) {
   return {
     gym: "健身房",
-    home: "居家",
+    home_bodyweight: "居家无器械",
+    home_dumbbell: "居家哑铃",
     mixed: "都可以"
   }[environment] || "健身房";
+}
+
+function environmentPrescriptionReason(template) {
+  const names = (template?.exercises || []).filter(exercise => exercise.name !== "轻松快走").slice(0, 3).map(exercise => exercise.name);
+  const environment = state.settings.preferredEnvironment;
+  if (environment === "home_bodyweight") return `你选择了居家无器械，因此使用${names.join("、")}，不需要健身房设备。`;
+  if (environment === "home_dumbbell") return `你选择了居家哑铃，因此使用${names.join("、")}，只需要哑铃和自身体重。`;
+  if (environment === "mixed") return `你选择了混合环境，因此安排${names.join("、")}，在家或健身房都能完成。`;
+  return `你选择了健身房，因此安排${names.join("、")}等健身房动作。`;
+}
+
+function goalPrescriptionReason(template) {
+  return `${goalLabel()}处方：${template?.progression || "先稳定完成，再小幅推进"}。`;
 }
 
 async function withButtonBusy(buttonId, busyText, action) {
@@ -1086,13 +1188,17 @@ function restoreWorkoutDraft() {
     const draft = JSON.parse(raw);
     const savedAt = Date.parse(draft.savedAt);
     const expired = !Number.isFinite(savedAt) || Date.now() - savedAt > 14 * 86400000;
-    if (![1, 2, WorkoutSessionModel.VERSION].includes(draft.version) || expired || !Array.isArray(draft.exercises)) {
+    if (![1, 2, 3, WorkoutSessionModel.VERSION].includes(draft.version) || expired || !Array.isArray(draft.exercises)) {
       localStorage.removeItem(WORKOUT_DRAFT_KEY);
       return false;
     }
 
-    if ([2, WorkoutSessionModel.VERSION].includes(draft.version)) {
+    if ([2, 3, WorkoutSessionModel.VERSION].includes(draft.version)) {
+      const hadCompanion = Boolean(draft.companion?.rest || draft.companion?.transition);
       activeWorkoutSession = WorkoutSessionModel.migrateDraft(draft);
+      if (hadCompanion && !activeWorkoutSession.companion?.rest && !activeWorkoutSession.companion?.transition) {
+        lastStorageIssue = "训练草稿已恢复；其中无效的休息计时状态已忽略。";
+      }
       activeWorkoutSession.rotationDayId = typeof draft.rotationDayId === "string" ? draft.rotationDayId : "";
       activeWorkoutSession.sourceTemplateId = typeof draft.sourceTemplateId === "string" ? draft.sourceTemplateId : activeWorkoutSession.templateId || "";
       activeWorkoutSession.nextPlanId = typeof draft.nextPlanId === "string" ? draft.nextPlanId : "";
@@ -1129,6 +1235,7 @@ function restoreWorkoutDraft() {
     activeWorkoutSession = WorkoutSessionModel.migrateDraft(draft);
     return true;
   } catch {
+    lastStorageIssue = "训练草稿已损坏，无法安全恢复；其他本地记录未受影响。";
     try {
       localStorage.removeItem(WORKOUT_DRAFT_KEY);
     } catch {
@@ -1341,6 +1448,24 @@ function planExerciseSource(workout, session = null) {
   })).filter(exercise => exercise.sets.length);
 }
 
+function suggestNextWorkoutDate(sourceDate, options = {}) {
+  const currentDate = today();
+  const baseDate = isValidDateText(sourceDate) && sourceDate > currentDate ? sourceDate : currentDate;
+  const recovery = options.recovery || {};
+  const sessionRpe = Number(options.sessionRpe ?? 6);
+  const target = Math.max(1, Number(state.settings.weeklyWorkoutTarget) || 2);
+  const defaultGap = target >= 4 ? 1 : target === 3 ? 2 : 3;
+  const minimumDays = Math.max(Number(options.forceMinimumDays) || 1, sessionRpe >= 8 || recovery.lowRecovery ? 2 : 1);
+  const plannedDays = state.settings.plannedWorkoutDays || [];
+  if (plannedDays.length) {
+    for (let offset = minimumDays; offset <= 8; offset += 1) {
+      const candidate = addLocalDays(baseDate, offset);
+      if (plannedDays.includes(weekdayIndex(candidate))) return candidate;
+    }
+  }
+  return addLocalDays(baseDate, Math.max(minimumDays, Math.min(3, defaultGap)));
+}
+
 function makeRecoveryPlan(workout, recovery, rotationDay = null) {
   const template = pickBeginnerTemplate("recovery");
   const recoveryReason = recovery.highPain
@@ -1352,7 +1477,7 @@ function makeRecoveryPlan(workout, recovery, rotationDay = null) {
     sourceWorkoutId: workout.id,
     sourceWorkoutDate: workout.date,
     createdAt: new Date().toISOString(),
-    scheduledFor: addLocalDays(workout.date, 2),
+    scheduledFor: suggestNextWorkoutDate(workout.date, { sessionRpe: workout.sessionRpe, recovery, forceMinimumDays: 2 }),
     status: "suggested",
     title: "恢复优先训练",
     exercises: template.exercises.map(exercise => ({
@@ -1394,10 +1519,21 @@ function buildNextWorkoutPlan(workout, options = {}) {
   );
   const completion = comparable?.completionSummary || {};
   const incomplete = Number(completion.pending || 0) + Number(completion.skipped || 0) > 0;
-  const comparableSource = comparable ? planExerciseSource(comparable) : [];
   const source = template.exercises.map(exercise => {
-    const history = comparableSource.find(item => item.name === exercise.name);
-    const selected = history || {
+    const latest = TrainingRotationModel.findLatestExercisePerformance(state.workouts, exercise.name);
+    const history = latest?.exercise;
+    const selected = history ? {
+      name: history.name,
+      metric: WorkoutSessionModel.inferMetric(history.metric, history.sets?.[0]?.note, history.name),
+      cue: exercise.cue || "",
+      sets: history.sets.map(set => ({
+        weight: numberOrNull(set.weight),
+        reps: numberOrNull(set.reps),
+        rpe: numberOrNull(set.rpe),
+        note: set.note || ""
+      })),
+      sourceExerciseWorkoutId: latest.workout.id || ""
+    } : {
       name: exercise.name,
       metric: WorkoutSessionModel.inferMetric(exercise.metric, exercise.sets?.[0]?.note, exercise.name),
       cue: exercise.cue || "",
@@ -1414,7 +1550,6 @@ function buildNextWorkoutPlan(workout, options = {}) {
   const feeling = comparable?.feeling || (sessionRpe <= 4 ? "easy" : sessionRpe >= 8 ? "hard" : "right");
   const reasons = [`按你的训练顺序，下一次轮到${day.label}。`];
   const adjustments = [];
-  let scheduledOffset = sessionRpe >= 8 || recovery.lowRecovery ? 2 : 1;
 
   if (recovery.lowRecovery) {
     reasons.push(`今天记录睡眠 ${formatMetric(recovery.sleepHours)}h、酸痛 ${recovery.soreness}/5。`);
@@ -1442,8 +1577,10 @@ function buildNextWorkoutPlan(workout, options = {}) {
     if (recovery.lowRecovery && sets.length > 1) sets = sets.slice(0, -1);
     if (!recovery.lowRecovery && !incomplete && comparable && feeling === "easy" && sessionRpe <= 5) {
       sets = sets.map(set => {
+        if (state.settings.trainingGoal === "muscle_gain" && set.reps !== null && set.reps < 12) return { ...set, reps: set.reps + 1 };
+        if (state.settings.trainingGoal === "fat_loss" && set.reps !== null) return { ...set, reps: set.reps + 1 };
         if (set.weight !== null && set.weight > 0) return { ...set, weight: set.weight + (set.weight >= 20 ? 2.5 : 1) };
-        if (set.reps !== null) return { ...set, reps: set.reps + 1 };
+        if (set.reps !== null && state.settings.trainingGoal !== "strength") return { ...set, reps: set.reps + 1 };
         return set;
       });
     }
@@ -1454,7 +1591,9 @@ function buildNextWorkoutPlan(workout, options = {}) {
       ...exercise,
       sets,
       adjustment,
-      reason: reasons[0]
+      reason: exercise.sourceExerciseWorkoutId
+        ? `负荷来自该动作最近一次真实完成记录；${reasons[0]}`
+        : reasons[0]
     };
   });
 
@@ -1465,12 +1604,12 @@ function buildNextWorkoutPlan(workout, options = {}) {
     sourceWorkoutId: workout.id,
     sourceWorkoutDate: workout.date,
     createdAt: new Date().toISOString(),
-    scheduledFor: addLocalDays(workout.date, scheduledOffset),
+    scheduledFor: suggestNextWorkoutDate(workout.date, { sessionRpe, recovery }),
     status: "suggested",
     title: day.label || template.name || "下一次训练",
     exercises,
-    adjustments,
-    reasons,
+    adjustments: [...adjustments, template.progression ? `目标推进：${template.progression}。` : ""].filter(Boolean),
+    reasons: [environmentPrescriptionReason(template), goalPrescriptionReason(template), ...reasons],
     source: "training_rotation",
     rotationDayId: day.id,
     sourceTemplateId: day.templateId,
@@ -1501,7 +1640,8 @@ function patternProgressMarkup(compact = false) {
       <div>
         <p class="eyebrow">Personal pattern</p>
         <h3>已获得 ${progress.days} 个有效观察日</h3>
-        <p class="muted">${progress.remaining ? `有效观察日 = 当天同时记录身体状态并完成训练。还差 ${progress.remaining} 天；下次训练前花 15 秒记录状态。` : "已达到分析门槛，可在进步页查看你的个人训练规律。"}</p>
+        <p class="muted">${progress.remaining ? `有效观察日 = 当天同时记录身体状态并完成训练。还差 ${progress.remaining} 天；下次训练前花 15 秒记录状态。` : "已获得 7 个有效观察日，可以查看初步规律。"}</p>
+        ${progress.remaining ? "" : '<button id="viewPersonalPatternsBtn" class="ghost-button" type="button">查看初步规律</button>'}
       </div>
       <div class="pattern-progress-data">
         <span>训练 ${progress.data.training} 次</span>
@@ -1627,9 +1767,9 @@ function starterProfileConsistency(settings = state.settings) {
   ].some(Boolean);
   if (!hasStarterFields) return { status: "legacy", templateId: "" };
   const environmentMatches = equipment === "bodyweight"
-    ? settings.preferredEnvironment === "home"
+    ? settings.preferredEnvironment === "home_bodyweight"
     : equipment === "dumbbells"
-      ? settings.preferredEnvironment === "mixed"
+      ? ["home_dumbbell", "mixed"].includes(settings.preferredEnvironment)
       : ["machines", "free_weights"].includes(equipment) && settings.preferredEnvironment === "gym";
   const valid = Boolean(settings.firstWorkoutSetupCompletedAt)
     && Boolean(expectedTemplateId)
@@ -1672,19 +1812,35 @@ function resolveTrainingDay(rotation = state.settings.trainingRotation, template
     ? normalized.days.find(day => day.id === requestedDayId)
     : null;
   const day = requestedDay || resolved.day;
-  const profileTemplate = normalized.mode === "full_body" ? starterTemplateForSettings(templates) : null;
-  if (profileTemplate && day?.id === "rotation_full_body") {
-    return {
+  if (normalized.mode === "full_body" && day) {
+    const routineIds = TrainingRotationModel.routineTemplateIds(state.settings.preferredEnvironment, state.settings.availableEquipment);
+    const routineIndex = day.id === "rotation_full_body_b" ? 1 : 0;
+    const profileTemplate = templates.find(template => template.id === routineIds[routineIndex]);
+    const prescribed = TrainingRotationModel.applyGoalPrescription(profileTemplate, state.settings.trainingGoal);
+    if (prescribed) return {
       rotation: normalized,
       day: { ...day, templateId: profileTemplate.id, label: profileTemplate.name },
-      template: profileTemplate,
+      template: prescribed,
       isBaseline: true
     };
   }
+  if (normalized.mode === "upper_lower" && day && state.settings.preferredEnvironment !== "gym") {
+    const routineIds = TrainingRotationModel.routineTemplateIds(state.settings.preferredEnvironment, state.settings.availableEquipment);
+    const dayIndex = Math.max(0, normalized.days.findIndex(item => item.id === day.id));
+    const profileTemplate = templates.find(template => template.id === routineIds[dayIndex % 2]);
+    const prescribed = TrainingRotationModel.applyGoalPrescription(profileTemplate, state.settings.trainingGoal);
+    if (prescribed) return {
+      rotation: normalized,
+      day: { ...day, templateId: profileTemplate.id, label: profileTemplate.name },
+      template: prescribed,
+      isBaseline: true
+    };
+  }
+  const rawTemplate = templates.find(template => template.id === day?.templateId) || null;
   return {
     rotation: normalized,
     day,
-    template: templates.find(template => template.id === day?.templateId) || null,
+    template: rawTemplate?.builtIn ? TrainingRotationModel.applyGoalPrescription(rawTemplate, state.settings.trainingGoal) : rawTemplate,
     isBaseline: true
   };
 }
@@ -1797,16 +1953,21 @@ function continuePreviousWorkout() {
 }
 
 function startFocusedWorkoutSession(template, title) {
+  const goalDefaultRest = REST_SECONDS_BY_GOAL[state.settings.trainingGoal] || REST_SECONDS_BY_GOAL.general;
   activeWorkoutSession = WorkoutSessionModel.createSession({
     date: today(),
     title: title || template.name,
     templateId: template.id || "",
+    trainingGoal: state.settings.trainingGoal,
+    defaultRestSeconds: Number(template.restDurationSeconds ?? template.restSeconds) || goalDefaultRest,
     exercises: template.exercises.map(exercise => ({
       name: exercise.name,
       metric: exercise.metric,
       cue: exercise.cue || exercise.sets?.[0]?.note || "",
+      restDurationSeconds: exercise.restDurationSeconds ?? exercise.restSeconds,
       sets: (exercise.sets || []).map(set => ({
         metric: set.metric || exercise.metric,
+        restDurationSeconds: set.restDurationSeconds ?? set.restSeconds,
         target: {
           weight: set.weight,
           reps: set.reps,
@@ -1840,6 +2001,14 @@ function workoutMetricLabel(metric) {
   return "次";
 }
 
+function restDurationForCurrentSet(entry = currentWorkoutSet()) {
+  const setOverride = Number(entry?.set?.restDurationSeconds);
+  const exerciseOverride = Number(entry?.exercise?.restDurationSeconds);
+  const sessionDefault = Number(activeWorkoutSession?.defaultRestSeconds);
+  return [setOverride, exerciseOverride, sessionDefault, REST_SECONDS_BY_GOAL[activeWorkoutSession?.trainingGoal], REST_SECONDS_BY_GOAL.general]
+    .find(value => Number.isFinite(value) && value > 0);
+}
+
 function focusedTargetText(set) {
   const parts = [];
   if (set.target.weight !== null) parts.push(`${formatMetric(set.target.weight)} kg`);
@@ -1863,33 +2032,45 @@ function focusedTransitionEntry() {
   return workoutSessionEntries().find(item => item.set.id === targetSetId) || null;
 }
 
+function focusedSourceEntry() {
+  const sourceSetId = activeWorkoutSession?.companion?.transition?.sourceSetId;
+  return workoutSessionEntries().find(item => item.set.id === sourceSetId) || null;
+}
+
 function focusedCompanionMarkup() {
   const companion = activeWorkoutSession?.companion;
   const target = focusedTransitionEntry();
   if (!companion || !target) return "";
+  const source = focusedSourceEntry();
   const kind = companion.transition?.kind === "exercise" ? "exercise" : "set";
   const context = kind === "exercise"
     ? `下一动作：${target.exercise.name} · ${focusedTargetText(target.set)}`
-    : `下一组：${target.exercise.name} · 第 ${target.setIndex + 1} 组`;
+    : `下一组：${target.exercise.name} · 第 ${target.setIndex + 1} 组 · ${focusedTargetText(target.set)}`;
+  const completedContext = source ? `已完成：${source.exercise.name} · 第 ${source.setIndex + 1} 组` : "上一组已完成";
   if (!companion.rest) {
     return kind === "exercise" ? `
       <section class="exercise-transition" aria-label="下一个动作">
-        <span>接下来</span><strong>${escapeHtml(context)}</strong>
+        <span>${escapeHtml(completedContext)}</span><strong>${escapeHtml(context)}</strong>
       </section>
     ` : "";
   }
   const remaining = WorkoutSessionModel.remainingRestSeconds(activeWorkoutSession);
+  const paused = WorkoutSessionModel.isRestPaused(activeWorkoutSession);
+  const ready = remaining === 0;
   return `
-    <section class="focused-rest-panel ${kind === "exercise" ? "exercise-transition" : ""}" aria-label="组间休息">
+    <section class="focused-rest-panel ${kind === "exercise" ? "exercise-transition" : ""} ${ready ? "rest-ready" : ""}" aria-label="组间休息">
       <div class="focused-rest-status">
-        <span id="focusedRestLabel">${remaining ? "休息中" : "休息完成，可以继续"}</span>
+        <span>${escapeHtml(completedContext)}</span>
+        <span id="focusedRestLabel">${paused ? "休息已暂停" : remaining ? "休息中" : "休息完成，可以继续"}</span>
         <strong id="focusedRestTime">${formatRestTime(remaining)}</strong>
         <p id="focusedRestContext">${escapeHtml(context)}</p>
+        <span id="focusedRestAnnouncement" class="sr-only" role="status" aria-live="polite"></span>
       </div>
       <div class="focused-rest-actions">
+        ${ready ? "" : `<button id="toggleFocusedRestBtn" class="ghost-button" type="button">${paused ? "继续计时" : "暂停"}</button>`}
         <button id="extendFocusedRestBtn" class="ghost-button" type="button">+30 秒</button>
-        <button id="resetFocusedRestBtn" class="ghost-button" type="button">重新计时</button>
         <button id="skipFocusedRestBtn" class="ghost-button" type="button">跳过休息</button>
+        <button id="startNextSetBtn" type="button">立即开始下一组</button>
       </div>
     </section>
   `;
@@ -1901,7 +2082,9 @@ function refreshFocusedRestDisplay() {
   if (!time || !label || !activeWorkoutSession?.companion?.rest) return;
   const remaining = WorkoutSessionModel.remainingRestSeconds(activeWorkoutSession);
   time.textContent = formatRestTime(remaining);
-  label.textContent = remaining ? "休息中" : "休息完成，可以继续";
+  label.textContent = WorkoutSessionModel.isRestPaused(activeWorkoutSession)
+    ? "休息已暂停"
+    : remaining ? "休息中" : "休息完成，可以继续";
 }
 
 function stopFocusedRestTicker() {
@@ -1912,29 +2095,36 @@ function stopFocusedRestTicker() {
 function startFocusedRestTicker() {
   stopFocusedRestTicker();
   refreshFocusedRestDisplay();
-  if (!activeWorkoutSession?.companion?.rest || !WorkoutSessionModel.remainingRestSeconds(activeWorkoutSession)) return;
+  if (!activeWorkoutSession?.companion?.rest
+    || WorkoutSessionModel.isRestPaused(activeWorkoutSession)
+    || !WorkoutSessionModel.remainingRestSeconds(activeWorkoutSession)) return;
   let previous = WorkoutSessionModel.remainingRestSeconds(activeWorkoutSession);
   focusedRestTimer = window.setInterval(() => {
     refreshFocusedRestDisplay();
     const remaining = WorkoutSessionModel.remainingRestSeconds(activeWorkoutSession);
     if (previous > 0 && remaining === 0) {
-      const alertKey = activeWorkoutSession?.companion?.rest?.endsAt || "";
+      const alertKey = activeWorkoutSession?.companion?.rest?.restEndsAt || "";
       if (document.visibilityState === "visible" && alertKey && lastRestAlertKey !== alertKey) {
         lastRestAlertKey = alertKey;
         vibrateWorkout([45, 50, 45]);
       }
       stopFocusedRestTicker();
-      activeWorkoutSession = WorkoutSessionModel.clearRest(activeWorkoutSession);
       persistWorkoutDraft();
+      $("focusedRestAnnouncement") && ($("focusedRestAnnouncement").textContent = "休息结束，可以开始下一组");
       showToast("休息结束，可以继续");
       renderFocusedWorkoutSession();
       return;
+    }
+    if (previous > 10 && remaining <= 10) {
+      const announcement = $("focusedRestAnnouncement");
+      if (announcement) announcement.textContent = "休息还剩 10 秒";
     }
     previous = remaining;
   }, 250);
 }
 
 function vibrateWorkout(pattern) {
+  if (!state.settings.hapticsEnabled) return;
   try {
     navigator.vibrate?.(pattern);
   } catch {
@@ -2045,6 +2235,11 @@ function focusedCurrentSetMarkup({ exercise, set, setIndex }) {
   const weightValue = set.actual.weight ?? set.target.weight ?? "";
   const exerciseSetCount = exercise.sets.length;
   const cue = set.target.note || exercise.cue || "动作保持稳定，不需要做到力竭。";
+  const primaryStep = set.metric === "seconds" ? 5 : 1;
+  const primaryUnit = workoutMetricLabel(set.metric);
+  const hasWeight = set.metric === "reps" && !/俯卧撑|引体|深蹲跳|开合跳|鸟狗|死虫|臀桥|卷腹|平板|拉伸|活动|快走|跑步/.test(exercise.name);
+  const load = Number(set.actual.weight ?? set.target.weight);
+  const weightStep = Number.isFinite(load) && load > 0 && load <= 10 ? 1 : 2.5;
   return `
     <article id="focusedCurrentSet" class="focused-current-set" tabindex="-1" data-current-set-id="${escapeAttr(set.id)}">
       <div class="focused-set-heading">
@@ -2059,25 +2254,23 @@ function focusedCurrentSetMarkup({ exercise, set, setIndex }) {
         ${set.metric === "completion" ? `<p class="completion-only-cue">完成这段动作后直接确认即可。</p>` : `
           <label>
             实际${escapeHtml(workoutMetricLabel(set.metric))}
-            ${set.metric === "reps" ? `
-              <div class="focused-value-stepper">
-                <button id="decreaseFocusedPrimaryBtn" class="ghost-button" type="button" aria-label="次数减少 1">−1</button>
-                <input id="focusedPrimaryValue" type="number" min="0" step="1" value="${escapeAttr(primaryValue)}" inputmode="numeric">
-                <button id="increaseFocusedPrimaryBtn" class="ghost-button" type="button" aria-label="次数增加 1">+1</button>
-              </div>
-            ` : `<input id="focusedPrimaryValue" type="number" min="0" step="0.5" value="${escapeAttr(primaryValue)}" inputmode="decimal">`}
-          </label>
-        `}
-        ${set.metric === "completion" ? "" : `
-          <label>
-            重量 kg（可不填）
             <div class="focused-value-stepper">
-              <button id="decreaseFocusedWeightBtn" class="ghost-button" type="button" aria-label="重量减少 2.5 千克">−2.5</button>
-              <input id="focusedWeightValue" type="number" min="0" step="0.5" value="${escapeAttr(weightValue)}" inputmode="decimal">
-              <button id="increaseFocusedWeightBtn" class="ghost-button" type="button" aria-label="重量增加 2.5 千克">+2.5</button>
+              <button id="decreaseFocusedPrimaryBtn" class="ghost-button" type="button" data-step="${primaryStep}" aria-label="${escapeAttr(primaryUnit)}减少 ${primaryStep}">−${primaryStep}</button>
+              <input id="focusedPrimaryValue" type="number" min="0" step="${primaryStep}" value="${escapeAttr(primaryValue)}" inputmode="numeric">
+              <button id="increaseFocusedPrimaryBtn" class="ghost-button" type="button" data-step="${primaryStep}" aria-label="${escapeAttr(primaryUnit)}增加 ${primaryStep}">+${primaryStep}</button>
             </div>
           </label>
         `}
+        ${hasWeight ? `
+          <label>
+            重量 kg（可不填）
+            <div class="focused-value-stepper">
+              <button id="decreaseFocusedWeightBtn" class="ghost-button" type="button" data-step="${weightStep}" aria-label="重量减少 ${weightStep} 千克">−${weightStep}</button>
+              <input id="focusedWeightValue" type="number" min="0" step="0.5" value="${escapeAttr(weightValue)}" inputmode="decimal">
+              <button id="increaseFocusedWeightBtn" class="ghost-button" type="button" data-step="${weightStep}" aria-label="重量增加 ${weightStep} 千克">+${weightStep}</button>
+            </div>
+          </label>
+        ` : ""}
       </div>
       <details class="focused-more-details">
         <summary>更多记录</summary>
@@ -2107,6 +2300,25 @@ function adjustFocusedValue(inputId, delta) {
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
+function refreshFocusedWeightStepControls() {
+  const input = $("focusedWeightValue");
+  if (!input) return;
+  const load = numberOrNull(input.value);
+  const step = load !== null && load > 0 && load <= 10 ? 1 : 2.5;
+  const decrease = $("decreaseFocusedWeightBtn");
+  const increase = $("increaseFocusedWeightBtn");
+  if (decrease) {
+    decrease.dataset.step = String(step);
+    decrease.textContent = `−${step}`;
+    decrease.setAttribute("aria-label", `重量减少 ${step} 千克`);
+  }
+  if (increase) {
+    increase.dataset.step = String(step);
+    increase.textContent = `+${step}`;
+    increase.setAttribute("aria-label", `重量增加 ${step} 千克`);
+  }
+}
+
 function extendFocusedRest() {
   if (!activeWorkoutSession?.companion?.rest) return;
   activeWorkoutSession = WorkoutSessionModel.adjustRest(activeWorkoutSession, 30);
@@ -2122,6 +2334,16 @@ function resetFocusedRest() {
   persistWorkoutDraft();
   refreshFocusedRestDisplay();
   startFocusedRestTicker();
+}
+
+function toggleFocusedRest() {
+  if (!activeWorkoutSession?.companion?.rest) return;
+  activeWorkoutSession = WorkoutSessionModel.isRestPaused(activeWorkoutSession)
+    ? WorkoutSessionModel.resumeRest(activeWorkoutSession)
+    : WorkoutSessionModel.pauseRest(activeWorkoutSession);
+  persistWorkoutDraft();
+  renderFocusedWorkoutSession();
+  $("toggleFocusedRestBtn")?.focus();
 }
 
 function skipFocusedRest() {
@@ -2159,7 +2381,10 @@ function completeFocusedSet() {
   focusedSetCompletionLocked = true;
   window.setTimeout(() => { focusedSetCompletionLocked = false; }, 350);
   const completedId = current.set.id;
-  activeWorkoutSession = WorkoutSessionModel.completeSet(activeWorkoutSession, completedId, focusedActualPatch(), { now: new Date().toISOString() });
+  activeWorkoutSession = WorkoutSessionModel.completeSet(activeWorkoutSession, completedId, focusedActualPatch(), {
+    now: new Date().toISOString(),
+    restDurationSeconds: restDurationForCurrentSet(current)
+  });
   activeWorkoutSession = WorkoutSessionModel.prefillCurrentWeight(activeWorkoutSession);
   lastCompletedSetId = completedId;
   lastRestAlertKey = "";
@@ -2507,8 +2732,8 @@ function saveFirstWorkoutSetup(event) {
   const experienceLevel = form.get("firstWorkoutExperience");
   const trainingGoal = form.get("firstWorkoutGoal");
   const conditionMap = {
-    bodyweight: { preferredEnvironment: "home", availableEquipment: "bodyweight", starterTemplateId: "starter_home_bodyweight" },
-    dumbbells: { preferredEnvironment: "mixed", availableEquipment: "dumbbells", starterTemplateId: "starter_dumbbell_full_body" },
+    bodyweight: { preferredEnvironment: "home_bodyweight", availableEquipment: "bodyweight", starterTemplateId: "starter_home_bodyweight" },
+    dumbbells: { preferredEnvironment: "home_dumbbell", availableEquipment: "dumbbells", starterTemplateId: "starter_dumbbell_full_body" },
     machines: { preferredEnvironment: "gym", availableEquipment: "machines", starterTemplateId: "starter_gym_machines" },
     free_weights: { preferredEnvironment: "gym", availableEquipment: "free_weights", starterTemplateId: "starter_free_weights" }
   };
@@ -2919,6 +3144,7 @@ function renderPreferences() {
   });
   $("waterTargetMl").value = state.settings.waterTargetMl;
   $("conservativeMode").checked = state.settings.conservativeMode;
+  $("hapticsEnabled").checked = state.settings.hapticsEnabled;
   $("dailyReminderEnabled").checked = state.settings.dailyReminderEnabled;
   $("dailyReminderTime").value = state.settings.dailyReminderTime;
   $("workoutReminderEnabled").checked = state.settings.workoutReminderEnabled;
@@ -2975,12 +3201,14 @@ function collectRotationDays() {
 
 function renderTrainingRotationSummary(mode, days) {
   const labels = days.map(day => day.label).join(" → ");
-  const fullBodyTemplate = starterTemplateForSettings();
+  const fullBodyTemplates = TrainingRotationModel.routineTemplateIds(state.settings.preferredEnvironment, state.settings.availableEquipment)
+    .map(id => getAllTemplates().find(template => template.id === id))
+    .filter(Boolean);
   const descriptions = {
-    full_body: fullBodyTemplate
-      ? `适合每周 1–2 次：每次回到「${fullBodyTemplate.name}」。`
-      : "适合每周 1–2 次：每次回到同一套全身训练。",
-    upper_lower: "适合每周 2–4 次：上肢和下肢依次轮换。",
+    full_body: fullBodyTemplates.length === 2
+      ? `适合每周 1–3 次：${fullBodyTemplates.map(template => template.name).join(" → ")} 交替。`
+      : "适合每周 1–3 次：全身 A 与全身 B 交替。",
+    upper_lower: "适合每周 2–4 次：上肢 A → 下肢 A → 上肢 B → 下肢 B。",
     custom: labels ? `当前顺序：${labels}` : "添加 2–6 个训练日，建立自己的顺序。"
   };
   $("trainingRotationSummary").textContent = descriptions[mode] || descriptions.full_body;
@@ -3052,15 +3280,17 @@ function savePreferences() {
   const previousRotationSignature = JSON.stringify({
     mode: state.settings.trainingRotation.mode,
     days: state.settings.trainingRotation.days.map(day => [day.templateId, day.label]),
-    starterTemplateId: state.settings.starterTemplateId
+    starterTemplateId: state.settings.starterTemplateId,
+    trainingGoal: state.settings.trainingGoal,
+    preferredEnvironment: state.settings.preferredEnvironment
   });
   const availableEquipment = $("availableEquipment").value;
   const experienceLevel = $("experienceLevel").value;
   const selectedEnvironment = $("preferredEnvironment").value;
   const preferredEnvironment = availableEquipment === "bodyweight"
-    ? "home"
+    ? "home_bodyweight"
     : availableEquipment === "dumbbells"
-      ? "mixed"
+      ? selectedEnvironment === "gym" ? "gym" : selectedEnvironment === "mixed" ? "mixed" : "home_dumbbell"
     : ["machines", "free_weights"].includes(availableEquipment)
       ? "gym"
       : selectedEnvironment;
@@ -3094,6 +3324,7 @@ function savePreferences() {
     },
     waterTargetMl: $("waterTargetMl").value,
     conservativeMode: $("conservativeMode").checked,
+    hapticsEnabled: $("hapticsEnabled").checked,
     dailyReminderEnabled: $("dailyReminderEnabled").checked,
     dailyReminderTime: $("dailyReminderTime").value,
     workoutReminderEnabled: $("workoutReminderEnabled").checked,
@@ -3102,7 +3333,9 @@ function savePreferences() {
   const nextRotationSignature = JSON.stringify({
     mode: state.settings.trainingRotation.mode,
     days: state.settings.trainingRotation.days.map(day => [day.templateId, day.label]),
-    starterTemplateId: state.settings.starterTemplateId
+    starterTemplateId: state.settings.starterTemplateId,
+    trainingGoal: state.settings.trainingGoal,
+    preferredEnvironment: state.settings.preferredEnvironment
   });
   if (previousRotationSignature !== nextRotationSignature && state.nextWorkoutPlan?.status !== "started") {
     const sourceWorkout = sourceWorkoutForNextPlan() || state.workouts.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
@@ -3849,7 +4082,7 @@ function buildPersonalTrainingPatterns() {
     ready: true,
     confidenceLabel,
     summary: observations.length
-      ? `已从 ${dataset.length} 个同时记录训练与恢复状态的日子中，找出少量值得留意的共同变化。`
+      ? `已获得 7 个有效观察日，可以查看初步规律。当前基于 ${dataset.length} 个有效观察日。`
       : `已有 ${dataset.length} 个有效观察日，但暂未出现足够一致的变化。继续记录比强行下结论更可靠。`,
     dataCoverage,
     missing,
@@ -5603,7 +5836,8 @@ function buildDailyCoachRecommendation() {
     reasons.push(state.settings.experienceLevel === "experienced"
       ? "你已训练过一段时间，第一轮先用熟悉的轻重量校准后续建议。"
       : "你刚开始训练，这套方案会用少量基础动作建立完成感。");
-    reasons.push(`当前目标：${goalLabel()}；第一套训练先建立与目标一致的基础节奏。`);
+    reasons.push(environmentPrescriptionReason(template));
+    reasons.push(goalPrescriptionReason(template));
     return {
       statusKey: "starter",
       statusLabel: "新手默认方案",
@@ -5652,8 +5886,6 @@ function buildDailyCoachRecommendation() {
   }
 
   if (water < waterTarget * 0.75) reasons.push(`饮水 ${water} ml 低于目标 ${waterTarget} ml，训练前先补一次水。`);
-  if (state.settings.trainingGoal !== "general") reasons.push(`当前目标：${goalLabel()}，建议会优先考虑这个方向。`);
-  if (state.settings.preferredEnvironment !== "gym") reasons.push(`训练环境偏好：${environmentLabel()}。`);
   if (state.settings.experienceLevel === "experienced") reasons.push("你已训练过一段时间，建议从保守一档的熟悉重量开始校准。");
   if (!recentWorkouts.length) reasons.push("还没有训练历史，系统先推荐新手友好的基础模板。");
   if (hardWorkouts.length && statusKey !== "recovery") reasons.push(`最近 7 天有 ${hardWorkouts.length} 次高 RPE 训练，今天不建议冲极限。`);
@@ -5664,7 +5896,7 @@ function buildDailyCoachRecommendation() {
     statusLabel: "已根据今天状态调整",
     template,
     summary,
-    reasons: reasons.slice(0, 3),
+    reasons: [environmentPrescriptionReason(template), goalPrescriptionReason(template), ...reasons].slice(0, 3),
     caution,
     intensityText,
     durationText: `${template.duration} 分钟`
@@ -5677,8 +5909,8 @@ function pickRotationTemplate() {
 }
 
 function pickBeginnerTemplate(mode, latestWorkout = null) {
-  if (mode === "recovery") return beginnerTemplates.find(item => item.id === "beginner_recovery");
-  if (mode === "light") return beginnerTemplates.find(item => item.id === "beginner_full_body");
+  if (mode === "recovery") return TrainingRotationModel.applyGoalPrescription(beginnerTemplates.find(item => item.id === "beginner_recovery"), "recovery");
+  if (mode === "light") return pickRotationTemplate();
   const latestTitle = `${latestWorkout?.title || ""} ${latestWorkout?.exercises?.map(item => item.name).join(" ") || ""}`;
   if (/上肢|卧推|肩推|下拉|划船/.test(latestTitle)) {
     return beginnerTemplates.find(item => item.id === "beginner_lower");
@@ -6486,10 +6718,41 @@ function exportData() {
 
 function buildBackupPayload() {
   return {
-    ...state,
+    ...buildCloudSnapshot(),
     schemaVersion: BACKUP_SCHEMA_VERSION,
     exportedAt: state.settings.lastBackupAt || new Date().toISOString()
   };
+}
+
+function buildCloudSnapshot() {
+  // Export bookkeeping is intentionally local-only.  In particular, manually
+  // exporting a file must not make an otherwise identical cloud record dirty.
+  const settings = { ...state.settings };
+  delete settings.lastBackupAt;
+  const normalized = normalizeImportedState({
+    dailyLogs: state.dailyLogs,
+    workouts: state.workouts,
+    exercises: state.exercises,
+    templates: state.templates,
+    adviceHistory: state.adviceHistory,
+    settings,
+    nextWorkoutPlan: state.nextWorkoutPlan
+  });
+  return cloudSnapshotFromNormalized(normalized);
+}
+
+function cloudSnapshotFromNormalized(normalized) {
+  const snapshot = {
+    dailyLogs: normalized.dailyLogs,
+    workouts: normalized.workouts,
+    exercises: normalized.exercises,
+    templates: normalized.templates,
+    adviceHistory: normalized.adviceHistory,
+    settings: normalized.settings,
+    nextWorkoutPlan: normalized.nextWorkoutPlan,
+    schemaVersion: BACKUP_SCHEMA_VERSION
+  };
+  return JSON.parse(CloudSyncModel.serializeSnapshot(snapshot));
 }
 
 function exportCsvSummary() {
@@ -6981,7 +7244,7 @@ function workoutMigrationFingerprint(workout) {
   ]);
 }
 
-function validateImportPayload(imported, fileName = "backup.json") {
+function validateImportPayload(imported, fileName = "backup.json", options = {}) {
   const issues = [];
   if (!imported || typeof imported !== "object" || Array.isArray(imported)) {
     return {
@@ -7028,7 +7291,7 @@ function validateImportPayload(imported, fileName = "backup.json") {
   if (invalidSets) issues.push(`${invalidSets} 个训练动作缺少组数据数组。`);
 
   const blockingIssues = issues.filter(issue => !issue.includes("没有发现"));
-  const canImport = issues.length === 0;
+  const canImport = issues.length === 0 || (options.allowEmpty === true && blockingIssues.length === 0);
   return {
     fileName,
     canImport,
@@ -7124,12 +7387,745 @@ function escapeAttr(value) {
   return escapeHtml(value);
 }
 
+function loadCloudSyncMetadata() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CLOUD_SYNC_METADATA_KEY) || "null");
+    return CloudSyncModel.normalizeMetadata(parsed || {});
+  } catch {
+    try {
+      localStorage.removeItem(CLOUD_SYNC_METADATA_KEY);
+    } catch {
+      // Local application data remains usable even if sync metadata storage is unavailable.
+    }
+    return CloudSyncModel.normalizeMetadata({});
+  }
+}
+
+function activeCloudAccountId() {
+  return accountSession.signedIn && typeof accountSession.user?.id === "string"
+    ? accountSession.user.id
+    : "";
+}
+
+function isExpectedCloudAccount(accountId, generation = cloudSyncGeneration) {
+  return Boolean(accountId)
+    && generation === cloudSyncGeneration
+    && activeCloudAccountId() === accountId;
+}
+
+function persistCloudSyncMetadata(nextMetadata = cloudSyncMetadata, expectedAccountId) {
+  if (expectedAccountId && !isExpectedCloudAccount(expectedAccountId)) return false;
+  cloudSyncMetadata = expectedAccountId
+    ? CloudSyncModel.normalizeMetadata(nextMetadata, expectedAccountId)
+    : CloudSyncModel.normalizeMetadata(nextMetadata);
+  try {
+    localStorage.setItem(CLOUD_SYNC_METADATA_KEY, JSON.stringify(cloudSyncMetadata));
+  } catch {
+    cloudSyncMetadata = CloudSyncModel.normalizeMetadata({
+      ...cloudSyncMetadata,
+      status: cloudSyncMetadata.enabled ? "error" : "disabled",
+      error: "同步状态无法保存在本机。"
+    }, cloudSyncMetadata.accountId);
+  }
+  renderAccountPanel();
+  renderCloudSyncPanel();
+  return true;
+}
+
+function prepareCloudSyncAccount(accountId) {
+  if (!accountId) return;
+  if (cloudSyncMetadata.accountId !== accountId) {
+    cloudSyncGeneration += 1;
+    clearCloudSyncWork();
+    cloudSyncMetadata = CloudSyncModel.normalizeMetadata({}, accountId);
+  } else {
+    cloudSyncMetadata = CloudSyncModel.normalizeMetadata(cloudSyncMetadata, accountId);
+  }
+  persistCloudSyncMetadata(cloudSyncMetadata, accountId);
+}
+
+function hasMeaningfulLocalCloudData() {
+  if (state.dailyLogs.length || state.workouts.length || state.templates.length || state.adviceHistory.length || state.nextWorkoutPlan) return true;
+  const currentExercises = state.exercises.map(item => ({ name: item.name, category: item.category, lastUsed: item.lastUsed || "" }));
+  const baselineExercises = mergeDefaultExercises([]).map(item => ({ name: item.name, category: item.category, lastUsed: item.lastUsed || "" }));
+  if (CloudSyncModel.serializeSnapshot(currentExercises) !== CloudSyncModel.serializeSnapshot(baselineExercises)) return true;
+  const defaultStateSettings = normalizeSettings({}, []);
+  return CloudSyncModel.serializeSnapshot(state.settings) !== CloudSyncModel.serializeSnapshot(defaultStateSettings);
+}
+
+async function cloudSyncApi(method = "GET", body) {
+  let response;
+  try {
+    response = await fetch("/api/account/sync-state", {
+      method,
+      headers: body === undefined ? undefined : { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      credentials: "same-origin"
+    });
+  } catch (cause) {
+    const error = new Error(navigator.onLine ? "暂时无法连接云端，稍后会自动重试。" : "当前离线，恢复网络后会自动同步。");
+    error.code = "NETWORK_ERROR";
+    error.cause = cause;
+    throw error;
+  }
+  let data = {};
+  try {
+    data = await response.json();
+  } catch {
+    data = {};
+  }
+  if (!response.ok) {
+    const messages = {
+      ACCOUNT_REQUIRED: "登录已失效；本机记录保持不变，请重新登录后继续同步。",
+      REVISION_CONFLICT: "另一台设备已更新云端备份，请选择要保留的版本。",
+      CLOUD_SYNC_UNAVAILABLE: "当前部署暂未提供云备份。",
+      CLOUD_SYNC_PROVIDER_TIMEOUT: "云端响应超时，稍后会自动重试。",
+      CLOUD_SYNC_PROVIDER_FAILURE: "云端暂时不可用，稍后会自动重试。",
+      CLOUD_SYNC_PROVIDER_INVALID: "云端返回的数据无法安全读取，本机记录未被改写。",
+      SYNC_PAYLOAD_TOO_LARGE: "记录超过云备份大小限制，请先导出本地备份。",
+      RATE_LIMITED: "同步操作较频繁，请稍后重试。"
+    };
+    const error = new Error(messages[data.code] || "云备份暂时不可用，本机记录不受影响。");
+    error.code = data.code || "CLOUD_SYNC_FAILED";
+    error.status = response.status;
+    error.conflict = data.conflict || null;
+    const retryAfter = Number(response.headers.get("retry-after"));
+    if (Number.isFinite(retryAfter) && retryAfter >= 0) error.retryAfterMs = retryAfter * 1000;
+    throw error;
+  }
+  return data;
+}
+
+function clearCloudSyncRetry() {
+  window.clearTimeout(cloudSyncRetryTimer);
+  cloudSyncRetryTimer = null;
+  cloudSyncRetryAttempt = 0;
+}
+
+function clearCloudSyncWork() {
+  window.clearTimeout(cloudSyncTimer);
+  cloudSyncTimer = null;
+  clearCloudSyncRetry();
+}
+
+function retryCloudSyncDelay(error) {
+  const injected = window.__whatToDrillCloudSyncRetryConfig || {};
+  const base = Math.max(1, Number(injected.baseMs) || CLOUD_SYNC_RETRY_BASE_MS);
+  const maximum = Math.max(base, Number(injected.maxMs) || CLOUD_SYNC_RETRY_MAX_MS);
+  const jitter = Math.min(1, Math.max(0, Number(injected.jitter) || CLOUD_SYNC_RETRY_JITTER));
+  const exponential = Math.min(maximum, base * (2 ** cloudSyncRetryAttempt));
+  const random = typeof injected.random === "function" ? injected.random() : Math.random();
+  const jittered = Math.round(exponential * (1 + ((Math.max(0, Math.min(1, random)) * 2 - 1) * jitter)));
+  return Math.max(0, Number.isFinite(error?.retryAfterMs) ? error.retryAfterMs : jittered);
+}
+
+function shouldRetryCloudSync(error) {
+  return navigator.onLine && Boolean(error) && (
+    error.code === "NETWORK_ERROR"
+    || error.code === "CLOUD_SYNC_PROVIDER_FAILURE"
+    || error.code === "CLOUD_SYNC_PROVIDER_TIMEOUT"
+    || error.code === "RATE_LIMITED"
+    || [502, 503, 504, 429].includes(error.status)
+  );
+}
+
+function scheduleCloudSyncRetry(error, accountId, generation) {
+  if (!shouldRetryCloudSync(error)
+    || !isExpectedCloudAccount(accountId, generation)
+    || !cloudSyncMetadata.enabled
+    || cloudSyncMetadata.conflict
+    || cloudSyncRetryTimer) return;
+  const delay = retryCloudSyncDelay(error);
+  cloudSyncRetryAttempt += 1;
+  cloudSyncRetryTimer = window.setTimeout(() => {
+    cloudSyncRetryTimer = null;
+    if (isExpectedCloudAccount(accountId, generation) && cloudSyncMetadata.enabled && !cloudSyncMetadata.conflict && navigator.onLine) {
+      if (cloudSyncMetadata.localResetPending) enableCloudSync();
+      else syncCloudNow();
+    }
+  }, delay);
+  renderCloudSyncPanel();
+}
+
+function runCloudSyncOperation(operation, { queueAfterCurrent = false } = {}) {
+  // Every mutating/interactive sync action shares one flight. Returning the
+  // same promise gives rapid button presses a true dedupe rather than a queue.
+  if (cloudSyncInFlight) {
+    if (!queueAfterCurrent) return cloudSyncInFlight;
+    if (cloudSyncQueuedOperation) return cloudSyncQueuedOperation;
+    cloudSyncQueuedOperation = cloudSyncInFlight
+      .catch(() => undefined)
+      .then(() => runCloudSyncOperation(operation))
+      .finally(() => { cloudSyncQueuedOperation = null; });
+    return cloudSyncQueuedOperation;
+  }
+  cloudSyncBusy = true;
+  renderCloudSyncPanel();
+  const current = Promise.resolve()
+    .then(operation)
+    .finally(() => {
+      if (cloudSyncInFlight === current) {
+        cloudSyncInFlight = null;
+        cloudSyncBusy = false;
+        renderCloudSyncPanel();
+      }
+    });
+  cloudSyncInFlight = current;
+  return current;
+}
+
+function describeRemoteConflict(remote, code = "REVISION_CONFLICT") {
+  return {
+    revision: Number.isSafeInteger(remote?.revision) ? remote.revision : 0,
+    checksum: remote?.exists === false ? "" : String(remote?.checksum || ""),
+    exists: remote?.exists !== false,
+    detectedAt: new Date().toISOString(),
+    code
+  };
+}
+
+function markCloudSyncFailure(error, accountId, generation) {
+  if (!isExpectedCloudAccount(accountId, generation) || !cloudSyncMetadata.enabled) return;
+  if (error?.code === "REVISION_CONFLICT" && error.conflict) {
+    try {
+      persistCloudSyncMetadata(CloudSyncModel.markConflict(
+        cloudSyncMetadata,
+        describeRemoteConflict(error.conflict),
+        { expectedAccountId: accountId }
+      ), accountId);
+      return;
+    } catch {
+      // Fall through to a non-destructive failure state.
+    }
+  }
+  try {
+    persistCloudSyncMetadata(CloudSyncModel.markFailure(
+      cloudSyncMetadata,
+      error,
+      { expectedAccountId: accountId, offline: !navigator.onLine || error?.code === "NETWORK_ERROR" }
+    ), accountId);
+    scheduleCloudSyncRetry(error, accountId, generation);
+  } catch {
+    // An account transition makes the stale result irrelevant.
+  }
+}
+
+async function refreshCloudLocalChecksum(accountId, generation) {
+  const snapshot = buildCloudSnapshot();
+  const checksum = await CloudSyncModel.snapshotChecksum(snapshot);
+  if (!isExpectedCloudAccount(accountId, generation)) return null;
+  const next = CloudSyncModel.markLocalChange(cloudSyncMetadata, checksum, accountId);
+  persistCloudSyncMetadata(next, accountId);
+  return { snapshot, checksum };
+}
+
+function queueCloudPush({ immediate = false } = {}) {
+  const accountId = activeCloudAccountId();
+  if (cloudSyncApplyingRemote
+    || IS_STATIC_HOSTED_APP
+    || !cloudSyncConfigured
+    || !accountId
+    || !cloudSyncMetadata.enabled
+    || cloudSyncMetadata.accountId !== accountId
+    || cloudSyncMetadata.conflict) return;
+  window.clearTimeout(cloudSyncTimer);
+  cloudSyncTimer = window.setTimeout(() => {
+    cloudSyncTimer = null;
+    pushCloudState();
+  }, immediate ? 0 : CLOUD_SYNC_DEBOUNCE_MS);
+}
+
+async function pushCloudState() {
+  return runCloudSyncOperation(pushCloudStateNow);
+}
+
+async function pushCloudStateNow(options = {}) {
+  const accountId = activeCloudAccountId();
+  const generation = cloudSyncGeneration;
+  if (!cloudSyncConfigured || !accountId || !cloudSyncMetadata.enabled || cloudSyncMetadata.accountId !== accountId) return false;
+  try {
+    let local = await refreshCloudLocalChecksum(accountId, generation);
+    if (!local || !isExpectedCloudAccount(accountId, generation)) return false;
+    if (!options.resolveConflict && (cloudSyncMetadata.conflict || local.checksum === cloudSyncMetadata.remoteChecksum)) return false;
+
+    const conflict = cloudSyncMetadata.conflict;
+    const beginOptions = options.resolveConflict === "keep-local" && conflict ? {
+      expectedAccountId: accountId,
+      resolveConflict: "keep-local",
+      conflictRevision: conflict.revision,
+      conflictChecksum: conflict.checksum,
+      remoteRevision: options.remoteRevision,
+      remoteChecksum: options.remoteChecksum,
+      remoteExists: options.remoteExists
+    } : { expectedAccountId: accountId };
+    const syncing = CloudSyncModel.beginSync(cloudSyncMetadata, beginOptions);
+    persistCloudSyncMetadata(syncing, accountId);
+    const payload = JSON.parse(CloudSyncModel.serializeSnapshot(local.snapshot));
+    const baseRevision = options.resolveConflict === "keep-local" ? options.remoteRevision : syncing.revision;
+    const response = await cloudSyncApi("PUT", {
+      baseRevision,
+      schemaVersion: BACKUP_SCHEMA_VERSION,
+      checksum: local.checksum,
+      payload
+    });
+    if (!isExpectedCloudAccount(accountId, generation)) return false;
+    const completionOptions = options.resolveConflict === "keep-local" ? {
+      expectedAccountId: accountId,
+      resolveConflict: "keep-local",
+      conflictRevision: syncing.conflict.revision,
+      conflictChecksum: syncing.conflict.checksum
+    } : { expectedAccountId: accountId };
+    persistCloudSyncMetadata(CloudSyncModel.completePush(syncing, {
+      revision: response.revision,
+      checksum: response.checksum,
+      syncedAt: response.updatedAt
+    }, completionOptions), accountId);
+    clearCloudSyncRetry();
+
+    const latestSnapshot = buildCloudSnapshot();
+    const latestChecksum = await CloudSyncModel.snapshotChecksum(latestSnapshot);
+    if (!isExpectedCloudAccount(accountId, generation)) return false;
+    if (latestChecksum !== local.checksum) {
+      persistCloudSyncMetadata(CloudSyncModel.markLocalChange(cloudSyncMetadata, latestChecksum, accountId), accountId);
+      queueCloudPush({ immediate: true });
+    }
+    return true;
+  } catch (error) {
+    markCloudSyncFailure(error, accountId, generation);
+    return false;
+  }
+}
+
+function validateRemoteCloudSnapshot(remote) {
+  if (!remote || remote.exists !== true || !remote.payload || typeof remote.payload !== "object" || Array.isArray(remote.payload)) {
+    throw new Error("云端备份结构无效，本机记录未被改写。");
+  }
+  if (!Number.isSafeInteger(remote.schemaVersion) || remote.schemaVersion > BACKUP_SCHEMA_VERSION) {
+    const error = new Error("云端备份来自更高版本应用，请先升级；本机记录未被改写。");
+    error.code = "UNSUPPORTED_SCHEMA";
+    throw error;
+  }
+  const preview = validateImportPayload(remote.payload, "cloud-backup.json", { allowEmpty: true });
+  if (!preview.canImport) throw new Error("云端备份无法通过本机校验，本机记录未被改写。");
+  const normalized = normalizeImportedState(remote.payload);
+  return { normalized, snapshot: cloudSnapshotFromNormalized(normalized) };
+}
+
+function applyNormalizedCloudState(normalized) {
+  cloudSyncApplyingRemote = true;
+  try {
+    Object.keys(state).forEach(key => delete state[key]);
+    Object.assign(state, normalized);
+    clearWorkoutDraft();
+    activeWorkoutSession = null;
+    lastCompletedSetId = null;
+    persistState();
+    clearWorkoutForm();
+    renderAll();
+  } finally {
+    cloudSyncApplyingRemote = false;
+  }
+}
+
+async function pullCloudState(options = {}) {
+  return runCloudSyncOperation(() => pullCloudStateNow(options));
+}
+
+async function pullCloudStateNow(options = {}) {
+  const accountId = activeCloudAccountId();
+  const generation = cloudSyncGeneration;
+  if (!cloudSyncConfigured || !accountId || !cloudSyncMetadata.enabled || cloudSyncMetadata.accountId !== accountId) return false;
+  try {
+    let local = await refreshCloudLocalChecksum(accountId, generation);
+    if (!local || !isExpectedCloudAccount(accountId, generation)) return false;
+    const remote = await cloudSyncApi("GET");
+    if (!isExpectedCloudAccount(accountId, generation)) return false;
+
+    // A GET is not a lock on the local record.  Rebuild from live state after
+    // it returns, before we even consider replacing local data.  A user edit
+    // during the request is never silently overwritten by a remote response.
+    const afterGetLocal = await refreshCloudLocalChecksum(accountId, generation);
+    if (!afterGetLocal || !isExpectedCloudAccount(accountId, generation)) return false;
+    if (afterGetLocal.checksum !== local.checksum) {
+      if (remote.exists || remote.revision > cloudSyncMetadata.revision) {
+        persistCloudSyncMetadata(CloudSyncModel.markConflict(
+          cloudSyncMetadata,
+          describeRemoteConflict(remote),
+          { expectedAccountId: accountId }
+        ), accountId);
+        return false;
+      }
+      // No cloud record has ever existed, so there is nothing that could have
+      // overwritten the newer local change.  Continue using the newest one.
+      local = afterGetLocal;
+    }
+
+    if (!remote.exists) {
+      if (remote.revision > cloudSyncMetadata.revision) {
+        // `refreshCloudLocalChecksum` deliberately marks the UI pending while
+        // a pull is in progress, so `pending` alone cannot identify a dirty
+        // device here.  Compare against the last acknowledged remote record.
+        const localChangedSinceLastRemote = Boolean(cloudSyncMetadata.remoteChecksum)
+          && local.checksum !== cloudSyncMetadata.remoteChecksum;
+        if (localChangedSinceLastRemote) {
+          persistCloudSyncMetadata(CloudSyncModel.markConflict(
+            cloudSyncMetadata,
+            describeRemoteConflict(remote),
+            { expectedAccountId: accountId }
+          ), accountId);
+          return false;
+        }
+        cloudSyncGeneration += 1;
+        clearCloudSyncWork();
+        cloudSyncMetadata = CloudSyncModel.normalizeMetadata({
+          ...cloudSyncMetadata,
+          enabled: false,
+          revision: remote.revision,
+          remoteChecksum: "",
+          conflict: null,
+          status: "disabled"
+        }, accountId);
+        persistCloudSyncMetadata(cloudSyncMetadata);
+        showToast("云端备份已在其他设备删除；本机记录保留，自动同步已停止。 ");
+        return true;
+      }
+      cloudSyncMetadata = CloudSyncModel.normalizeMetadata({
+        ...cloudSyncMetadata,
+        revision: remote.revision,
+        remoteChecksum: "",
+        status: local.checksum ? "pending" : "synced"
+      }, accountId);
+      persistCloudSyncMetadata(cloudSyncMetadata, accountId);
+      if (options.allowPush !== false) return pushCloudStateNow();
+      return true;
+    }
+
+    const rawChecksum = await CloudSyncModel.snapshotChecksum(remote.payload);
+    if (!isExpectedCloudAccount(accountId, generation)) return false;
+    if (rawChecksum !== remote.checksum) throw new Error("云端备份校验失败，本机记录未被改写。");
+    const prepared = validateRemoteCloudSnapshot(remote);
+    const normalizedChecksum = await CloudSyncModel.snapshotChecksum(prepared.snapshot);
+    if (!isExpectedCloudAccount(accountId, generation)) return false;
+    if (normalizedChecksum !== remote.checksum) throw new Error("云端备份规范化后校验失败，本机记录未被改写。");
+    const beforeApplyLocal = await refreshCloudLocalChecksum(accountId, generation);
+    if (!beforeApplyLocal || !isExpectedCloudAccount(accountId, generation)) return false;
+    if (beforeApplyLocal.checksum !== local.checksum) {
+      persistCloudSyncMetadata(CloudSyncModel.markConflict(
+        cloudSyncMetadata,
+        describeRemoteConflict(remote),
+        { expectedAccountId: accountId }
+      ), accountId);
+      return false;
+    }
+
+    const freshDevice = !hasMeaningfulLocalCloudData() && cloudSyncMetadata.revision === 0;
+    const pullBase = freshDevice
+      ? CloudSyncModel.normalizeMetadata({
+          ...cloudSyncMetadata,
+          localChecksum: cloudSyncMetadata.remoteChecksum,
+          status: "synced",
+          pending: false
+        }, accountId)
+      : cloudSyncMetadata;
+    const nextMetadata = CloudSyncModel.completePull(pullBase, {
+      revision: remote.revision,
+      schemaVersion: remote.schemaVersion,
+      checksum: remote.checksum,
+      syncedAt: remote.updatedAt
+    }, { expectedAccountId: accountId });
+    if (nextMetadata.conflict) {
+      persistCloudSyncMetadata(nextMetadata, accountId);
+      return false;
+    }
+    if (remote.revision > cloudSyncMetadata.revision || freshDevice) applyNormalizedCloudState(prepared.normalized);
+    persistCloudSyncMetadata(nextMetadata, accountId);
+    clearCloudSyncRetry();
+    return true;
+  } catch (error) {
+    markCloudSyncFailure(error, accountId, generation);
+    return false;
+  }
+}
+
+async function enableCloudSync() {
+  return runCloudSyncOperation(enableCloudSyncNow);
+}
+
+async function enableCloudSyncNow() {
+  const accountId = activeCloudAccountId();
+  if (!accountId || !cloudSyncConfigured || IS_STATIC_HOSTED_APP) return;
+  prepareCloudSyncAccount(accountId);
+  const generation = cloudSyncGeneration;
+  try {
+    const snapshot = buildCloudSnapshot();
+    const checksum = await CloudSyncModel.snapshotChecksum(snapshot);
+    if (!isExpectedCloudAccount(accountId, generation)) return;
+    persistCloudSyncMetadata(CloudSyncModel.normalizeMetadata({
+      ...cloudSyncMetadata,
+      accountId,
+      enabled: true,
+      localChecksum: checksum,
+      status: "pending"
+    }, accountId), accountId);
+    // A reset is deliberately non-destructive.  Re-enabling on the empty
+    // device may only inspect an active remote backup; it must never push an
+    // empty snapshot until the user picks the explicit overwrite action.
+    if (cloudSyncMetadata.localResetPending) {
+      const remote = await cloudSyncApi("GET");
+      if (!isExpectedCloudAccount(accountId, generation)) return;
+      if (remote.exists) {
+        persistCloudSyncMetadata(CloudSyncModel.markConflict(
+          cloudSyncMetadata,
+          describeRemoteConflict(remote, "LOCAL_RESET"),
+          { expectedAccountId: accountId }
+        ), accountId);
+        return;
+      }
+    }
+    await pullCloudStateNow({ allowPush: true });
+  } catch (error) {
+    markCloudSyncFailure(error, accountId, generation);
+  }
+}
+
+function disableCloudSync() {
+  const accountId = activeCloudAccountId();
+  if (!accountId || cloudSyncMetadata.accountId !== accountId) return;
+  cloudSyncGeneration += 1;
+  clearCloudSyncWork();
+  cloudSyncMetadata = CloudSyncModel.normalizeMetadata({ ...cloudSyncMetadata, enabled: false }, accountId);
+  persistCloudSyncMetadata(cloudSyncMetadata);
+  showToast("已停止自动云备份；本机和云端已有数据都保留。 ");
+}
+
+async function syncCloudNow() {
+  return runCloudSyncOperation(syncCloudNowNow);
+}
+
+async function syncCloudNowNow() {
+  const accountId = activeCloudAccountId();
+  const generation = cloudSyncGeneration;
+  const pulled = await pullCloudStateNow({ allowPush: false });
+  if (!isExpectedCloudAccount(accountId, generation)) return;
+  if (pulled && !cloudSyncMetadata.conflict && cloudSyncMetadata.pending) {
+    await pushCloudStateNow();
+    if (!isExpectedCloudAccount(accountId, generation)) return;
+  }
+}
+
+async function resolveCloudConflict(choice) {
+  // A just-finished pull can still be unwinding its promise when the user
+  // chooses a conflict action. Queue this explicit choice after it rather than
+  // accidentally returning the stale pull promise.
+  return runCloudSyncOperation(() => resolveCloudConflictNow(choice), { queueAfterCurrent: true });
+}
+
+async function resolveCloudConflictNow(choice) {
+  const accountId = activeCloudAccountId();
+  const generation = cloudSyncGeneration;
+  const conflict = cloudSyncMetadata.conflict;
+  if (!accountId || !conflict || cloudSyncMetadata.accountId !== accountId) return;
+  try {
+    const remote = await cloudSyncApi("GET");
+    if (!isExpectedCloudAccount(accountId, generation)) return;
+    const descriptor = describeRemoteConflict(remote);
+    if (descriptor.revision < conflict.revision) throw new Error("云端版本已变化，请重新同步后再选择。");
+    if (descriptor.revision !== conflict.revision
+      || descriptor.exists !== (conflict.exists !== false)
+      || descriptor.checksum !== conflict.checksum) {
+      persistCloudSyncMetadata(CloudSyncModel.markConflict(
+        cloudSyncMetadata,
+        descriptor,
+        { expectedAccountId: accountId }
+      ), accountId);
+      showToast("云端版本刚刚又发生变化，请查看状态后再次确认。 ");
+      return;
+    }
+
+    if (choice === "use-cloud") {
+      if (!remote.exists) {
+        cloudSyncMetadata = CloudSyncModel.normalizeMetadata({
+          ...cloudSyncMetadata,
+          enabled: false,
+          revision: remote.revision,
+          remoteChecksum: "",
+          conflict: null,
+          status: "disabled"
+        }, accountId);
+        clearCloudSyncWork();
+        persistCloudSyncMetadata(cloudSyncMetadata, accountId);
+        showToast("云端备份已被删除；本机记录保留，自动同步已停止。 ");
+        return;
+      }
+      if (descriptor.revision !== conflict.revision || descriptor.checksum !== conflict.checksum) {
+        persistCloudSyncMetadata(CloudSyncModel.markConflict(
+          cloudSyncMetadata,
+          descriptor,
+          { expectedAccountId: accountId }
+        ), accountId);
+        return;
+      }
+      const rawChecksum = await CloudSyncModel.snapshotChecksum(remote.payload);
+      if (!isExpectedCloudAccount(accountId, generation)) return;
+      const prepared = validateRemoteCloudSnapshot(remote);
+      const normalizedChecksum = await CloudSyncModel.snapshotChecksum(prepared.snapshot);
+      if (!isExpectedCloudAccount(accountId, generation)) return;
+      if (rawChecksum !== remote.checksum || normalizedChecksum !== remote.checksum) throw new Error("云端备份校验失败，本机记录未被改写。");
+      const next = CloudSyncModel.completePull(cloudSyncMetadata, {
+        revision: remote.revision,
+        schemaVersion: remote.schemaVersion,
+        checksum: remote.checksum,
+        syncedAt: remote.updatedAt
+      }, {
+        expectedAccountId: accountId,
+        resolveConflict: "use-cloud",
+        conflictRevision: conflict.revision,
+        conflictChecksum: conflict.checksum
+      });
+      if (!isExpectedCloudAccount(accountId, generation)) return;
+      applyNormalizedCloudState(prepared.normalized);
+      persistCloudSyncMetadata(next, accountId);
+      showToast("已使用云端版本，本机草稿未覆盖云端数据。 ");
+      return;
+    }
+
+    const refreshed = CloudSyncModel.markConflict(
+      cloudSyncMetadata,
+      descriptor,
+      { expectedAccountId: accountId }
+    );
+    persistCloudSyncMetadata(refreshed, accountId);
+    await pushCloudStateNow({
+      resolveConflict: "keep-local",
+      remoteRevision: descriptor.revision,
+      remoteChecksum: descriptor.checksum,
+      remoteExists: descriptor.exists
+    });
+    if (!isExpectedCloudAccount(accountId, generation)) return;
+    if (!cloudSyncMetadata.conflict) showToast("已保留本机版本并更新云端备份。 ");
+  } catch (error) {
+    markCloudSyncFailure(error, accountId, generation);
+  }
+}
+
+function openDeleteCloudDialog() {
+  const dialog = $("deleteCloudDataDialog");
+  if (typeof dialog.showModal === "function") dialog.showModal();
+  else dialog.setAttribute("open", "");
+  $("cancelDeleteCloudDataBtn").focus();
+}
+
+function closeDeleteCloudDialog() {
+  const dialog = $("deleteCloudDataDialog");
+  if (typeof dialog.close === "function") dialog.close();
+  else dialog.removeAttribute("open");
+}
+
+async function deleteCloudData() {
+  // Stop scheduled work before joining the current operation.  The mutex then
+  // waits for a running PUT and performs DELETE after it, never alongside it.
+  clearCloudSyncWork();
+  return runCloudSyncOperation(deleteCloudDataNow, { queueAfterCurrent: true });
+}
+
+async function deleteCloudDataNow() {
+  const accountId = activeCloudAccountId();
+  const generation = cloudSyncGeneration;
+  if (!accountId || cloudSyncMetadata.accountId !== accountId) return;
+  try {
+    const remote = await cloudSyncApi("GET");
+    if (!isExpectedCloudAccount(accountId, generation)) return;
+    const result = await cloudSyncApi("DELETE", { baseRevision: remote.revision });
+    if (!isExpectedCloudAccount(accountId, generation)) return;
+    cloudSyncGeneration += 1;
+    clearCloudSyncWork();
+    cloudSyncMetadata = CloudSyncModel.normalizeMetadata({
+      ...cloudSyncMetadata,
+      enabled: false,
+      revision: result.revision,
+      remoteChecksum: "",
+      conflict: null,
+      status: "disabled"
+    }, accountId);
+    persistCloudSyncMetadata(cloudSyncMetadata);
+    closeDeleteCloudDialog();
+    showToast("云端备份已删除，本机记录保持不变。 ");
+  } catch (error) {
+    markCloudSyncFailure(error, accountId, generation);
+  }
+}
+
+function renderCloudSyncPanel() {
+  const panel = $("cloudSyncPanel");
+  if (!panel) return;
+  const accountId = activeCloudAccountId();
+  const canOffer = !IS_STATIC_HOSTED_APP && cloudSyncConfigured && accountSession.signedIn;
+  panel.hidden = !accountSession.signedIn;
+  if (panel.hidden) return;
+
+  const metadata = cloudSyncMetadata.accountId === accountId
+    ? cloudSyncMetadata
+    : CloudSyncModel.normalizeMetadata({}, accountId);
+  const labels = {
+    disabled: "未开启",
+    syncing: "同步中",
+    synced: "已备份",
+    pending: navigator.onLine ? "等待同步" : "离线待同步",
+    conflict: "有冲突",
+    error: "同步失败"
+  };
+  const status = $("cloudSyncStatus");
+  status.textContent = canOffer ? labels[metadata.status] || "未开启" : "仅本地";
+  status.className = `confidence-pill ${metadata.status === "synced" ? "high" : metadata.status === "pending" || metadata.status === "syncing" ? "medium" : "low"}`;
+  $("cloudSyncSummary").textContent = !canOffer
+    ? "当前部署只提供本地保存与手动导出，不会显示无法使用的云备份开关。"
+      : metadata.conflict?.code === "LOCAL_RESET"
+        ? "本机数据已清空，但云端仍有备份。请选择恢复云端到本机，或明确用空本机覆盖云端；系统不会自动上传空数据。"
+      : metadata.conflict
+      ? "云端和本机都发生了更改。自动写入已停止，请明确选择要保留的版本。"
+      : metadata.status === "pending"
+        ? (navigator.onLine ? "本机更改正在等待上传；期间可继续正常记录。" : "当前离线，本机更改已保留，联网后会自动重试。")
+        : metadata.status === "error"
+          ? (metadata.error || "同步失败；本机记录保持可用。")
+          : metadata.enabled
+            ? `自动云备份已开启${metadata.lastSyncedAt ? `；最近完成于 ${new Date(metadata.lastSyncedAt).toLocaleString("zh-CN")}` : "。"}`
+            : "云备份默认关闭。开启后会上传完整训练、状态、偏好与建议记录。";
+
+  $("enableCloudSyncBtn").hidden = !canOffer || metadata.enabled;
+  $("disableCloudSyncBtn").hidden = !canOffer || !metadata.enabled;
+  $("syncCloudNowBtn").hidden = !canOffer || !metadata.enabled || Boolean(metadata.conflict);
+  $("useCloudVersionBtn").hidden = !canOffer || !metadata.conflict;
+  $("keepLocalVersionBtn").hidden = !canOffer || !metadata.conflict;
+  if (metadata.conflict?.code === "LOCAL_RESET") {
+    $("useCloudVersionBtn").textContent = "恢复云端到本机";
+    $("keepLocalVersionBtn").textContent = "用空本机覆盖云端";
+  } else if (metadata.conflict?.exists === false) {
+    $("useCloudVersionBtn").textContent = "接受云端删除并停止同步";
+    $("keepLocalVersionBtn").textContent = "用本机记录重建云备份";
+  } else {
+    $("useCloudVersionBtn").textContent = "使用云端版本";
+    $("keepLocalVersionBtn").textContent = "保留本机并覆盖云端";
+  }
+  // A tombstone is already a completed deletion.  It is not an active backup
+  // and must not present a misleading, repeatable delete action.
+  $("deleteCloudDataBtn").hidden = !canOffer || !metadata.enabled || !metadata.remoteChecksum || Boolean(metadata.conflict);
+  const busy = cloudSyncBusy;
+  ["enableCloudSyncBtn", "disableCloudSyncBtn", "syncCloudNowBtn", "useCloudVersionBtn", "keepLocalVersionBtn", "deleteCloudDataBtn", "confirmDeleteCloudDataBtn"].forEach(id => {
+    const button = $(id);
+    if (!button) return;
+    button.disabled = busy;
+    button.setAttribute("aria-busy", busy ? "true" : "false");
+  });
+}
+
 async function checkAiStatus() {
   if (IS_STATIC_HOSTED_APP) {
     cloudAdviceConfigured = false;
+    cloudSyncConfigured = false;
     aiAccessMode = "deployment_shared";
     $("aiStatus").textContent = "本地建议模式";
     renderCloudConsentStatus();
+    renderCloudSyncPanel();
     renderProLongitudinalReport();
     return;
   }
@@ -7137,16 +8133,20 @@ async function checkAiStatus() {
     const response = await fetch("/api/health");
     const data = await response.json();
     cloudAdviceConfigured = Boolean(data.openaiConfigured);
+    cloudSyncConfigured = Boolean(data.cloudSyncConfigured);
     aiAccessMode = data.aiAccessMode === "account_quota" ? "account_quota" : "deployment_shared";
     $("aiStatus").textContent = cloudAdviceConfigured
       ? aiAccessMode === "account_quota" ? "云端教练已连接 · 账号额度" : `云端教练已连接 · ${data.model}`
       : "本地建议模式";
   } catch {
     cloudAdviceConfigured = false;
+    cloudSyncConfigured = false;
     aiAccessMode = "deployment_shared";
     $("aiStatus").textContent = "离线可用 · 本地建议";
   }
   renderCloudConsentStatus();
+  renderCloudSyncPanel();
+  if (cloudSyncConfigured && accountSession.signedIn && cloudSyncMetadata.enabled) syncCloudNow();
   renderProLongitudinalReport();
 }
 
@@ -7176,6 +8176,7 @@ function setAccountEntitlement(data) {
   }
   renderAccountEntitlements();
   renderProLongitudinalReport();
+  renderCloudSyncPanel();
 }
 
 function renderAccountEntitlements() {
@@ -7263,8 +8264,14 @@ function renderAccountPanel() {
     headerStatus.classList.add("success");
     panelStatus.textContent = "已登录";
     panelStatus.classList.add("high");
-    $("accountSummary").textContent = "身份会话由服务端验证；当前设备的训练和健康记录仍只保存在本机。";
+    const syncEnabledForAccount = cloudSyncMetadata.accountId === accountSession.user?.id && cloudSyncMetadata.enabled;
+    $("accountSummary").textContent = syncEnabledForAccount
+      ? "身份会话由服务端验证；你已主动开启完整记录的本地优先云备份。"
+      : "身份会话由服务端验证；登录本身不会上传当前设备的训练和健康记录。";
     $("accountEmailSummary").textContent = maskAccountEmail(accountSession.user?.email);
+    $("accountDataScopeSummary").textContent = syncEnabledForAccount
+      ? "自动同步已开启；断网期间仍先保存在本机。"
+      : "只有你主动开启云备份后才会上传和同步记录。";
     signedInPanel.hidden = false;
   } else if (accountPendingEmail) {
     headerStatus.textContent = "等待邮箱验证";
@@ -7322,6 +8329,7 @@ async function checkAccountSession() {
     accountSession = { loading: false, configured: false, signedIn: false, unavailable: false, user: null };
     accountEntitlements = { loading: false, configured: false, unavailable: false, plan: null, quota: null };
     renderAccountPanel();
+    renderCloudSyncPanel();
     return;
   }
   try {
@@ -7334,12 +8342,14 @@ async function checkAccountSession() {
       user: data.user || null
     };
     accountFeedback = { text: "", error: false };
+    if (accountSession.signedIn && accountSession.user?.id) prepareCloudSyncAccount(accountSession.user.id);
   } catch (error) {
     accountSession = { loading: false, configured: true, signedIn: false, unavailable: true, user: null };
     accountFeedback = { text: error.message, error: true };
   }
   renderAccountPanel();
   await checkAccountEntitlements();
+  if (accountSession.signedIn && cloudSyncMetadata.enabled) syncCloudNow();
 }
 
 async function checkAccountEntitlements() {
@@ -7390,8 +8400,10 @@ async function verifyAccountCode(event) {
       const data = await accountApi("verify", { method: "POST", body: { email: accountPendingEmail, token } });
       accountSession = { loading: false, configured: true, signedIn: true, unavailable: false, user: data.user || null };
       accountPendingEmail = "";
+      prepareCloudSyncAccount(accountSession.user?.id || "");
       await checkAccountEntitlements();
       setAccountFeedback("身份已连接。本机记录没有上传。", false);
+      if (cloudSyncMetadata.enabled) syncCloudNow();
     } catch (error) {
       setAccountFeedback(error.message, true);
     }
@@ -7409,6 +8421,8 @@ async function signOutAccount() {
   await withButtonBusy("signOutAccountBtn", "退出中", async () => {
     try {
       const data = await accountApi("signout", { method: "POST" });
+      cloudSyncGeneration += 1;
+      clearCloudSyncWork();
       accountSession = { loading: false, configured: Boolean(data.configured), signedIn: false, unavailable: false, user: null };
       accountEntitlements = { loading: false, configured: false, unavailable: false, plan: null, quota: null };
       accountPendingEmail = "";
@@ -7536,7 +8550,10 @@ function bindInstallPrompt() {
 
 function registerServiceWorker() {
   updateOfflineStatus();
-  window.addEventListener("online", () => updateOfflineStatus("网络已恢复"));
+  window.addEventListener("online", () => {
+    updateOfflineStatus("网络已恢复");
+    if (cloudSyncMetadata.enabled) syncCloudNow();
+  });
   window.addEventListener("offline", () => updateOfflineStatus("当前离线"));
   if (!("serviceWorker" in navigator)) {
     updateOfflineStatus("浏览器不支持离线缓存");
@@ -7581,6 +8598,19 @@ function closeResetDataDialog() {
 }
 
 function resetAllData() {
+  const resetAccountId = activeCloudAccountId();
+  if (resetAccountId && cloudSyncMetadata.accountId === resetAccountId && cloudSyncMetadata.enabled) {
+    cloudSyncGeneration += 1;
+    clearCloudSyncWork();
+    cloudSyncMetadata = CloudSyncModel.normalizeMetadata({
+      ...cloudSyncMetadata,
+      enabled: false,
+      // The following enable must inspect an active remote before it can
+      // recreate anything from this newly empty local device.
+      localResetPending: true
+    }, resetAccountId);
+    persistCloudSyncMetadata(cloudSyncMetadata);
+  }
   try {
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(WORKOUT_DRAFT_KEY);
@@ -7653,6 +8683,12 @@ function bindActions() {
     if (event.target.id === "nextWorkoutDaySelect") changeSuggestedRotationDay(event.target.value);
   });
   $("nextWorkoutResultDialog").addEventListener("click", event => {
+    if (event.target.closest("#viewPersonalPatternsBtn")) {
+      closeNextWorkoutResult();
+      activateTab("insights");
+      window.requestAnimationFrame(() => $("personalTrainingPatterns")?.scrollIntoView({ behavior: preferredScrollBehavior(), block: "start" }));
+      return;
+    }
     if (event.target.closest("#confirmNextWorkoutBtn")) {
       confirmSuggestedNextWorkout();
       return;
@@ -7674,6 +8710,17 @@ function bindActions() {
   $("accountCodeForm").addEventListener("submit", verifyAccountCode);
   $("changeAccountEmailBtn").addEventListener("click", changeAccountEmail);
   $("signOutAccountBtn").addEventListener("click", signOutAccount);
+  $("enableCloudSyncBtn").addEventListener("click", enableCloudSync);
+  $("disableCloudSyncBtn").addEventListener("click", disableCloudSync);
+  $("syncCloudNowBtn").addEventListener("click", syncCloudNow);
+  $("useCloudVersionBtn").addEventListener("click", () => resolveCloudConflict("use-cloud"));
+  $("keepLocalVersionBtn").addEventListener("click", () => resolveCloudConflict("keep-local"));
+  $("deleteCloudDataBtn").addEventListener("click", openDeleteCloudDialog);
+  $("cancelDeleteCloudDataBtn").addEventListener("click", closeDeleteCloudDialog);
+  $("confirmDeleteCloudDataBtn").addEventListener("click", deleteCloudData);
+  $("deleteCloudDataDialog").addEventListener("click", event => {
+    if (event.target === $("deleteCloudDataDialog")) closeDeleteCloudDialog();
+  });
   $("saveDailyBtn").addEventListener("click", saveDaily);
   $("addWaterBtn").addEventListener("click", addWaterServing);
   $("waterStepBtn").addEventListener("click", changeWaterStep);
@@ -7937,34 +8984,41 @@ function bindActions() {
     if (target) activateTab(target.dataset.targetTab);
   });
   $("focusedWorkoutSession").addEventListener("input", event => {
-    if (event.target.closest("#focusedCurrentSet")) persistFocusedActual();
+    if (event.target.closest("#focusedCurrentSet")) {
+      persistFocusedActual();
+      if (event.target.id === "focusedWeightValue") refreshFocusedWeightStepControls();
+    }
   });
   $("focusedWorkoutSession").addEventListener("click", event => {
     if (event.target.closest("#decreaseFocusedPrimaryBtn")) {
-      adjustFocusedValue("focusedPrimaryValue", -1);
+      adjustFocusedValue("focusedPrimaryValue", -Number(event.target.closest("#decreaseFocusedPrimaryBtn").dataset.step || 1));
       return;
     }
     if (event.target.closest("#increaseFocusedPrimaryBtn")) {
-      adjustFocusedValue("focusedPrimaryValue", 1);
+      adjustFocusedValue("focusedPrimaryValue", Number(event.target.closest("#increaseFocusedPrimaryBtn").dataset.step || 1));
       return;
     }
     if (event.target.closest("#decreaseFocusedWeightBtn")) {
-      adjustFocusedValue("focusedWeightValue", -2.5);
+      adjustFocusedValue("focusedWeightValue", -Number(event.target.closest("#decreaseFocusedWeightBtn").dataset.step || 2.5));
       return;
     }
     if (event.target.closest("#increaseFocusedWeightBtn")) {
-      adjustFocusedValue("focusedWeightValue", 2.5);
+      adjustFocusedValue("focusedWeightValue", Number(event.target.closest("#increaseFocusedWeightBtn").dataset.step || 2.5));
       return;
     }
     if (event.target.closest("#extendFocusedRestBtn")) {
       extendFocusedRest();
       return;
     }
-    if (event.target.closest("#resetFocusedRestBtn")) {
-      resetFocusedRest();
+    if (event.target.closest("#toggleFocusedRestBtn")) {
+      toggleFocusedRest();
       return;
     }
     if (event.target.closest("#skipFocusedRestBtn")) {
+      skipFocusedRest();
+      return;
+    }
+    if (event.target.closest("#startNextSetBtn")) {
       skipFocusedRest();
       return;
     }
@@ -8012,7 +9066,10 @@ function bindActions() {
   });
   document.addEventListener("visibilitychange", () => {
     syncWorkoutWakeLock();
-    if (document.visibilityState === "visible") startFocusedRestTicker();
+    if (document.visibilityState === "visible") {
+      startFocusedRestTicker();
+      if (cloudSyncMetadata.enabled) syncCloudNow();
+    }
     else stopFocusedRestTicker();
   });
 }
