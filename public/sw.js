@@ -12,6 +12,7 @@ const APP_SHELL = [
   "styles.css?v=__APP_VERSION__",
   "app.js?v=__APP_VERSION__",
   "workout-session-model.js?v=__APP_VERSION__",
+  "workout-session-controller.js?v=__APP_VERSION__",
   "local-beta-funnel-model.js?v=__APP_VERSION__",
   "training-rotation-model.js?v=__APP_VERSION__",
   "cloud-sync-model.js?v=__APP_VERSION__",

@@ -626,6 +626,8 @@ async function run() {
     const healthPayload = await healthResponse.json();
     const versionedAssetResponse = await fetch(`${baseUrl}/app.js?v=smoke`);
     const appSource = await versionedAssetResponse.text();
+    const workoutControllerResponse = await fetch(`${baseUrl}/workout-session-controller.js?v=smoke`);
+    const workoutControllerSource = await workoutControllerResponse.text();
     const localBetaModelResponse = await fetch(`${baseUrl}/local-beta-funnel-model.js?v=smoke`);
     const localBetaModelSource = await localBetaModelResponse.text();
     const headResponse = await fetch(`${baseUrl}/styles.css`, { method: "HEAD" });
@@ -1074,6 +1076,9 @@ async function run() {
       appReady: appHtml.includes('id="mainContent"') && appHtml.includes('../app.js'),
       appVersionInjected: appHtml.includes(`data-app-version="${packageVersion}"`) && appHtml.includes(`app.js?v=${packageVersion}`),
       cloudSyncModelBeforeApp: appHtml.indexOf("../cloud-sync-model.js") >= 0 && appHtml.indexOf("../cloud-sync-model.js") < appHtml.indexOf("../app.js"),
+      workoutControllerBeforeApp: appHtml.indexOf("../workout-session-controller.js") > appHtml.indexOf("../workout-session-model.js") && appHtml.indexOf("../workout-session-controller.js") < appHtml.indexOf("../app.js"),
+      workoutControllerStatus: workoutControllerResponse.status,
+      workoutControllerReady: workoutControllerSource.includes("WorkoutSessionController") && appSource.includes("workoutSessionController"),
       localBetaModelBeforeApp: appHtml.indexOf("../local-beta-funnel-model.js") >= 0 && appHtml.indexOf("../local-beta-funnel-model.js") < appHtml.indexOf("../app.js"),
       localBetaModelStatus: localBetaModelResponse.status,
       localBetaModelReady: localBetaModelSource.includes("LocalBetaFunnelModel") && localBetaModelSource.includes("recommendation_feedback"),
@@ -1100,6 +1105,7 @@ async function run() {
       scopeAwareShell: serviceWorkerSource.includes("self.registration.scope") && serviceWorkerSource.includes("cache.put(request"),
       relativeWorkerRegistration: appSource.includes('serviceWorker.register("../sw.js")'),
       cloudSyncModelCached: serviceWorkerSource.includes("cloud-sync-model.js"),
+      workoutControllerCached: serviceWorkerSource.includes("workout-session-controller.js"),
       localBetaModelCached: serviceWorkerSource.includes("local-beta-funnel-model.js"),
       syncApiNeverCached: serviceWorkerSource.includes('url.pathname.startsWith("/api/")'),
       staticSyncOptOut: appSource.includes("IS_STATIC_HOSTED_APP") && appSource.includes("!IS_STATIC_HOSTED_APP && cloudSyncConfigured"),
@@ -1152,6 +1158,7 @@ async function run() {
     assert(serverHttp.appStatus === 200 && serverHttp.appReady, "The app route should serve the application shell with parent-relative assets.");
     assert(serverHttp.appVersionInjected && serverHttp.serviceWorkerVersionInjected, "HTML, page assets, health metadata, and service-worker cache must use the package release version.");
     assert(serverHttp.cloudSyncModelBeforeApp, "The app shell should load the cloud sync model before browser synchronization code.");
+    assert(serverHttp.workoutControllerBeforeApp && serverHttp.workoutControllerStatus === 200 && serverHttp.workoutControllerReady, "The app shell should load and use the workout session controller after the pure model.");
     assert(serverHttp.localBetaModelBeforeApp && serverHttp.localBetaModelStatus === 200 && serverHttp.localBetaModelReady && serverHttp.localBetaIntegrationHooks, "The app shell should load the local Beta model and wire every required business event before app integration code.");
     assert(serverHttp.privacyStatus === 200 && serverHttp.termsStatus === 200, "Legal pages should be served as public product pages.");
     assert(serverHttp.productPromisesAligned, "Privacy and terms must describe opt-in cloud backup, remote-deletion preservation, and the missing account-deletion capability.");
@@ -1161,7 +1168,7 @@ async function run() {
     assert(serverHttp.updateMessageHandler, "Service worker should support user-confirmed activation.");
     assert(serverHttp.iconCacheEntries, "PWA app shell should cache every raster install icon.");
     assert(serverHttp.scopeAwareShell && serverHttp.relativeWorkerRegistration, "PWA registration and shell caching should follow the actual deployment scope.");
-    assert(serverHttp.cloudSyncModelCached && serverHttp.localBetaModelCached && serverHttp.syncApiNeverCached, "The PWA shell should cache browser models but never intercept account sync API requests.");
+    assert(serverHttp.cloudSyncModelCached && serverHttp.workoutControllerCached && serverHttp.localBetaModelCached && serverHttp.syncApiNeverCached, "The PWA shell should cache browser models and the session controller but never intercept account sync API requests.");
     assert(serverHttp.staticSyncOptOut, "Static hosting should keep cloud enablement hidden and local-only.");
     assert(serverHttp.manifestId === "./app/" && serverHttp.manifestStartUrl === "./app/" && serverHttp.manifestScope === "./" && serverHttp.manifestIcons.every(icon => icon.src.startsWith("./")), "Manifest URLs should keep the app start route and deployment-relative scope.");
     assert(serverHttp.subpathManifest.id === "/Daily-Workout-Record/app/" && serverHttp.subpathManifest.startUrl === "/Daily-Workout-Record/app/" && serverHttp.subpathManifest.scope === "/Daily-Workout-Record/" && serverHttp.subpathManifest.icons.every(path => path.startsWith("/Daily-Workout-Record/")), "Manifest URLs should resolve the app inside a GitHub Pages project subpath.");

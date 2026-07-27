@@ -305,6 +305,20 @@ let pendingSupportPartnerId = null;
 let appliedWeeklyTargetCalibration = null;
 let extendedDailyRecordRevealed = false;
 let activeWorkoutSession = null;
+const workoutSessionController = WorkoutSessionController.create({
+  model: WorkoutSessionModel,
+  storage: window.localStorage,
+  storageKey: WORKOUT_DRAFT_KEY,
+  onChange: session => { activeWorkoutSession = session; },
+  onError: (error, detail) => {
+    lastStorageIssue = detail?.operation === "clear"
+      ? "浏览器拒绝删除未完成训练草稿。"
+      : isStorageQuotaError(error)
+        ? "浏览器本地空间不足，未完成训练草稿无法自动保存。"
+        : "未完成训练草稿自动保存失败。";
+    renderDataHealth();
+  }
+});
 let lastWorkoutSetAction = null;
 let cloudSyncMetadata = loadCloudSyncMetadata();
 let cloudSyncTimer = null;
@@ -1345,17 +1359,7 @@ function hasMeaningfulWorkoutDraft(draft) {
 function persistWorkoutDraft() {
   if (!$("workoutDate")) return;
   if (activeWorkoutSession) {
-    try {
-      localStorage.setItem(WORKOUT_DRAFT_KEY, JSON.stringify({
-        ...activeWorkoutSession,
-        savedAt: new Date().toISOString()
-      }));
-    } catch (error) {
-      lastStorageIssue = isStorageQuotaError(error)
-        ? "浏览器本地空间不足，未完成训练草稿无法自动保存。"
-        : "未完成训练草稿自动保存失败。";
-      renderDataHealth();
-    }
+    workoutSessionController.replace(activeWorkoutSession, { reason: "persist" });
     return;
   }
   const draft = buildPersistedWorkoutDraft();
@@ -1379,14 +1383,9 @@ function clearWorkoutDraft() {
   window.clearTimeout(workoutDraftTimer);
   stopFocusedRestTicker();
   workoutDraftTimer = null;
-  activeWorkoutSession = null;
   lastWorkoutSetAction = null;
   releaseWorkoutWakeLock();
-  try {
-    localStorage.removeItem(WORKOUT_DRAFT_KEY);
-  } catch {
-    lastStorageIssue = "浏览器拒绝删除未完成训练草稿。";
-  }
+  workoutSessionController.clear();
 }
 
 function restoreWorkoutDraft() {
@@ -1403,13 +1402,11 @@ function restoreWorkoutDraft() {
 
     if ([2, 3, 4, WorkoutSessionModel.VERSION].includes(draft.version)) {
       const hadCompanion = Boolean(draft.companion?.rest || draft.companion?.transition);
-      activeWorkoutSession = WorkoutSessionModel.migrateDraft(draft);
+      const restoredSession = workoutSessionController.restore({ minimumVersion: 2 });
+      if (!restoredSession) return false;
       if (hadCompanion && !activeWorkoutSession.companion?.rest && !activeWorkoutSession.companion?.transition) {
         lastStorageIssue = "训练草稿已恢复；其中无效的休息计时状态已忽略。";
       }
-      activeWorkoutSession.rotationDayId = typeof draft.rotationDayId === "string" ? draft.rotationDayId : "";
-      activeWorkoutSession.sourceTemplateId = typeof draft.sourceTemplateId === "string" ? draft.sourceTemplateId : activeWorkoutSession.templateId || "";
-      activeWorkoutSession.nextPlanId = typeof draft.nextPlanId === "string" ? draft.nextPlanId : "";
       const restoredActionSetId = activeWorkoutSession.companion?.transition?.sourceSetId
         || activeWorkoutSession.companion?.rest?.sourceSetId
         || null;
@@ -1441,7 +1438,7 @@ function restoreWorkoutDraft() {
       name: exercise.name,
       sets: Array.isArray(exercise.sets) ? exercise.sets : []
     }));
-    activeWorkoutSession = WorkoutSessionModel.migrateDraft(draft);
+    workoutSessionController.replace(WorkoutSessionModel.migrateDraft(draft), { persist: false, reason: "restore_legacy" });
     return true;
   } catch {
     lastStorageIssue = "训练草稿已损坏，无法安全恢复；其他本地记录未受影响。";
@@ -2076,7 +2073,7 @@ function startFocusedWorkoutSession(template, title) {
     );
   }
   const goalDefaultRest = REST_SECONDS_BY_GOAL[state.settings.trainingGoal] || REST_SECONDS_BY_GOAL.general;
-  activeWorkoutSession = WorkoutSessionModel.createSession({
+  workoutSessionController.start({
     date: today(),
     title: title || template.name,
     templateId: template.id || "",
@@ -2100,12 +2097,14 @@ function startFocusedWorkoutSession(template, title) {
         }
       }))
     }))
+  }, {
+    metadata: {
+      rotationDayId: template.rotationDayId || "",
+      sourceTemplateId: template.sourceTemplateId || template.id || "",
+      nextPlanId: template.nextPlanId || ""
+    }
   });
-  activeWorkoutSession.rotationDayId = template.rotationDayId || "";
-  activeWorkoutSession.sourceTemplateId = template.sourceTemplateId || template.id || "";
-  activeWorkoutSession.nextPlanId = template.nextPlanId || "";
   lastWorkoutSetAction = null;
-  persistWorkoutDraft();
   const betaTemplateId = activeWorkoutSession.sourceTemplateId || activeWorkoutSession.templateId;
   recordLocalBetaEvent("workout_started", `${activeWorkoutSession.id}:started`, betaTemplateId);
   if (state.workouts.length > 0) {
@@ -2325,8 +2324,7 @@ function renderFocusedWorkoutSession() {
   }
 
   if (activeWorkoutSession.companion?.rest && !WorkoutSessionModel.isRestLocked(activeWorkoutSession)) {
-    activeWorkoutSession = WorkoutSessionModel.clearRest(activeWorkoutSession);
-    persistWorkoutDraft();
+    workoutSessionController.clearRest();
   }
 
   const modelProgress = WorkoutSessionModel.progress(activeWorkoutSession);
@@ -2470,36 +2468,31 @@ function refreshFocusedWeightStepControls() {
 
 function extendFocusedRest() {
   if (!activeWorkoutSession?.companion?.rest) return;
-  activeWorkoutSession = WorkoutSessionModel.adjustRest(activeWorkoutSession, 30);
-  persistWorkoutDraft();
+  workoutSessionController.adjustRest(30);
   refreshFocusedRestDisplay();
   startFocusedRestTicker();
 }
 
 function resetFocusedRest() {
   if (!activeWorkoutSession?.companion?.rest) return;
-  activeWorkoutSession = WorkoutSessionModel.resetRest(activeWorkoutSession);
+  workoutSessionController.resetRest();
   lastRestAlertKey = "";
-  persistWorkoutDraft();
   refreshFocusedRestDisplay();
   startFocusedRestTicker();
 }
 
 function toggleFocusedRest() {
   if (!activeWorkoutSession?.companion?.rest) return;
-  activeWorkoutSession = WorkoutSessionModel.isRestPaused(activeWorkoutSession)
-    ? WorkoutSessionModel.resumeRest(activeWorkoutSession)
-    : WorkoutSessionModel.pauseRest(activeWorkoutSession);
-  persistWorkoutDraft();
+  if (WorkoutSessionModel.isRestPaused(activeWorkoutSession)) workoutSessionController.resumeRest();
+  else workoutSessionController.pauseRest();
   renderFocusedWorkoutSession();
   $("toggleFocusedRestBtn")?.focus();
 }
 
 function skipFocusedRest() {
   if (!activeWorkoutSession?.companion?.rest) return;
-  activeWorkoutSession = WorkoutSessionModel.clearRest(activeWorkoutSession);
+  workoutSessionController.clearRest();
   stopFocusedRestTicker();
-  persistWorkoutDraft();
   renderFocusedWorkoutSession();
   $("focusedCurrentSet")?.focus();
 }
@@ -2547,11 +2540,7 @@ function setFocusedLoadMode(mode) {
 function persistFocusedActual() {
   const current = currentWorkoutSet();
   if (!current) return;
-  activeWorkoutSession = WorkoutSessionModel.updateActual(activeWorkoutSession, current.set.id, focusedActualPatch());
-  if (!activeWorkoutSession.companion?.rest && activeWorkoutSession.companion?.transition) {
-    activeWorkoutSession.companion.transition = null;
-  }
-  persistWorkoutDraft();
+  workoutSessionController.updateActual(current.set.id, focusedActualPatch(), { clearTransition: true });
 }
 
 function completeFocusedSet() {
@@ -2562,15 +2551,13 @@ function completeFocusedSet() {
   window.setTimeout(() => { focusedSetCompletionLocked = false; }, 350);
   const completedId = current.set.id;
   const completingFirstSet = WorkoutSessionModel.progress(activeWorkoutSession).completed === 0;
-  activeWorkoutSession = WorkoutSessionModel.completeSet(activeWorkoutSession, completedId, focusedActualPatch(), {
+  workoutSessionController.complete(completedId, focusedActualPatch(), {
     now: new Date().toISOString(),
     restDurationSeconds: restDurationForCurrentSet(current)
   });
-  activeWorkoutSession = WorkoutSessionModel.prefillCurrentWeight(activeWorkoutSession);
   lastWorkoutSetAction = { setId: completedId, action: "completed" };
   lastRestAlertKey = "";
   vibrateWorkout(35);
-  persistWorkoutDraft();
   if (completingFirstSet && WorkoutSessionModel.progress(activeWorkoutSession).completed === 1) {
     recordLocalBetaEvent(
       "first_set_completed",
@@ -2588,10 +2575,8 @@ function skipFocusedSet() {
   const current = currentWorkoutSet();
   if (!current) return;
   const skippedId = current.set.id;
-  activeWorkoutSession = WorkoutSessionModel.skipSet(activeWorkoutSession, current.set.id);
-  activeWorkoutSession = WorkoutSessionModel.prefillCurrentWeight(activeWorkoutSession);
+  workoutSessionController.skip(current.set.id);
   lastWorkoutSetAction = { setId: skippedId, action: "skipped" };
-  persistWorkoutDraft();
   renderFocusedWorkoutSession();
   $("focusedCurrentSet")?.focus();
   showToast("已跳过，继续下一组");
@@ -2599,20 +2584,17 @@ function skipFocusedSet() {
 
 function undoFocusedSet() {
   if (!lastWorkoutSetAction || !activeWorkoutSession) return;
-  activeWorkoutSession = WorkoutSessionModel.undoSet(activeWorkoutSession, lastWorkoutSetAction.setId);
+  workoutSessionController.undo(lastWorkoutSetAction.setId);
   stopFocusedRestTicker();
   lastWorkoutSetAction = null;
-  persistWorkoutDraft();
   renderFocusedWorkoutSession();
   $("focusedCurrentSet")?.focus();
   showToast("已撤销上一组");
 }
 
 function selectFocusedSet(setId) {
-  activeWorkoutSession = WorkoutSessionModel.selectSet(activeWorkoutSession, setId);
-  activeWorkoutSession = WorkoutSessionModel.prefillCurrentWeight(activeWorkoutSession);
+  workoutSessionController.select(setId);
   stopFocusedRestTicker();
-  persistWorkoutDraft();
   renderFocusedWorkoutSession();
   $("focusedCurrentSet")?.focus();
 }
@@ -7989,7 +7971,6 @@ function applyNormalizedCloudState(normalized) {
     Object.keys(state).forEach(key => delete state[key]);
     Object.assign(state, normalized);
     clearWorkoutDraft();
-    activeWorkoutSession = null;
     lastWorkoutSetAction = null;
     persistState();
     clearWorkoutForm();
@@ -8869,7 +8850,7 @@ function resetAllData() {
   Object.assign(state, freshState);
   pendingImport = null;
   lastWorkoutSummary = null;
-  activeWorkoutSession = null;
+  workoutSessionController.replace(null, { persist: false, reason: "reset" });
   lastWorkoutSetAction = null;
   lastStorageIssue = "";
   clearWorkoutForm();
