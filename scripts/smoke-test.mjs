@@ -2442,7 +2442,7 @@ async function run() {
     assert(loadedWorkout.activeTab === "workout", "Coach start should activate workout tab.");
     assert(loadedWorkout.title === "居家无器械全身 A", "Coach start should load the selected compatible rotation day.");
     assert(loadedWorkout.progress === "0", "Loaded template should start at 0 percent complete.");
-    assert(loadedWorkout.sets === "0/12", "The muscle-gain home routine should expose twelve planned sets.");
+    assert(loadedWorkout.sets === "0/12", `The muscle-gain home routine should expose twelve planned sets: ${JSON.stringify(loadedWorkout)}.`);
     assert(loadedWorkout.collectedSets === 0, "Template cues should not count as completed workout sets.");
     assert(loadedWorkout.focusedVisible && loadedWorkout.currentExercise === "椅子深蹲" && loadedWorkout.currentSetText.includes("第 1 组 / 共 3 组") && loadedWorkout.currentSetText.includes("完成这组"), "Coach start should focus the first muscle-gain planned set.");
     assert(loadedWorkout.legacyHidden && loadedWorkout.sessionVersion === 4 && loadedWorkout.currentStatus === "pending", "Focused training should hide the legacy editor and keep the set explicitly pending.");
@@ -2750,12 +2750,14 @@ async function run() {
     assert(nextWorkoutRules.lowRecovery.exercises[0].sets.length === 1 && nextWorkoutRules.lowRecovery.adjustments[0].includes("少做一组"), "Poor recovery should reduce volume before increasing load.");
     assert(nextWorkoutRules.pain.title === "恢复优先训练" && nextWorkoutRules.pain.reasons[0].includes("安全优先"), "High pain should replace loading with a recovery plan.");
     assert(nextWorkoutRules.incomplete.exercises[0].sets[0].weight === 20 && nextWorkoutRules.incomplete.adjustments[0].includes("稳定完成"), "Incomplete sessions should hold the same-day load instead of progressing it.");
-    assert(nextWorkoutRules.rotated.title === "下肢 A" && nextWorkoutRules.rotated.sourceComparableWorkoutId === "lower-history" && nextWorkoutRules.rotated.exercises[0].sets[0].weight === 35, `Rotation should choose the next training day and reuse that day's own history: ${JSON.stringify(nextWorkoutRules.rotated)}.`);
+    assert(nextWorkoutRules.rotated.title === "下肢 A" && nextWorkoutRules.rotated.sourceComparableWorkoutId === "rule-workout" && nextWorkoutRules.rotated.exercises[0].sets[0].weight === 22.5, `Rotation should choose the next training day while preferring the latest real record of the same exercise: ${JSON.stringify(nextWorkoutRules.rotated)}.`);
     assert(nextWorkoutRules.homeGeneral.template.id === "starter_home_bodyweight" && !nextWorkoutRules.homeGeneral.template.exercises.some(exercise => ["腿举", "坐姿划船", "卧推"].includes(exercise.name)), "Home bodyweight recommendations must not include gym-only exercises.");
     assert(nextWorkoutRules.homeUpperLower.template.id === "starter_home_bodyweight_b" && !nextWorkoutRules.homeUpperLower.template.exercises.some(exercise => ["腿举", "坐姿划船", "卧推"].includes(exercise.name)), "Non-gym upper/lower preferences must safely use the selected environment's A/B routine.");
     assert(nextWorkoutRules.gymGeneral.template.id === "beginner_full_body" && nextWorkoutRules.gymGeneral.template.id !== nextWorkoutRules.homeGeneral.template.id, "Gym and home environments must select different templates.");
     assert(nextWorkoutRules.gymGeneral.template.exercises[0].sets.length === 2 && nextWorkoutRules.gymMuscle.template.exercises[0].sets.length === 3 && nextWorkoutRules.gymStrength.template.exercises[0].sets[0].reps === 5, "General, muscle gain, and strength goals must produce materially different prescriptions.");
-    assert(nextWorkoutRules.fullBodyB.rotationDayId === "rotation_full_body_b" && nextWorkoutRules.fullBodyB.sourceTemplateId === "beginner_full_body_b" && nextWorkoutRules.fullBodyB.exercises[0].sets[0].weight === 45, "Completing full-body A must rotate to B and use the exercise's latest real completion data.");
+    assert(nextWorkoutRules.fullBodyB.rotationDayId === "rotation_full_body_b" && nextWorkoutRules.fullBodyB.sourceTemplateId === "beginner_full_body_b", "Completing full-body A must rotate to B.");
+    assert(nextWorkoutRules.fullBodyB.exercises.every(exercise => exercise.requiredEquipment.every(item => ["bodyweight", "machines"].includes(item))) && !nextWorkoutRules.fullBodyB.exercises.some(exercise => exercise.name === "罗马尼亚硬拉"), "Machine-only recommendations must exclude free-weight exercises even when a newer free-weight history record exists.");
+    assert(nextWorkoutRules.fullBodyB.decision?.algorithmVersion === "golden-1" && nextWorkoutRules.fullBodyB.decision?.environmentConstraint?.mode === "EXPLICIT_EQUIPMENT_ONLY", "Browser recommendations should retain their auditable algorithm and environment decision.");
     assert(nextWorkoutRules.recoveryOverride.source === "recovery_override" && nextWorkoutRules.afterRecovery.rotationDayId === "rotation_full_body_b", "Pain recovery must not permanently advance or disrupt the normal rotation.");
     assert(nextWorkoutRules.legacyHome.preferredEnvironment === "home_bodyweight", "Legacy home environments must migrate safely to home bodyweight.");
 
@@ -2910,6 +2912,7 @@ async function run() {
     assert(savedWorkout.draftRemoved, "Saving a workout should clear its unfinished draft.");
     assert(savedWorkout.summary?.includes("刚刚保存"), "Saved workout should show completion summary.");
     assert(savedWorkout.nextPlan?.sourceWorkoutId && !savedWorkout.nextPlan?.acceptedAt && !savedWorkout.nextPlan?.startedAt, "Saved workout data should retain an unstarted next plan so acceptance is recorded only when the user begins it.");
+    assert(savedWorkout.nextPlan?.decision?.algorithmVersion === "golden-1" && !/sleepHours|soreness|pain|energy/.test(JSON.stringify(savedWorkout.nextPlan.decision)), "Persisted recommendation decisions should be auditable without copying raw health inputs.");
     assert(!savedWorkout.overflow, "Workout desktop layout should not overflow.");
 
     await evaluate(cdp, `document.querySelector('[data-tab="today"]').click(); window.scrollTo(0, 0);`);
@@ -3062,6 +3065,8 @@ async function run() {
         workoutsUnchanged: JSON.stringify(state.workouts) === workoutsBefore,
         rotationUnchanged: JSON.stringify(state.settings.trainingRotation) === rotationBefore
       };
+      renderAll();
+      const renderedNames = state.nextWorkoutPlan.exercises.map(item => item.name);
       closeNextWorkoutResult();
       showNextWorkoutResult(source, state.nextWorkoutPlan);
       const reopenedNames = state.nextWorkoutPlan.exercises.map(item => item.name);
@@ -3125,7 +3130,7 @@ async function run() {
       Object.assign(state, normalizeImportedState(snapshot));
       persistState();
       renderAll();
-      return { before, chosenDate, edited, editedNames, reopenedNames, confirmedEdit, changedDay, recovery, oneExerciseAction, durationCases, namesBeforeStart, startedNames };
+      return { before, chosenDate, edited, editedNames, renderedNames, reopenedNames, confirmedEdit, changedDay, recovery, oneExerciseAction, durationCases, namesBeforeStart, startedNames };
     })()`);
     assert(nextPlanExerciseEdit.before.action, "Editable suggested plans should offer 减少一个动作.");
     assert(nextPlanExerciseEdit.edited.names.length === nextPlanExerciseEdit.before.names.length - 1 && nextPlanExerciseEdit.edited.names.join("→") === nextPlanExerciseEdit.before.names.slice(0, -1).join("→"), "Removing an exercise should remove exactly the last item and preserve retained order.");
@@ -3134,6 +3139,7 @@ async function run() {
     assert(nextPlanExerciseEdit.edited.date === nextPlanExerciseEdit.chosenDate && nextPlanExerciseEdit.edited.inputDate === nextPlanExerciseEdit.chosenDate, "Removing an exercise should preserve a valid unsubmitted date in the plan snapshot and redrawn input.");
     assert(nextPlanExerciseEdit.edited.dialogOpen && nextPlanExerciseEdit.edited.announcement.includes(nextPlanExerciseEdit.before.names.at(-1)), "The result dialog should stay open and announce the removed exercise by name.");
     assert(nextPlanExerciseEdit.edited.templatesUnchanged && nextPlanExerciseEdit.edited.workoutsUnchanged && nextPlanExerciseEdit.edited.rotationUnchanged, "Removing an exercise must not mutate templates, history, or rotation.");
+    assert(nextPlanExerciseEdit.renderedNames.join("→") === nextPlanExerciseEdit.editedNames.join("→"), "Ordinary rendering must not overwrite a user-edited next plan.");
     assert(nextPlanExerciseEdit.reopenedNames.join("→") === nextPlanExerciseEdit.editedNames.join("→"), "Closing and reopening should preserve the edited plan snapshot.");
     assert(nextPlanExerciseEdit.confirmedEdit.status === "planned" && nextPlanExerciseEdit.confirmedEdit.date === nextPlanExerciseEdit.chosenDate && nextPlanExerciseEdit.confirmedEdit.persistedDate === nextPlanExerciseEdit.chosenDate, "Changing the date, removing an exercise, and confirming should retain the chosen date.");
     assert(nextPlanExerciseEdit.changedDay.sourceTemplateId === "beginner_upper" && nextPlanExerciseEdit.changedDay.decision !== "reduced_exercise", "Changing the training day should rebuild the plan from its source template.");

@@ -10,9 +10,10 @@
     "build:pages": "node scripts/build-static-release.mjs",
     "test:workout-session": "node scripts/workout-session-test.mjs",
     "test:training-rotation": "node scripts/training-rotation-test.mjs",
+    "test:training-recommendation": "node scripts/training-recommendation-golden-test.mjs",
     "test:entitlements": "node scripts/entitlements-test.mjs",
     "test:cloud-sync": "node scripts/cloud-sync-test.mjs",
     "test:cloud-sync-server": "node scripts/cloud-sync-server-test.mjs",
-    "test:smoke": "node scripts/workout-session-test.mjs && node scripts/training-rotation-test.mjs && node scripts/entitlements-test.mjs && node scripts/cloud-sync-test.mjs && node scripts/cloud-sync-server-test.mjs && node scripts/smoke-test.mjs"
+    "test:smoke": "node scripts/workout-session-test.mjs && node scripts/training-rotation-test.mjs && node scripts/training-recommendation-golden-test.mjs && node scripts/entitlements-test.mjs && node scripts/cloud-sync-test.mjs && node scripts/cloud-sync-server-test.mjs && node scripts/smoke-test.mjs"
   }
 }

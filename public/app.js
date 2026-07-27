@@ -350,20 +350,29 @@ function loadState() {
 function normalizeNextWorkoutPlan(plan) {
   if (!plan || typeof plan !== "object" || !Array.isArray(plan.exercises)) return null;
   const status = ["suggested", "planned", "started", "superseded"].includes(plan.status) ? plan.status : "suggested";
-  const exercises = plan.exercises.map(exercise => {
+  const usedExerciseIds = new Set();
+  const exercises = plan.exercises.map((exercise, exerciseIndex) => {
     const sets = Array.isArray(exercise?.sets) ? exercise.sets.map(set => ({
       weight: numberOrNull(set?.weight),
       reps: numberOrNull(set?.reps),
       rpe: numberOrNull(set?.rpe),
       note: typeof set?.note === "string" ? set.note.trim() : ""
     })) : [];
+    let id = typeof exercise?.id === "string" && exercise.id.trim() ? exercise.id.trim() : `next_exercise_${exerciseIndex + 1}`;
+    while (usedExerciseIds.has(id)) id = `${id}_${exerciseIndex + 1}`;
+    usedExerciseIds.add(id);
     return {
+      id,
       name: typeof exercise?.name === "string" ? exercise.name.trim() : "",
       metric: WorkoutSessionModel.inferMetric(exercise?.metric, sets[0]?.note, exercise?.name),
       cue: typeof exercise?.cue === "string" ? exercise.cue.trim() : "",
       sets,
+      requiredEquipment: Array.isArray(exercise?.requiredEquipment)
+        ? exercise.requiredEquipment.filter(item => ["bodyweight", "dumbbells", "machines", "free_weights"].includes(item))
+        : [],
       adjustment: typeof exercise?.adjustment === "string" ? exercise.adjustment.trim() : "",
-      reason: typeof exercise?.reason === "string" ? exercise.reason.trim() : ""
+      reason: typeof exercise?.reason === "string" ? exercise.reason.trim() : "",
+      progressionWorkoutId: typeof exercise?.progressionWorkoutId === "string" ? exercise.progressionWorkoutId : ""
     };
   }).filter(exercise => exercise.name && exercise.sets.length);
   if (!exercises.length || !isValidDateText(plan.scheduledFor)) return null;
@@ -387,8 +396,40 @@ function normalizeNextWorkoutPlan(plan) {
     userDecision: ["suggested", "changed_day", "recovery", "self_decided", "reduced_exercise"].includes(plan.userDecision) ? plan.userDecision : "suggested",
     rotationAdvancedAt: Number.isFinite(Date.parse(plan.rotationAdvancedAt)) ? new Date(plan.rotationAdvancedAt).toISOString() : "",
     estimatedDuration: numberOrNull(plan.estimatedDuration),
+    decision: normalizeRecommendationDecision(plan.decision),
     acceptedAt: Number.isFinite(Date.parse(plan.acceptedAt)) ? new Date(plan.acceptedAt).toISOString() : "",
     startedAt: Number.isFinite(Date.parse(plan.startedAt)) ? new Date(plan.startedAt).toISOString() : ""
+  };
+}
+
+function normalizeRecommendationDecision(decision) {
+  if (!decision || typeof decision !== "object") return null;
+  const environment = decision.environmentConstraint && typeof decision.environmentConstraint === "object"
+    ? decision.environmentConstraint
+    : {};
+  const progression = decision.progressionSource && typeof decision.progressionSource === "object"
+    ? decision.progressionSource
+    : {};
+  return {
+    selectedTemplateId: typeof decision.selectedTemplateId === "string" ? decision.selectedTemplateId : "",
+    routineTransition: typeof decision.routineTransition === "string" ? decision.routineTransition : "",
+    environmentConstraint: {
+      normalizedEnvironment: typeof environment.normalizedEnvironment === "string" ? environment.normalizedEnvironment : "",
+      equipment: typeof environment.equipment === "string" ? environment.equipment : "",
+      allowedEquipment: Array.isArray(environment.allowedEquipment) ? environment.allowedEquipment.filter(item => typeof item === "string") : [],
+      usedEquipment: Array.isArray(environment.usedEquipment) ? environment.usedEquipment.filter(item => typeof item === "string") : [],
+      excludedExerciseNames: Array.isArray(environment.excludedExerciseNames) ? environment.excludedExerciseNames.filter(item => typeof item === "string") : [],
+      mode: typeof environment.mode === "string" ? environment.mode : ""
+    },
+    goalPrescription: typeof decision.goalPrescription === "string" ? decision.goalPrescription : "",
+    recoveryAdjustment: typeof decision.recoveryAdjustment === "string" ? decision.recoveryAdjustment : "",
+    progressionSource: {
+      type: typeof progression.type === "string" ? progression.type : "",
+      workoutId: typeof progression.workoutId === "string" ? progression.workoutId : ""
+    },
+    scheduledDateReason: typeof decision.scheduledDateReason === "string" ? decision.scheduledDateReason : "",
+    safetyOverride: typeof decision.safetyOverride === "string" ? decision.safetyOverride : "",
+    algorithmVersion: typeof decision.algorithmVersion === "string" ? decision.algorithmVersion : ""
   };
 }
 
@@ -687,19 +728,6 @@ function environmentLabel(environment = state.settings.preferredEnvironment) {
     home_dumbbell: "居家哑铃",
     mixed: "都可以"
   }[environment] || "健身房";
-}
-
-function environmentPrescriptionReason(template) {
-  const names = (template?.exercises || []).filter(exercise => exercise.name !== "轻松快走").slice(0, 3).map(exercise => exercise.name);
-  const environment = state.settings.preferredEnvironment;
-  if (environment === "home_bodyweight") return `你选择了居家无器械，因此使用${names.join("、")}，不需要健身房设备。`;
-  if (environment === "home_dumbbell") return `你选择了居家哑铃，因此使用${names.join("、")}，只需要哑铃和自身体重。`;
-  if (environment === "mixed") return `你选择了混合环境，因此安排${names.join("、")}，在家或健身房都能完成。`;
-  return `你选择了健身房，因此安排${names.join("、")}等健身房动作。`;
-}
-
-function goalPrescriptionReason(template) {
-  return `${goalLabel()}处方：${template?.progression || "先稳定完成，再小幅推进"}。`;
 }
 
 async function withButtonBusy(buttonId, busyText, action) {
@@ -1412,12 +1440,14 @@ function recoveryForNextWorkout(date = today()) {
   const pain = Number(daily?.pain ?? 0);
   const sleepHours = numberOrNull(daily?.sleepHours);
   const soreness = Number(daily?.soreness ?? 0);
+  const energy = numberOrNull(daily?.energy);
   return {
     pain,
     sleepHours,
+    energy,
     soreness,
     highPain: pain >= 4,
-    lowRecovery: (sleepHours !== null && sleepHours < 6 && soreness >= 4)
+    lowRecovery: (sleepHours !== null && sleepHours < 6) || (energy !== null && energy <= 2) || soreness >= 4
   };
 }
 
@@ -1448,179 +1478,51 @@ function planExerciseSource(workout, session = null) {
   })).filter(exercise => exercise.sets.length);
 }
 
-function suggestNextWorkoutDate(sourceDate, options = {}) {
-  const currentDate = today();
-  const baseDate = isValidDateText(sourceDate) && sourceDate > currentDate ? sourceDate : currentDate;
-  const recovery = options.recovery || {};
-  const sessionRpe = Number(options.sessionRpe ?? 6);
-  const target = Math.max(1, Number(state.settings.weeklyWorkoutTarget) || 2);
-  const defaultGap = target >= 4 ? 1 : target === 3 ? 2 : 3;
-  const minimumDays = Math.max(Number(options.forceMinimumDays) || 1, sessionRpe >= 8 || recovery.lowRecovery ? 2 : 1);
-  const plannedDays = state.settings.plannedWorkoutDays || [];
-  if (plannedDays.length) {
-    for (let offset = minimumDays; offset <= 8; offset += 1) {
-      const candidate = addLocalDays(baseDate, offset);
-      if (plannedDays.includes(weekdayIndex(candidate))) return candidate;
-    }
-  }
-  return addLocalDays(baseDate, Math.max(minimumDays, Math.min(3, defaultGap)));
-}
-
-function makeRecoveryPlan(workout, recovery, rotationDay = null) {
-  const template = pickBeginnerTemplate("recovery");
-  const recoveryReason = recovery.highPain
-    ? `记录到疼痛 ${recovery.pain}/5，先把恢复放在前面`
-    : "你选择把下一次改为恢复训练，先维持活动和恢复节奏";
-  return {
-    version: 2,
-    id: uid("next_plan"),
-    sourceWorkoutId: workout.id,
-    sourceWorkoutDate: workout.date,
-    createdAt: new Date().toISOString(),
-    scheduledFor: suggestNextWorkoutDate(workout.date, { sessionRpe: workout.sessionRpe, recovery, forceMinimumDays: 2 }),
-    status: "suggested",
-    title: "恢复优先训练",
-    exercises: template.exercises.map(exercise => ({
-      name: exercise.name,
-      metric: WorkoutSessionModel.inferMetric(exercise.metric, exercise.sets?.[0]?.note, exercise.name),
-      cue: exercise.cue || "",
-      sets: exercise.sets.map(set => ({ ...set, weight: numberOrNull(set.weight), reps: numberOrNull(set.reps) })),
-      adjustment: "暂停原训练负荷，改为轻松恢复",
-      reason: recoveryReason
-    })),
-    adjustments: ["已把原训练改为轻松恢复，不安排大重量或冲强度。"],
-    reasons: [recovery.highPain ? `疼痛 ${recovery.pain}/5，安全优先于推进。` : "按你的选择改为轻松恢复，不推进原训练顺序。"],
-    source: "recovery_override",
-    rotationDayId: rotationDay?.id || "",
-    sourceTemplateId: template.id,
-    rotationIndex: state.settings.trainingRotation.currentIndex,
-    sourceComparableWorkoutId: "",
-    userDecision: "recovery",
-    rotationAdvancedAt: "",
-    estimatedDuration: template.duration,
-    acceptedAt: "",
-    startedAt: ""
-  };
-}
-
 function buildNextWorkoutPlan(workout, options = {}) {
   const recovery = recoveryForNextWorkout(workout.date);
   const templates = getAllTemplates();
+  const result = TrainingRotationModel.buildRecommendationDecision({
+    templates,
+    rotation: state.settings.trainingRotation,
+    environment: state.settings.preferredEnvironment,
+    equipment: state.settings.availableEquipment,
+    goal: state.settings.trainingGoal,
+    recovery,
+    workouts: state.workouts,
+    sourceDate: workout.date,
+    currentDate: today(),
+    weeklyWorkoutTarget: state.settings.weeklyWorkoutTarget,
+    plannedWorkoutDays: state.settings.plannedWorkoutDays,
+    requestedDayId: options.rotationDayId,
+    forceRecovery: options.forceRecovery === true
+  });
+  if (!result.valid) return null;
+  const recoveryOverride = result.decision.safetyOverride !== "NONE" || options.forceRecovery === true;
   const rotation = TrainingRotationModel.normalizeRotation(state.settings.trainingRotation, templates);
-  const resolved = resolveTrainingDay(rotation, templates, options.rotationDayId);
-  const day = resolved.day;
-  const template = resolved.template;
-  if (!day || !template) return null;
-  if (recovery.highPain || options.forceRecovery) return makeRecoveryPlan(workout, recovery, day);
-
-  const comparable = TrainingRotationModel.findComparableWorkout(
-    state.workouts,
-    day
-  );
-  const completion = comparable?.completionSummary || {};
-  const incomplete = Number(completion.pending || 0) + Number(completion.skipped || 0) > 0;
-  const source = template.exercises.map(exercise => {
-    const comparableExercise = comparable?.exercises?.find(item => item.name === exercise.name);
-    const latest = comparableExercise
-      ? { workout: comparable, exercise: comparableExercise }
-      : TrainingRotationModel.findLatestExercisePerformance(state.workouts, exercise.name);
-    const history = latest?.exercise;
-    const selected = history ? {
-      name: history.name,
-      metric: WorkoutSessionModel.inferMetric(history.metric, history.sets?.[0]?.note, history.name),
-      cue: exercise.cue || "",
-      sets: history.sets.map(set => ({
-        weight: numberOrNull(set.weight),
-        reps: numberOrNull(set.reps),
-        rpe: numberOrNull(set.rpe),
-        note: set.note || ""
-      })),
-      sourceExerciseWorkoutId: latest.workout.id || ""
-    } : {
-      name: exercise.name,
-      metric: WorkoutSessionModel.inferMetric(exercise.metric, exercise.sets?.[0]?.note, exercise.name),
-      cue: exercise.cue || "",
-      sets: exercise.sets.map(set => ({
-        weight: numberOrNull(set.weight),
-        reps: numberOrNull(set.reps),
-        rpe: numberOrNull(set.rpe),
-        note: set.note || ""
-      }))
-    };
-    return { ...selected, cue: exercise.cue || selected.cue || exercise.sets?.[0]?.note || "" };
-  });
-  const sessionRpe = Number(comparable?.sessionRpe ?? 6);
-  const feeling = comparable?.feeling || (sessionRpe <= 4 ? "easy" : sessionRpe >= 8 ? "hard" : "right");
-  const reasons = [`按你的训练顺序，下一次轮到${day.label}。`];
-  const adjustments = [];
-
-  if (recovery.lowRecovery) {
-    reasons.push(`今天记录睡眠 ${formatMetric(recovery.sleepHours)}h、酸痛 ${recovery.soreness}/5。`);
-    adjustments.push("下一次每个动作少做一组，先守住恢复。" );
-  } else if (incomplete) {
-    reasons.push(`上一次${day.label}有 ${Number(completion.skipped || 0) + Number(completion.pending || 0)} 组没有完成。`);
-    adjustments.push("沿用上一次同训练日的负荷，先稳定完成。" );
-  } else if (feeling === "easy" && sessionRpe <= 5) {
-    reasons.push(`上一次${day.label}完成稳定，而且仍有余力。` );
-    adjustments.push("小幅增加重量；没有重量的动作增加 1 次。" );
-  } else if (feeling === "hard" || sessionRpe >= 8) {
-    reasons.push(`上一次${day.label}整体强度已经偏高。` );
-    adjustments.push("保持重量和组数，先让恢复跟上。" );
-  } else if (!comparable) {
-    reasons.push(`这是${day.label}的首次基线，先按模板完成，再根据表现调整。`);
-    adjustments.push("先使用模板目标建立基线，不急着加量。" );
-  } else {
-    reasons.push(`上一次${day.label}节奏正合适。` );
-    adjustments.push("保持重量和组数，稳定复现动作质量。" );
-  }
-
-  const exercises = source.map(exercise => {
-    let sets = exercise.sets.map(set => ({ ...set }));
-    let adjustment = adjustments[0];
-    if (recovery.lowRecovery && sets.length > 1) sets = sets.slice(0, -1);
-    if (!recovery.lowRecovery && !incomplete && comparable && feeling === "easy" && sessionRpe <= 5) {
-      sets = sets.map(set => {
-        if (state.settings.trainingGoal === "muscle_gain" && set.reps !== null && set.reps < 12) return { ...set, reps: set.reps + 1 };
-        if (state.settings.trainingGoal === "fat_loss" && set.reps !== null) return { ...set, reps: set.reps + 1 };
-        if (set.weight !== null && set.weight > 0) return { ...set, weight: set.weight + (set.weight >= 20 ? 2.5 : 1) };
-        if (set.reps !== null && state.settings.trainingGoal !== "strength") return { ...set, reps: set.reps + 1 };
-        return set;
-      });
-    }
-    if (incomplete && completion.unfinishedExerciseNames?.includes(exercise.name)) {
-      adjustment = "优先完成上次没做完的部分，保持可控强度。";
-    }
-    return {
-      ...exercise,
-      sets,
-      adjustment,
-      reason: exercise.sourceExerciseWorkoutId
-        ? `负荷来自该动作最近一次真实完成记录；${reasons[0]}`
-        : reasons[0]
-    };
-  });
-
-  if (!exercises.length) return null;
   return {
     version: 2,
     id: uid("next_plan"),
     sourceWorkoutId: workout.id,
     sourceWorkoutDate: workout.date,
     createdAt: new Date().toISOString(),
-    scheduledFor: suggestNextWorkoutDate(workout.date, { sessionRpe, recovery }),
+    scheduledFor: result.scheduledFor,
     status: "suggested",
-    title: day.label || template.name || "下一次训练",
-    exercises,
-    adjustments: [...adjustments, template.progression ? `目标推进：${template.progression}。` : ""].filter(Boolean),
-    reasons: [environmentPrescriptionReason(template), goalPrescriptionReason(template), ...reasons],
-    source: "training_rotation",
-    rotationDayId: day.id,
-    sourceTemplateId: day.templateId,
-    rotationIndex: rotation.days.findIndex(item => item.id === day.id),
-    sourceComparableWorkoutId: comparable?.id || "",
+    title: result.title || result.template?.name || "下一次训练",
+    exercises: result.exercises.map(exercise => ({
+      ...exercise,
+      metric: WorkoutSessionModel.inferMetric(exercise.metric, exercise.sets?.[0]?.note, exercise.name)
+    })),
+    adjustments: result.adjustments,
+    reasons: result.reasons,
+    source: recoveryOverride ? "recovery_override" : "training_rotation",
+    rotationDayId: result.rotationDayId,
+    sourceTemplateId: result.decision.selectedTemplateId,
+    rotationIndex: rotation.days.findIndex(item => item.id === result.rotationDayId),
+    sourceComparableWorkoutId: result.decision.progressionSource.workoutId,
     userDecision: options.rotationDayId ? "changed_day" : "suggested",
     rotationAdvancedAt: "",
-    estimatedDuration: Number(template.duration) || null,
+    estimatedDuration: result.estimatedDuration,
+    decision: result.decision,
     acceptedAt: "",
     startedAt: ""
   };
@@ -5814,95 +5716,58 @@ function buildDailyCoachRecommendation() {
   const daily = todayLog || draft;
   const hasSavedReadiness = Boolean(todayLog) && todayLog.readinessComplete !== false;
   const recentWorkouts = getRecent(state.workouts, 7);
-  const hardWorkouts = recentWorkouts.filter(workout => workout.sessionRpe >= 8);
   const hardLast3 = recentWorkouts.filter(workout => daysBetween(workout.date, today()) <= 2 && workout.sessionRpe >= 8);
-  const latestWorkout = state.workouts.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
-  const daysSinceLastWorkout = latestWorkout ? daysBetween(latestWorkout.date, today()) : null;
-  const sleep = daily.sleepHours;
-  const energy = daily.energy;
-  const soreness = daily.soreness;
-  const pain = daily.pain;
-  const water = daily.waterMl ?? 0;
-  const waterTarget = state.settings.waterTargetMl;
-  const reasons = [];
-  let statusKey = "normal";
-  let statusLabel = "正常练";
-  let template = pickRotationTemplate();
-  let summary = "今天适合做一次稳定的新手训练，重点是动作质量和完成感。";
-  let intensityText = state.settings.experienceLevel === "experienced"
-    ? "先用比平时保守一档的重量校准记录，再按完成感调整。"
-    : "稳稳完成，每组结束时保留约 2–3 次余力。";
-  let caution = "";
-
-  if (!hasSavedReadiness && daily.pain < 4) {
-    reasons.push("今天还没有保存状态，因此先使用安全、均衡的新手默认方案。");
-    reasons.push(state.settings.experienceLevel === "experienced"
-      ? "你已训练过一段时间，第一轮先用熟悉的轻重量校准后续建议。"
-      : "你刚开始训练，这套方案会用少量基础动作建立完成感。");
-    reasons.push(environmentPrescriptionReason(template));
-    reasons.push(goalPrescriptionReason(template));
-    return {
-      statusKey: "starter",
-      statusLabel: "新手默认方案",
-      template,
-      summary: "不确定怎么选也没关系，先从这套均衡的新手训练开始。",
-      reasons,
-      caution: "",
-      intensityText,
-      durationText: `${template.duration} 分钟`
-    };
-  }
-
-  if (pain >= 4) {
-    statusKey = "recovery";
-    statusLabel = "恢复日";
-    template = pickBeginnerTemplate("recovery");
-    summary = "今天疼痛信号偏高，先不要硬练，把目标放在恢复和活动度。";
-    intensityText = "只做轻松活动，不进行大重量负重。";
-    caution = "如果疼痛持续或加重，建议咨询专业人士。";
-    reasons.push(`疼痛 ${pain}/5，安全优先级高于训练量。`);
-  } else if ((sleep !== null && sleep < 6 && soreness >= 4) || hardLast3.length >= 2 || (state.settings.conservativeMode && (sleep !== null && sleep < 6.5 || soreness >= 4))) {
-    statusKey = "light";
-    statusLabel = "轻量练";
-    template = pickRotationTemplate();
-    summary = "今天适合保留训练习惯，但不要追求加量。";
-    intensityText = "保持轻松，不做到力竭，动作慢一点。";
-    if (sleep !== null && sleep < 6) reasons.push(`睡眠 ${formatMetric(sleep)}h，恢复基础偏弱。`);
-    if (soreness >= 4) reasons.push(`酸痛 ${soreness}/5，肌肉还在恢复中。`);
-    if (hardLast3.length >= 2) reasons.push("近 3 天高强度训练偏密集。");
-    if (state.settings.conservativeMode) reasons.push("你开启了保守建议模式。");
-  } else if (energy >= 4 && pain <= 1 && (daysSinceLastWorkout === null || daysSinceLastWorkout >= 2)) {
-    statusKey = "normal";
-    statusLabel = "正常练";
-    template = pickRotationTemplate();
-    summary = "今天状态不错，适合做一次完整的新手训练。";
-    intensityText = "稳稳完成，每组结束时保留约 2–3 次余力。";
-    reasons.push(`精力 ${energy}/5，主观状态可承受训练。`);
-    reasons.push(daysSinceLastWorkout === null ? "还没有训练记录，适合从全身入门开始。" : `距离上次训练 ${daysSinceLastWorkout} 天，恢复时间足够。`);
-  } else {
-    statusKey = "light";
-    statusLabel = "轻量练";
-    template = pickRotationTemplate();
-    summary = "今天建议稳一点，用中低强度训练保持节奏。";
-    intensityText = "保持轻松，不做到力竭，结束时应该还有余力。";
-    reasons.push("当前状态没有明显红灯，但也不需要硬推强度。");
-  }
-
-  if (water < waterTarget * 0.75) reasons.push(`饮水 ${water} ml 低于目标 ${waterTarget} ml，训练前先补一次水。`);
-  if (state.settings.experienceLevel === "experienced") reasons.push("你已训练过一段时间，建议从保守一档的熟悉重量开始校准。");
-  if (!recentWorkouts.length) reasons.push("还没有训练历史，系统先推荐新手友好的基础模板。");
-  if (hardWorkouts.length && statusKey !== "recovery") reasons.push(`最近 7 天有 ${hardWorkouts.length} 次高 RPE 训练，今天不建议冲极限。`);
-  if (!reasons.length) reasons.push("睡眠、疼痛和训练间隔没有明显风险信号。");
-
+  const conservativeRecovery = hasSavedReadiness && (hardLast3.length >= 2 || (state.settings.conservativeMode && (
+    (numberOrNull(daily.sleepHours) !== null && Number(daily.sleepHours) < 6.5)
+    || Number(daily.soreness || 0) >= 4
+  )));
+  const result = TrainingRotationModel.buildRecommendationDecision({
+    templates: getAllTemplates(),
+    rotation: state.settings.trainingRotation,
+    environment: state.settings.preferredEnvironment,
+    equipment: state.settings.availableEquipment,
+    goal: state.settings.trainingGoal,
+    recovery: {
+      sleepHours: hasSavedReadiness ? numberOrNull(daily.sleepHours) : null,
+      energy: hasSavedReadiness ? numberOrNull(daily.energy) : null,
+      soreness: hasSavedReadiness ? Number(daily.soreness || 0) : 0,
+      pain: Number(daily.pain || 0)
+    },
+    workouts: state.workouts,
+    sourceDate: today(),
+    currentDate: today(),
+    weeklyWorkoutTarget: state.settings.weeklyWorkoutTarget,
+    plannedWorkoutDays: state.settings.plannedWorkoutDays,
+    forceTemporaryRecovery: conservativeRecovery
+  });
+  const template = result.valid ? result.template : pickRotationTemplate();
+  const safety = result.decision?.safetyOverride !== "NONE";
+  const temporary = result.decision?.recoveryAdjustment === "TEMPORARY_VOLUME_REDUCTION"
+    || result.decision?.recoveryAdjustment === "RECOVERY_GOAL_LIGHT_SESSION";
+  const statusKey = safety ? "recovery" : !hasSavedReadiness ? "starter" : temporary ? "light" : "normal";
+  const statusLabel = safety ? "恢复日" : !hasSavedReadiness ? "新手默认方案" : temporary ? "轻量练" : "正常练";
+  const summary = safety
+    ? "今天优先恢复，不进行大重量或冲强度。"
+    : temporary
+      ? "今天只临时降低训练量，原训练顺序保持不变。"
+      : !hasSavedReadiness
+        ? "先用当前环境和目标对应的基础处方建立基线。"
+        : "今天按原训练顺序稳定完成，是否推进由同动作历史决定。";
+  const intensityText = safety
+    ? "只做轻松活动，不进行大重量负重。"
+    : temporary
+      ? "本次少做一组，不做到力竭。"
+      : "按处方完成，达到目标后才小幅推进。";
   return {
     statusKey,
-    statusLabel: "已根据今天状态调整",
+    statusLabel,
     template,
     summary,
-    reasons: [environmentPrescriptionReason(template), goalPrescriptionReason(template), ...reasons].slice(0, 3),
-    caution,
+    reasons: result.valid ? result.reasons.slice(0, 4) : ["当前训练模板不可用，请先检查训练偏好。"],
+    caution: safety ? "本建议不构成医疗诊断；不适持续或加重时请咨询专业人士。" : "",
     intensityText,
-    durationText: `${template.duration} 分钟`
+    durationText: `${template.duration} 分钟`,
+    decision: result.decision
   };
 }
 
