@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "check": "node --check public/workout-session-model.js && node --check public/training-rotation-model.js && node --check public/cloud-sync-model.js && node --check public/app.js && node --check server.js && node --check server/entitlements.js && node --check server/cloud-sync.js",
+    "check": "node --check public/workout-session-model.js && node --check public/training-rotation-model.js && node --check public/cloud-sync-model.js && node --check public/app.js && node --check server.js && node --check server/entitlements.js && node --check server/cloud-sync.js && npm.cmd run check:release-metadata",
+    "check:release-metadata": "node scripts/release-metadata-check.mjs",
+    "build:pages": "node scripts/build-static-release.mjs",
     "test:workout-session": "node scripts/workout-session-test.mjs",
     "test:training-rotation": "node scripts/training-rotation-test.mjs",
     "test:entitlements": "node scripts/entitlements-test.mjs",

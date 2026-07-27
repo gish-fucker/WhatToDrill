@@ -4,3 +4,4 @@ output/
 .env
 node_modules/
 .playwright-cli/
+.pages/

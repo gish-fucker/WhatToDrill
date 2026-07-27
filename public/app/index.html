@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-app-version="__APP_VERSION__">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,7 +9,7 @@
     <link rel="icon" href="../app-icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="../app-icon-180.png" sizes="180x180">
     <link rel="manifest" href="../manifest.webmanifest">
-    <link rel="stylesheet" href="../styles.css?v=20260727-workout-companion-v2">
+    <link rel="stylesheet" href="../styles.css?v=__APP_VERSION__">
   </head>
   <body class="app-initializing">
     <a class="skip-link" href="#mainContent">跳到主要内容</a>
@@ -597,7 +597,7 @@
                 <button id="keepLocalVersionBtn" class="ghost-button" type="button" hidden>保留本机并覆盖云端</button>
                 <button id="deleteCloudDataBtn" class="danger-button" type="button" hidden>删除云端备份</button>
               </div>
-              <p class="cloud-sync-boundary">同步采用本地优先：断网时继续记录，联网后重试。停止同步、退出账号、清空本机与删除云端是四个不同操作。</p>
+              <p class="cloud-sync-boundary">同步采用本地优先：断网时继续记录，联网后重试。开启云备份、停止同步、退出账号、清空本机与删除云端是不同操作；云端删除后，本机记录仍会保留。</p>
             </div>
             <div id="accountEntitlements" class="account-entitlements" hidden>
               <div class="account-entitlement-heading">
@@ -614,7 +614,7 @@
               <p id="accountQuotaReset" class="muted"></p>
             </div>
             <p id="accountFeedback" class="account-feedback" role="status" aria-live="polite"></p>
-            <p class="account-boundary">无需登录即可使用本地记录、导出和安全提示。登录本身不会上传；退出不会删除或改写本机与云端已有数据。</p>
+            <p class="account-boundary">无需登录即可使用本地记录、导出和安全提示。登录本身不会上传；退出不会删除或改写本机与云端已有数据。当前没有删除认证账号入口，需要时请联系部署者。</p>
           </section>
 
           <section class="help-panel">
@@ -1073,9 +1073,9 @@
     </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="../workout-session-model.js?v=20260727-workout-companion-v2"></script>
-    <script src="../training-rotation-model.js?v=20260727-workout-companion-v2"></script>
-    <script src="../cloud-sync-model.js?v=20260727-workout-companion-v2"></script>
-    <script src="../app.js?v=20260727-workout-companion-v2"></script>
+    <script src="../workout-session-model.js?v=__APP_VERSION__"></script>
+    <script src="../training-rotation-model.js?v=__APP_VERSION__"></script>
+    <script src="../cloud-sync-model.js?v=__APP_VERSION__"></script>
+    <script src="../app.js?v=__APP_VERSION__"></script>
   </body>
 </html>

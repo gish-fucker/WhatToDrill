@@ -174,6 +174,23 @@ assert.deepEqual(JSON.parse(JSON.stringify(remoteDeleted.conflict)), {
 });
 assert.equal(remoteDeleted.localChecksum, REPLACEMENT, "A remote tombstone must not erase the unsynced local snapshot.");
 assert.equal(model.markFailure(remoteDeleted, "offline", { expectedAccountId: "account-a", offline: true }).status, "conflict", "Ordinary failure handling must not clear a tombstone conflict.");
+const stoppedAfterRemoteDelete = model.stopSync(
+  remoteDeleted,
+  remoteDeleted.conflict,
+  { expectedAccountId: "account-a" }
+);
+assert.equal(stoppedAfterRemoteDelete.enabled, false);
+assert.equal(stoppedAfterRemoteDelete.status, "disabled");
+assert.equal(stoppedAfterRemoteDelete.pending, false);
+assert.equal(stoppedAfterRemoteDelete.conflict, null);
+assert.equal(stoppedAfterRemoteDelete.revision, 2);
+assert.equal(stoppedAfterRemoteDelete.remoteChecksum, "");
+assert.equal(stoppedAfterRemoteDelete.localChecksum, REPLACEMENT, "Accepting a tombstone must preserve the local snapshot independently.");
+assert.equal(stoppedAfterRemoteDelete.accountId, "account-a");
+assert.throws(
+  () => model.stopSync(remoteDeleted, remoteDeleted.conflict, { expectedAccountId: "account-b" }),
+  hasCode("ACCOUNT_CHANGED")
+);
 const rebuildingAfterDelete = model.beginSync(remoteDeleted, {
   resolveConflict: "keep-local",
   conflictRevision: 2,

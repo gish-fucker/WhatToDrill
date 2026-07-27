@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: daily-record-app
+    name: what-to-drill
     runtime: node
     buildCommand: npm install
     startCommand: npm start
@@ -10,8 +10,6 @@ services:
         value: 0.0.0.0
       - key: NODE_ENV
         value: production
-      - key: APP_VERSION
-        value: 1.17.1
       - key: OPENAI_MODEL
         value: gpt-5-mini
       - key: OPENAI_BASE_URL

@@ -22,9 +22,10 @@ import {
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = join(__dirname, "public");
+const packageMetadata = JSON.parse(await readFile(join(__dirname, "package.json"), "utf8"));
 const host = process.env.HOST || "127.0.0.1";
 const port = parseIntegerEnv("PORT", 5173, 1, 65535);
-const appVersion = process.env.APP_VERSION || "1.23.0";
+const appVersion = packageMetadata.version;
 const maxBodyBytes = 1_000_000;
 const upstreamTimeoutMs = parseIntegerEnv("UPSTREAM_TIMEOUT_MS", 20_000, 1_000, 120_000);
 const adviceRateLimit = parseIntegerEnv("ADVICE_RATE_LIMIT", 10, 1, 1_000);
@@ -1030,8 +1031,11 @@ async function handleStatic(req, res) {
   }
 
   try {
-    const file = await readFile(filePath);
+    let file = await readFile(filePath);
     const extension = extname(filePath);
+    if (extension === ".html" || relativePath === "sw.js") {
+      file = Buffer.from(file.toString("utf8").replaceAll("__APP_VERSION__", appVersion));
+    }
     const hasVersion = url.searchParams.has("v");
     const cacheControl = extension === ".html" || extension === ".webmanifest" || relativePath === "sw.js"
       ? "no-cache"

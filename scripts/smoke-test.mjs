@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer, request as httpRequest } from "node:http";
@@ -11,6 +11,7 @@ const chromePort = Number(process.env.SMOKE_CHROME_PORT || 9240);
 const authPort = Number(process.env.SMOKE_AUTH_PORT || 5184);
 const unconfiguredPort = Number(process.env.SMOKE_UNCONFIGURED_PORT || 5185);
 const cloudUnconfiguredPort = Number(process.env.SMOKE_CLOUD_UNCONFIGURED_PORT || 5186);
+const packageVersion = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")).version;
 const baseUrl = `http://localhost:${appPort}`;
 const appUrl = `${baseUrl}/app/`;
 const chromePath = process.env.CHROME_PATH || "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
@@ -481,6 +482,10 @@ async function run() {
   let cloudDeviceB;
   let cloudBrowserSync;
   try {
+    // The profile is generated test state, not a user profile. Starting each
+    // run clean prevents a prior service-worker cache at the same package
+    // version from masking the source under test.
+    await rm(profileDir, { recursive: true, force: true });
     await mkdir(outputDir, { recursive: true });
     await mkdir(profileDir, { recursive: true });
     partialConfigServer = spawn(process.execPath, ["server.js"], {
@@ -534,7 +539,6 @@ async function run() {
       ...process.env,
       HOST: "127.0.0.1",
       PORT: String(appPort),
-      APP_VERSION: "1.23.0",
       OPENAI_API_KEY: "",
       ADVICE_RATE_LIMIT: "10",
       ACCOUNT_RATE_LIMIT: "5",
@@ -592,7 +596,9 @@ async function run() {
     const appResponse = await fetch(appUrl);
     const appHtml = await appResponse.text();
     const privacyResponse = await fetch(`${baseUrl}/privacy.html`);
+    const privacyHtml = await privacyResponse.text();
     const termsResponse = await fetch(`${baseUrl}/terms.html`);
+    const termsHtml = await termsResponse.text();
     const serviceWorkerResponse = await fetch(`${baseUrl}/sw.js`);
     const serviceWorkerSource = await serviceWorkerResponse.text();
     const manifestResponse = await fetch(`${baseUrl}/manifest.webmanifest`);
@@ -1062,12 +1068,19 @@ async function run() {
       landingReady: landingHtml.includes("今天练什么，不用再猜") && landingHtml.includes("WhatToDrill") && landingHtml.includes('href="./app/"'),
       appStatus: appResponse.status,
       appReady: appHtml.includes('id="mainContent"') && appHtml.includes('../app.js'),
+      appVersionInjected: appHtml.includes(`data-app-version="${packageVersion}"`) && appHtml.includes(`app.js?v=${packageVersion}`),
       cloudSyncModelBeforeApp: appHtml.indexOf("../cloud-sync-model.js") >= 0 && appHtml.indexOf("../cloud-sync-model.js") < appHtml.indexOf("../app.js"),
       privacyStatus: privacyResponse.status,
       privacyCache: privacyResponse.headers.get("cache-control"),
       termsStatus: termsResponse.status,
       termsCsp: termsResponse.headers.get("content-security-policy"),
       updateMessageHandler: serviceWorkerSource.includes("SKIP_WAITING"),
+      serviceWorkerVersionInjected: serviceWorkerSource.includes(`what-to-drill-shell-v${packageVersion}`) && serviceWorkerSource.includes(`app.js?v=${packageVersion}`),
+      productPromisesAligned: privacyHtml.includes("GitHub Pages 不提供同源账号或云同步")
+        && privacyHtml.includes("当前应用没有删除 Supabase 认证账号的功能")
+        && privacyHtml.includes("其他设备看到 tombstone 时会保留本机记录")
+        && termsHtml.includes("只有主动开启云备份后才会上传完整快照")
+        && termsHtml.includes("当前应用没有删除认证账号的入口"),
       iconCacheEntries: Object.keys(iconChecks).every(name => serviceWorkerSource.includes(name)),
       scopeAwareShell: serviceWorkerSource.includes("self.registration.scope") && serviceWorkerSource.includes("cache.put(request"),
       relativeWorkerRegistration: appSource.includes('serviceWorker.register("../sw.js")'),
@@ -1115,14 +1128,16 @@ async function run() {
     assert(serverHttp.csp?.includes("frame-ancestors 'none'"), "Static responses should include a restrictive CSP.");
     assert(serverHttp.frameOptions === "DENY", "Static responses should prevent framing.");
     assert(/^[0-9a-f-]{36}$/i.test(serverHttp.requestId), "API responses should expose a generated request ID.");
-    assert(serverHttp.health.status === "ok" && serverHttp.health.version === "1.23.0", "Health response should expose status and release version.");
+    assert(serverHttp.health.status === "ok" && serverHttp.health.version === packageVersion, "Health response should expose status and the package release version.");
     assert(Number.isInteger(serverHttp.health.uptimeSeconds) && serverHttp.health.uptimeSeconds >= 0, "Health response should expose a valid uptime.");
     assert(serverHttp.health.openaiConfigured === false && serverHttp.health.accountConfigured === true && serverHttp.health.entitlementConfigured === false && serverHttp.health.cloudSyncConfigured === true && serverHttp.health.aiAccessMode === "deployment_shared" && serverHttp.health.model === "gpt-5-mini", "Health response should expose independent, non-secret service configuration state.");
     assert(serverHttp.indexCache === "no-cache", "HTML should revalidate instead of using a stale shell.");
     assert(serverHttp.landingReady, "Root should serve the beginner landing page with an app entry.");
     assert(serverHttp.appStatus === 200 && serverHttp.appReady, "The app route should serve the application shell with parent-relative assets.");
+    assert(serverHttp.appVersionInjected && serverHttp.serviceWorkerVersionInjected, "HTML, page assets, health metadata, and service-worker cache must use the package release version.");
     assert(serverHttp.cloudSyncModelBeforeApp, "The app shell should load the cloud sync model before browser synchronization code.");
     assert(serverHttp.privacyStatus === 200 && serverHttp.termsStatus === 200, "Legal pages should be served as public product pages.");
+    assert(serverHttp.productPromisesAligned, "Privacy and terms must describe opt-in cloud backup, remote-deletion preservation, and the missing account-deletion capability.");
     assert(serverHttp.privacyCache === "no-cache", "Privacy policy should revalidate so users receive policy updates.");
     assert(serverHttp.termsCsp?.includes("frame-ancestors 'none'"), "Legal pages should receive the same security headers as the app.");
     assert(serverHttp.updateMessageHandler, "Service worker should support user-confirmed activation.");
@@ -1421,8 +1436,38 @@ async function run() {
     assert(tombstoneDeleteUi.hidden && !tombstoneDeleteUi.enabled && !tombstoneDeleteUi.checksum, "A completed deletion tombstone must hide the repeatable delete action.");
     const dirtyTombstone = await evaluate(cloudDeviceB.page, `(async () => { await pullCloudState({ allowPush: false }); return { metadata: cloudSyncMetadata, target: state.settings.waterTargetMl, useLabel: document.querySelector("#useCloudVersionBtn").textContent, keepLabel: document.querySelector("#keepLocalVersionBtn").textContent }; })()`);
     assert(dirtyTombstone.metadata.status === "conflict" && dirtyTombstone.metadata.conflict?.code === "REMOTE_DELETED" && dirtyTombstone.target === 2999 && dirtyTombstone.useLabel.includes("接受云端删除") && dirtyTombstone.keepLabel.includes("重建"), "A dirty device that observes a tombstone must preserve local records and require one of the two explicit deletion choices.");
+    const callsBeforeAcceptTombstone = cloudProvider.calls.length;
     const acceptTombstone = await evaluate(cloudDeviceB.page, `(async () => { const operation = resolveCloudConflict("use-cloud"); const started = { inFlight: Boolean(cloudSyncInFlight), queued: Boolean(cloudSyncQueuedOperation), busy: cloudSyncBusy }; await operation; return { metadata: cloudSyncMetadata, target: state.settings.waterTargetMl, started, settled: { inFlight: Boolean(cloudSyncInFlight), queued: Boolean(cloudSyncQueuedOperation), busy: cloudSyncBusy } }; })()`);
-    assert(!acceptTombstone.metadata.enabled && acceptTombstone.target === 2999, `Accepting a remote deletion must keep local data and stop synchronization: ${JSON.stringify(acceptTombstone)}`);
+    const acceptTombstoneSettled = await evaluate(cloudDeviceB.page, `(async () => {
+      const localBefore = localStorage.getItem(${JSON.stringify(storageKey)});
+      const generationBeforeProbe = cloudSyncGeneration;
+      window.setTimeout(() => pushCloudStateNow(), 20);
+      await new Promise(resolve => setTimeout(resolve, 120));
+      return {
+        metadata: cloudSyncMetadata,
+        persisted: JSON.parse(localStorage.getItem(${JSON.stringify("what_to_drill_cloud_sync_v1")}) || "null"),
+        localUnchanged: localStorage.getItem(${JSON.stringify(storageKey)}) === localBefore,
+        target: state.settings.waterTargetMl,
+        generationBeforeProbe,
+        generationAfterProbe: cloudSyncGeneration
+      };
+    })()`);
+    const callsAfterAcceptTombstone = cloudProvider.calls.length;
+    assert(
+      !acceptTombstone.metadata.enabled
+        && acceptTombstone.metadata.status === "disabled"
+        && !acceptTombstone.metadata.pending
+        && !acceptTombstone.metadata.conflict
+        && acceptTombstone.target === 2999
+        && acceptTombstoneSettled.localUnchanged
+        && acceptTombstoneSettled.target === 2999
+        && !acceptTombstoneSettled.persisted.enabled
+        && acceptTombstoneSettled.persisted.status === "disabled"
+        && !acceptTombstoneSettled.persisted.conflict
+        && acceptTombstoneSettled.generationAfterProbe === acceptTombstoneSettled.generationBeforeProbe
+        && callsAfterAcceptTombstone === callsBeforeAcceptTombstone,
+      `Accepting a remote deletion must atomically keep local data, persist stopped synchronization, and ignore queued stale pushes without another network request: ${JSON.stringify({ acceptTombstone, acceptTombstoneSettled, callsBeforeAcceptTombstone, callsAfterAcceptTombstone })}`
+    );
 
     const resetBoundary = await evaluate(cloudDeviceB.page, `(() => { resetAllData(); return { enabled: cloudSyncMetadata.enabled, local: JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)}) || "null"), metadata: JSON.parse(localStorage.getItem(${JSON.stringify("what_to_drill_cloud_sync_v1")}) || "null") }; })()`);
     assert(!resetBoundary.enabled && resetBoundary.local === null && resetBoundary.metadata && !cloudProvider.exists, "Local reset should stop this device's synchronization without deleting or recreating the cloud tombstone.");
@@ -2249,14 +2294,14 @@ async function run() {
     ]), `Every equipment choice should map to exactly one starter template: ${JSON.stringify(starterProfileRules.mapping)}.`);
     assert(starterProfileRules.legacy.status === "legacy" && !starterProfileRules.legacy.needsSetup && starterProfileRules.legacy.templateId === "beginner_full_body", `A historical user with no starter fields should keep legacy behavior without interruption: ${JSON.stringify(starterProfileRules.legacy)}.`);
     assert(starterProfileRules.contradictory.status === "invalid" && starterProfileRules.contradictory.needsSetup && starterProfileRules.contradictory.starterIgnored && starterProfileRules.contradictory.resolvedTemplateId === "beginner_full_body", `Contradictory imported starter fields must request setup and never drive the wrong template: ${JSON.stringify(starterProfileRules.contradictory)}.`);
-    assert(starterProfileRules.fullBody === "starter_dumbbell_full_body" && starterProfileRules.upperLower === "beginner_upper" && starterProfileRules.custom === "beginner_recovery", `Only full-body rotation should adopt the valid starter profile: ${JSON.stringify(starterProfileRules)}.`);
+    assert(starterProfileRules.fullBody === "starter_dumbbell_full_body" && starterProfileRules.upperLower === "starter_dumbbell_full_body" && starterProfileRules.custom === "beginner_recovery", `Full-body and non-gym upper/lower rotations should use environment-compatible routines while custom rotation keeps its chosen template: ${JSON.stringify(starterProfileRules)}.`);
 
     const submittedStarterProfiles = await evaluate(cdp, `(() => {
       const cases = [
-        { equipment: "bodyweight", environment: "home", templateId: "starter_home_bodyweight", title: "居家无器械全身" },
-        { equipment: "dumbbells", environment: "mixed", templateId: "starter_dumbbell_full_body", title: "哑铃全身" },
-        { equipment: "machines", environment: "gym", templateId: "starter_gym_machines", title: "健身房器械入门" },
-        { equipment: "free_weights", environment: "gym", templateId: "starter_free_weights", title: "自由重量基础" }
+        { equipment: "bodyweight", environment: "home_bodyweight", templateId: "starter_home_bodyweight", title: "居家无器械全身 A" },
+        { equipment: "dumbbells", environment: "mixed", templateId: "starter_dumbbell_full_body", title: "哑铃全身 A" },
+        { equipment: "machines", environment: "gym", templateId: "starter_gym_machines", title: "健身房全身 A" },
+        { equipment: "free_weights", environment: "gym", templateId: "starter_free_weights", title: "健身房全身 A" }
       ];
       const results = cases.map(testCase => {
         Object.assign(state, normalizeImportedState({}));
@@ -2395,11 +2440,11 @@ async function run() {
       currentStatus: activeWorkoutSession?.exercises[0]?.sets[0]?.status
     }))()`);
     assert(loadedWorkout.activeTab === "workout", "Coach start should activate workout tab.");
-    assert(loadedWorkout.title === "居家无器械全身", "Coach start should load the selected compatible template.");
+    assert(loadedWorkout.title === "居家无器械全身 A", "Coach start should load the selected compatible rotation day.");
     assert(loadedWorkout.progress === "0", "Loaded template should start at 0 percent complete.");
-    assert(loadedWorkout.sets === "0/8", "Loaded home template should expose eight planned sets.");
+    assert(loadedWorkout.sets === "0/12", "The muscle-gain home routine should expose twelve planned sets.");
     assert(loadedWorkout.collectedSets === 0, "Template cues should not count as completed workout sets.");
-    assert(loadedWorkout.focusedVisible && loadedWorkout.currentExercise === "椅子深蹲" && loadedWorkout.currentSetText.includes("第 1 组 / 共 2 组") && loadedWorkout.currentSetText.includes("完成这组"), "Coach start should focus the first compatible planned set.");
+    assert(loadedWorkout.focusedVisible && loadedWorkout.currentExercise === "椅子深蹲" && loadedWorkout.currentSetText.includes("第 1 组 / 共 3 组") && loadedWorkout.currentSetText.includes("完成这组"), "Coach start should focus the first muscle-gain planned set.");
     assert(loadedWorkout.legacyHidden && loadedWorkout.sessionVersion === 4 && loadedWorkout.currentStatus === "pending", "Focused training should hide the legacy editor and keep the set explicitly pending.");
 
     const emptyFinish = await evaluate(cdp, `(() => {
@@ -2643,20 +2688,21 @@ async function run() {
         experienceLevel: "beginner",
         starterTemplateId: "starter_gym_machines",
         firstWorkoutSetupCompletedAt: new Date().toISOString(),
+        trainingGoal: "general",
         trainingRotation: TrainingRotationModel.defaultRotation()
       }, state.templates);
       state.workouts = [baseWorkout];
       state.dailyLogs = [{ id: "rule-good", date, sleepHours: 7.5, energy: 4, soreness: 1, pain: 0 }];
-      const easy = buildNextWorkoutPlan(baseWorkout);
+      const easy = buildNextWorkoutPlan(baseWorkout, { rotationDayId: "rotation_full_body" });
       state.workouts = [{ ...baseWorkout, sessionRpe: 8, feeling: "hard" }];
-      const hard = buildNextWorkoutPlan(state.workouts[0]);
+      const hard = buildNextWorkoutPlan(state.workouts[0], { rotationDayId: "rotation_full_body" });
       state.dailyLogs = [{ id: "rule-low", date, sleepHours: 5.5, energy: 2, soreness: 4, pain: 0 }];
-      const lowRecovery = buildNextWorkoutPlan(state.workouts[0]);
+      const lowRecovery = buildNextWorkoutPlan(state.workouts[0], { rotationDayId: "rotation_full_body" });
       state.dailyLogs = [{ id: "rule-pain", date, sleepHours: 7, energy: 2, soreness: 3, pain: 4 }];
-      const pain = buildNextWorkoutPlan(state.workouts[0]);
+      const pain = buildNextWorkoutPlan(state.workouts[0], { rotationDayId: "rotation_full_body" });
       state.dailyLogs = [{ id: "rule-incomplete", date, sleepHours: 7, energy: 3, soreness: 2, pain: 0 }];
       state.workouts = [{ ...baseWorkout, feeling: "right", sessionRpe: 6, completionSummary: { completed: 1, skipped: 1, pending: 0 } }];
-      const incomplete = buildNextWorkoutPlan(state.workouts[0]);
+      const incomplete = buildNextWorkoutPlan(state.workouts[0], { rotationDayId: "rotation_full_body" });
       state.settings.trainingRotation = TrainingRotationModel.normalizeRotation({ mode: "upper_lower", currentIndex: 1 }, getAllTemplates());
       const lowerHistory = {
         id: "lower-history", date: addLocalDays(date, -7), title: "下肢训练", sessionRpe: 6, feeling: "right",
@@ -2704,7 +2750,7 @@ async function run() {
     assert(nextWorkoutRules.lowRecovery.exercises[0].sets.length === 1 && nextWorkoutRules.lowRecovery.adjustments[0].includes("少做一组"), "Poor recovery should reduce volume before increasing load.");
     assert(nextWorkoutRules.pain.title === "恢复优先训练" && nextWorkoutRules.pain.reasons[0].includes("安全优先"), "High pain should replace loading with a recovery plan.");
     assert(nextWorkoutRules.incomplete.exercises[0].sets[0].weight === 20 && nextWorkoutRules.incomplete.adjustments[0].includes("稳定完成"), "Incomplete sessions should hold the same-day load instead of progressing it.");
-    assert(nextWorkoutRules.rotated.title === "下肢 A" && nextWorkoutRules.rotated.sourceComparableWorkoutId === "lower-history" && nextWorkoutRules.rotated.exercises[0].sets[0].weight === 35, "Rotation should choose the next training day and reuse that day's own history.");
+    assert(nextWorkoutRules.rotated.title === "下肢 A" && nextWorkoutRules.rotated.sourceComparableWorkoutId === "lower-history" && nextWorkoutRules.rotated.exercises[0].sets[0].weight === 35, `Rotation should choose the next training day and reuse that day's own history: ${JSON.stringify(nextWorkoutRules.rotated)}.`);
     assert(nextWorkoutRules.homeGeneral.template.id === "starter_home_bodyweight" && !nextWorkoutRules.homeGeneral.template.exercises.some(exercise => ["腿举", "坐姿划船", "卧推"].includes(exercise.name)), "Home bodyweight recommendations must not include gym-only exercises.");
     assert(nextWorkoutRules.homeUpperLower.template.id === "starter_home_bodyweight_b" && !nextWorkoutRules.homeUpperLower.template.exercises.some(exercise => ["腿举", "坐姿划船", "卧推"].includes(exercise.name)), "Non-gym upper/lower preferences must safely use the selected environment's A/B routine.");
     assert(nextWorkoutRules.gymGeneral.template.id === "beginner_full_body" && nextWorkoutRules.gymGeneral.template.id !== nextWorkoutRules.homeGeneral.template.id, "Gym and home environments must select different templates.");
@@ -2788,6 +2834,7 @@ async function run() {
     assert(painRecovery.gateOpened && painRecovery.pain === 4 && painRecovery.safetyPlan, "An abnormal-pain answer should save the signal and load the recovery plan instead of normal loading.");
 
     const templateDialog = await evaluate(cdp, `(() => {
+      const currentTitle = document.querySelector("#workoutTitle").value;
       document.querySelector("#saveTemplateBtn").click();
       const opened = document.querySelector("#templateNameDialog").open;
       const focused = document.activeElement?.id;
@@ -2811,9 +2858,9 @@ async function run() {
         count: state.templates.length
       };
       document.querySelector("#cancelTemplateNameBtn").click();
-      return { opened, focused, defaultName, afterCancel, saved, duplicate };
+      return { currentTitle, opened, focused, defaultName, afterCancel, saved, duplicate };
     })()`);
-    assert(templateDialog.opened && templateDialog.focused === "templateNameInput" && templateDialog.defaultName === loadedWorkout.title, "Template dialog should open with a useful default name and focus.");
+    assert(templateDialog.opened && templateDialog.focused === "templateNameInput" && templateDialog.defaultName === templateDialog.currentTitle, `Template dialog should default to the current workout name and focus its input: ${JSON.stringify(templateDialog)}.`);
     assert(templateDialog.afterCancel === 0, "Cancelling template naming should not create a template.");
     assert(templateDialog.saved.count === 1 && templateDialog.saved.name === "我的全身模板" && templateDialog.saved.closed, "Template dialog should save a valid unique name.");
     assert(templateDialog.duplicate.open && templateDialog.duplicate.error.includes("同名模板") && templateDialog.duplicate.count === 1, "Duplicate template names should be blocked inline.");
@@ -2841,8 +2888,8 @@ async function run() {
       sets: Array.from(document.querySelectorAll(".execution-stat strong")).map(el => el.textContent)[1],
       collectedSets: collectWorkoutExercises().reduce((sum, exercise) => sum + exercise.sets.length, 0)
     }))()`);
-    assert(oneSetProgress.progress === "13", "One completed set should make 1/8 progress for the selected home starter.");
-    assert(oneSetProgress.sets === "1/8", "Execution panel should show one completed set for the selected home starter.");
+    assert(oneSetProgress.progress === "8", "One completed set should make rounded 1/12 progress for the muscle-gain home routine.");
+    assert(oneSetProgress.sets === "1/12", "Execution panel should show one completed set out of the twelve planned sets.");
     assert(oneSetProgress.collectedSets === 1, "Only one real set should be collected for saving.");
 
     await evaluate(cdp, `document.querySelector("#finishWorkoutBtn").click()`);
@@ -2902,7 +2949,11 @@ async function run() {
       renderLibrary();
       document.querySelector("#trainingRotationMode").value = "custom";
       document.querySelector("#trainingRotationMode").dispatchEvent(new Event("change", { bubbles: true }));
-      const customRows = document.querySelectorAll(".rotation-day-row");
+      let customRows = document.querySelectorAll(".rotation-day-row");
+      while (customRows.length > 2) {
+        customRows[customRows.length - 1].querySelector(".remove-rotation-day").click();
+        customRows = document.querySelectorAll(".rotation-day-row");
+      }
       customRows[0].querySelector(".rotation-label").value = "上肢 A";
       customRows[1].querySelector(".rotation-label").value = "下肢 A";
       document.querySelector("#savePreferencesBtn").click();
@@ -2914,6 +2965,8 @@ async function run() {
 
       document.querySelector("#trainingRotationMode").value = "upper_lower";
       document.querySelector("#trainingRotationMode").dispatchEvent(new Event("change", { bubbles: true }));
+      document.querySelector("#preferredEnvironment").value = "gym";
+      document.querySelector("#availableEquipment").value = "machines";
       document.querySelector("#savePreferencesBtn").click();
       const source = {
         id: "rotation-ui-source", date: today(), title: "上肢训练", sessionRpe: 6, feeling: "right",
@@ -2956,9 +3009,9 @@ async function run() {
       renderAll();
       return { customSaved, changed, confirmed, chosenDate, selfDecided, overflow: document.documentElement.scrollWidth > innerWidth };
     })()`);
-    assert(rotationUi.customSaved.mode === "custom" && rotationUi.customSaved.rows === 2 && rotationUi.customSaved.labels.join("→") === "上肢 A→下肢 A", "Users should be able to save a named custom training order.");
-    assert(rotationUi.changed.title === "下肢训练" && rotationUi.changed.comparable === "rotation-ui-lower" && rotationUi.changed.weight === 42.5, "Changing the suggested training day should rebuild it from that day's own history.");
-    assert(rotationUi.confirmed.status === "planned" && rotationUi.confirmed.date === rotationUi.chosenDate && rotationUi.confirmed.decision === "changed_day" && rotationUi.confirmed.nextIndex === 0 && rotationUi.confirmed.dialogClosed, "Users should be able to change the date and confirm a different rotation day without ambiguous state.");
+    assert(rotationUi.customSaved.mode === "custom" && rotationUi.customSaved.rows === 2 && rotationUi.customSaved.labels.join("→") === "上肢 A→下肢 A", `Users should be able to save a named custom training order: ${JSON.stringify(rotationUi.customSaved)}.`);
+    assert(rotationUi.changed.title === "下肢 A" && rotationUi.changed.comparable === "rotation-ui-lower" && rotationUi.changed.weight === 42.5, `Changing the suggested training day should use its rotation label and rebuild from that day's own history: ${JSON.stringify(rotationUi.changed)}.`);
+    assert(rotationUi.confirmed.status === "planned" && rotationUi.confirmed.date === rotationUi.chosenDate && rotationUi.confirmed.decision === "changed_day" && rotationUi.confirmed.nextIndex === 2 && rotationUi.confirmed.dialogClosed, "Confirming lower A should advance the four-day upper/lower rotation to upper B without ambiguous state.");
     assert(rotationUi.selfDecided && !rotationUi.overflow, "Choosing to decide independently should remove the automatic plan without causing layout overflow.");
 
     const nextPlanExerciseEdit = await evaluate(cdp, `(() => {
@@ -2971,6 +3024,11 @@ async function run() {
           { id: "rotation_lower", label: "下肢", templateId: "beginner_lower" }
         ]
       }, getAllTemplates());
+      state.settings = normalizeSettings({
+        ...state.settings,
+        preferredEnvironment: "gym",
+        availableEquipment: "machines"
+      }, state.templates);
       const source = {
         id: "remove-exercise-source", date: today(), title: "上肢训练", sessionRpe: 6, feeling: "right",
         rotationDayId: "rotation_upper", sourceTemplateId: "beginner_upper", completionSummary: { completed: 4, skipped: 0, pending: 0 },
@@ -3115,7 +3173,7 @@ async function run() {
     })()`);
     assert(!previousSetHistory.before.hidden && previousSetHistory.before.button, "A repeated exercise should expose its latest history.");
     assert(previousSetHistory.before.text.includes(previousSetHistory.today) && previousSetHistory.before.text.includes("1 组"), "Exercise history should show the latest date and set count.");
-    assert(previousSetHistory.weight === "20" && previousSetHistory.reps === "10" && previousSetHistory.rpe === "5", "Reuse should fill weight, reps, and RPE from the latest selected starter exercise.");
+    assert(previousSetHistory.weight === "20" && previousSetHistory.reps === "8" && previousSetHistory.rpe === "7", "Reuse should fill weight, reps, and RPE from the latest muscle-gain rotation exercise.");
     assert(previousSetHistory.sets === 1 && previousSetHistory.collectedSets === 1, "Reuse should copy exactly the saved sets into the active workout.");
     assert(previousSetHistory.toast.includes("上次训练数据"), "Reuse should confirm what was filled.");
     assert(!previousSetHistory.overflow, "Exercise history should not overflow the workout layout.");
@@ -4325,7 +4383,7 @@ async function run() {
       return result;
     })()`);
     assert(accountLogout.header === "可连接账号" && accountLogout.emailVisible, "Sign out should return to the real signed-out state.");
-    assert(accountLogout.panel.includes("本机记录保持不变") && accountLogout.storageUnchanged, "Sign out should preserve local business data and explain the outcome.");
+    assert(accountLogout.panel.includes("本机与云端已有数据保持不变") && accountLogout.panel.includes("退出不等于停止同步、删除云端备份或删除账号") && accountLogout.storageUnchanged, "Sign out should preserve both data scopes and distinguish itself from sync and deletion operations.");
     const updateFlow = await evaluate(cdp, `(() => {
       window.__updateMessage = null;
       const registration = { waiting: { postMessage: message => { window.__updateMessage = message; } } };
@@ -4344,7 +4402,7 @@ async function run() {
         overflow: document.documentElement.scrollWidth > innerWidth
       };
     })()`);
-    assert(updateFlow.version.includes("v1.23.0"), "Help should display the current semantic app version.");
+    assert(updateFlow.version.includes(`v${packageVersion}`), "Help should display the package semantic app version.");
     assert(updateFlow.shown && updateFlow.dismissed, "App update banner should be visible and dismissible.");
     assert(updateFlow.message?.type === "SKIP_WAITING" && updateFlow.buttonText === "更新中", "Confirmed update should activate the waiting service worker with clear feedback.");
     assert(!updateFlow.overflow, "Update banner should not cause desktop overflow.");
@@ -4358,7 +4416,8 @@ async function run() {
       overflow: document.documentElement.scrollWidth > innerWidth
     }))()`);
     assert(privacyPage.title.includes("隐私政策") && privacyPage.heading === "隐私政策", "Privacy policy should have a clear document title.");
-    assert(privacyPage.text.includes("本地优先") && privacyPage.text.includes("云端建议") && privacyPage.text.includes("清空全部本地数据"), "Privacy policy should explain local, cloud, and deletion data paths.");
+    assert(privacyPage.text.includes("本地优先") && privacyPage.text.includes("主动开启云备份") && privacyPage.text.includes("清空本机") && privacyPage.text.includes("删除云端备份"), "Privacy policy should explain local, opt-in cloud, and distinct deletion data paths.");
+    assert(privacyPage.text.includes("tombstone") && privacyPage.text.includes("其他设备看到 tombstone 时会保留本机记录") && privacyPage.text.includes("当前应用没有删除 Supabase 认证账号的功能"), "Privacy policy should disclose remote-deletion preservation, retained tombstones, and the missing account-deletion capability.");
     assert(privacyPage.text.includes("Supabase Auth") && privacyPage.text.includes("不会自动上传") && privacyPage.text.includes("配额事件不包含训练内容"), "Privacy policy should disclose identity, local-data, and quota-event boundaries.");
     assert(privacyPage.text.includes("Pro 长期报告") && privacyPage.text.includes("长期报告计算不会因此上传"), "Privacy policy should disclose the local-only Pro report data path.");
     assert(!privacyPage.overflow, "Privacy policy desktop layout should not overflow.");

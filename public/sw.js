@@ -1,4 +1,4 @@
-const CACHE_NAME = "what-to-drill-shell-v20260727-workout-companion-v2";
+const CACHE_NAME = "what-to-drill-shell-v__APP_VERSION__";
 const LANDING_INDEX = new URL("index.html", self.registration.scope).toString();
 const APP_INDEX = new URL("app/index.html", self.registration.scope).toString();
 const APP_PATH = new URL("app/", self.registration.scope).pathname;
@@ -9,11 +9,11 @@ const APP_SHELL = [
   "app/index.html",
   "privacy.html",
   "terms.html",
-  "styles.css?v=20260727-workout-companion-v2",
-  "app.js?v=20260727-workout-companion-v2",
-  "workout-session-model.js?v=20260727-workout-companion-v2",
-  "training-rotation-model.js?v=20260727-workout-companion-v2",
-  "cloud-sync-model.js?v=20260727-workout-companion-v2",
+  "styles.css?v=__APP_VERSION__",
+  "app.js?v=__APP_VERSION__",
+  "workout-session-model.js?v=__APP_VERSION__",
+  "training-rotation-model.js?v=__APP_VERSION__",
+  "cloud-sync-model.js?v=__APP_VERSION__",
   "app-icon.svg",
   "app-icon-180.png",
   "app-icon-192.png",

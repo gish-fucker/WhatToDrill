@@ -5,7 +5,7 @@ const CLOUD_SYNC_DEBOUNCE_MS = 900;
 const CLOUD_SYNC_RETRY_BASE_MS = 1000;
 const CLOUD_SYNC_RETRY_MAX_MS = 60_000;
 const CLOUD_SYNC_RETRY_JITTER = 0.2;
-const APP_VERSION = "1.23.0";
+const APP_VERSION = document.documentElement.dataset.appVersion;
 const CLOUD_ADVICE_CONSENT_VERSION = 1;
 const BACKUP_SCHEMA_VERSION = 1;
 const MAX_WORKOUT_CSV_BYTES = 5 * 1024 * 1024;
@@ -1520,7 +1520,10 @@ function buildNextWorkoutPlan(workout, options = {}) {
   const completion = comparable?.completionSummary || {};
   const incomplete = Number(completion.pending || 0) + Number(completion.skipped || 0) > 0;
   const source = template.exercises.map(exercise => {
-    const latest = TrainingRotationModel.findLatestExercisePerformance(state.workouts, exercise.name);
+    const comparableExercise = comparable?.exercises?.find(item => item.name === exercise.name);
+    const latest = comparableExercise
+      ? { workout: comparable, exercise: comparableExercise }
+      : TrainingRotationModel.findLatestExercisePerformance(state.workouts, exercise.name);
     const history = latest?.exercise;
     const selected = history ? {
       name: history.name,
@@ -2237,7 +2240,7 @@ function focusedCurrentSetMarkup({ exercise, set, setIndex }) {
   const cue = set.target.note || exercise.cue || "动作保持稳定，不需要做到力竭。";
   const primaryStep = set.metric === "seconds" ? 5 : 1;
   const primaryUnit = workoutMetricLabel(set.metric);
-  const hasWeight = set.metric === "reps" && !/俯卧撑|引体|深蹲跳|开合跳|鸟狗|死虫|臀桥|卷腹|平板|拉伸|活动|快走|跑步/.test(exercise.name);
+  const hasWeight = set.metric === "reps" && !/俯卧撑|引体|椅子深蹲|分腿蹲|深蹲跳|开合跳|鸟狗|死虫|臀桥|卷腹|平板|拉伸|活动|快走|跑步/.test(exercise.name);
   const load = Number(set.actual.weight ?? set.target.weight);
   const weightStep = Number.isFinite(load) && load > 0 && load <= 10 ? 1 : 2.5;
   return `
@@ -2733,7 +2736,7 @@ function saveFirstWorkoutSetup(event) {
   const trainingGoal = form.get("firstWorkoutGoal");
   const conditionMap = {
     bodyweight: { preferredEnvironment: "home_bodyweight", availableEquipment: "bodyweight", starterTemplateId: "starter_home_bodyweight" },
-    dumbbells: { preferredEnvironment: "home_dumbbell", availableEquipment: "dumbbells", starterTemplateId: "starter_dumbbell_full_body" },
+    dumbbells: { preferredEnvironment: "mixed", availableEquipment: "dumbbells", starterTemplateId: "starter_dumbbell_full_body" },
     machines: { preferredEnvironment: "gym", availableEquipment: "machines", starterTemplateId: "starter_gym_machines" },
     free_weights: { preferredEnvironment: "gym", availableEquipment: "free_weights", starterTemplateId: "starter_free_weights" }
   };
@@ -7508,6 +7511,23 @@ function clearCloudSyncWork() {
   clearCloudSyncRetry();
 }
 
+function stopCloudSyncLocally(remote = {}, message = "") {
+  const accountId = activeCloudAccountId();
+  if (!accountId || cloudSyncMetadata.accountId !== accountId) return false;
+  cloudSyncGeneration += 1;
+  clearCloudSyncWork();
+  cloudSyncMetadata = CloudSyncModel.stopSync(
+    cloudSyncMetadata,
+    remote,
+    { expectedAccountId: accountId }
+  );
+  // The generation intentionally changed above, so persist the completed local
+  // transition without an old-operation guard. Business data is not touched.
+  persistCloudSyncMetadata(cloudSyncMetadata);
+  if (message) showToast(message);
+  return true;
+}
+
 function retryCloudSyncDelay(error) {
   const injected = window.__whatToDrillCloudSyncRetryConfig || {};
   const base = Math.max(1, Number(injected.baseMs) || CLOUD_SYNC_RETRY_BASE_MS);
@@ -7775,18 +7795,7 @@ async function pullCloudStateNow(options = {}) {
           ), accountId);
           return false;
         }
-        cloudSyncGeneration += 1;
-        clearCloudSyncWork();
-        cloudSyncMetadata = CloudSyncModel.normalizeMetadata({
-          ...cloudSyncMetadata,
-          enabled: false,
-          revision: remote.revision,
-          remoteChecksum: "",
-          conflict: null,
-          status: "disabled"
-        }, accountId);
-        persistCloudSyncMetadata(cloudSyncMetadata);
-        showToast("云端备份已在其他设备删除；本机记录保留，自动同步已停止。 ");
+        stopCloudSyncLocally(remote, "云端备份已在其他设备删除；本机记录保留，自动同步已停止。 ");
         return true;
       }
       cloudSyncMetadata = CloudSyncModel.normalizeMetadata({
@@ -7889,13 +7898,7 @@ async function enableCloudSyncNow() {
 }
 
 function disableCloudSync() {
-  const accountId = activeCloudAccountId();
-  if (!accountId || cloudSyncMetadata.accountId !== accountId) return;
-  cloudSyncGeneration += 1;
-  clearCloudSyncWork();
-  cloudSyncMetadata = CloudSyncModel.normalizeMetadata({ ...cloudSyncMetadata, enabled: false }, accountId);
-  persistCloudSyncMetadata(cloudSyncMetadata);
-  showToast("已停止自动云备份；本机和云端已有数据都保留。 ");
+  stopCloudSyncLocally({}, "已停止自动云备份；本机和云端已有数据都保留。 ");
 }
 
 async function syncCloudNow() {
@@ -7926,6 +7929,13 @@ async function resolveCloudConflictNow(choice) {
   const conflict = cloudSyncMetadata.conflict;
   if (!accountId || !conflict || cloudSyncMetadata.accountId !== accountId) return;
   try {
+    // Accepting a tombstone changes only this device: it keeps local records
+    // and stops sync. It neither reads nor writes cloud data, so a fallible
+    // network preflight would only make a safe local choice unreliable.
+    if (choice === "use-cloud" && conflict.exists === false && conflict.code === "REMOTE_DELETED") {
+      stopCloudSyncLocally(conflict, "云端备份已被删除；本机记录保留，自动同步已停止。 ");
+      return;
+    }
     const remote = await cloudSyncApi("GET");
     if (!isExpectedCloudAccount(accountId, generation)) return;
     const descriptor = describeRemoteConflict(remote);
@@ -7944,17 +7954,7 @@ async function resolveCloudConflictNow(choice) {
 
     if (choice === "use-cloud") {
       if (!remote.exists) {
-        cloudSyncMetadata = CloudSyncModel.normalizeMetadata({
-          ...cloudSyncMetadata,
-          enabled: false,
-          revision: remote.revision,
-          remoteChecksum: "",
-          conflict: null,
-          status: "disabled"
-        }, accountId);
-        clearCloudSyncWork();
-        persistCloudSyncMetadata(cloudSyncMetadata, accountId);
-        showToast("云端备份已被删除；本机记录保留，自动同步已停止。 ");
+        stopCloudSyncLocally(remote, "云端备份已被删除；本机记录保留，自动同步已停止。 ");
         return;
       }
       if (descriptor.revision !== conflict.revision || descriptor.checksum !== conflict.checksum) {
@@ -8033,21 +8033,12 @@ async function deleteCloudDataNow() {
   const generation = cloudSyncGeneration;
   if (!accountId || cloudSyncMetadata.accountId !== accountId) return;
   try {
-    const remote = await cloudSyncApi("GET");
+    // The mutex runs this after any in-flight PUT, whose completion persists
+    // the latest acknowledged revision. DELETE's CAS is the authoritative
+    // freshness check; a preceding GET adds a rate-limit/race window.
+    const result = await cloudSyncApi("DELETE", { baseRevision: cloudSyncMetadata.revision });
     if (!isExpectedCloudAccount(accountId, generation)) return;
-    const result = await cloudSyncApi("DELETE", { baseRevision: remote.revision });
-    if (!isExpectedCloudAccount(accountId, generation)) return;
-    cloudSyncGeneration += 1;
-    clearCloudSyncWork();
-    cloudSyncMetadata = CloudSyncModel.normalizeMetadata({
-      ...cloudSyncMetadata,
-      enabled: false,
-      revision: result.revision,
-      remoteChecksum: "",
-      conflict: null,
-      status: "disabled"
-    }, accountId);
-    persistCloudSyncMetadata(cloudSyncMetadata);
+    stopCloudSyncLocally({ ...result, exists: false });
     closeDeleteCloudDialog();
     showToast("云端备份已删除，本机记录保持不变。 ");
   } catch (error) {
@@ -8252,7 +8243,7 @@ function renderAccountPanel() {
     headerStatus.textContent = "本机模式";
     panelStatus.textContent = "未连接账号服务";
     panelStatus.classList.add("low");
-    $("accountSummary").textContent = "当前部署没有连接账号服务。你仍可完整使用本地记录、备份、迁移和离线能力。";
+    $("accountSummary").textContent = "当前部署是本机模式，没有可用的同源账号或云同步服务。你仍可完整使用本地记录、手动备份、迁移和离线能力。";
   } else if (accountSession.unavailable) {
     headerStatus.textContent = "账号暂不可用";
     headerStatus.classList.add("offline");
@@ -8426,7 +8417,7 @@ async function signOutAccount() {
       accountSession = { loading: false, configured: Boolean(data.configured), signedIn: false, unavailable: false, user: null };
       accountEntitlements = { loading: false, configured: false, unavailable: false, plan: null, quota: null };
       accountPendingEmail = "";
-      setAccountFeedback("已退出账号。本机记录保持不变。", false);
+      setAccountFeedback("已退出账号。本机与云端已有数据保持不变；退出不等于停止同步、删除云端备份或删除账号。", false);
     } catch (error) {
       setAccountFeedback(error.message, true);
     }

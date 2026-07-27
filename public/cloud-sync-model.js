@@ -520,6 +520,29 @@
     });
   }
 
+  function stopSync(metadata, remote = {}, options = {}, explicitAccountId) {
+    const expectation = requiredAccountExpectation(options, explicitAccountId, arguments.length >= 4);
+    const current = transitionMetadata(metadata, expectation);
+    if (!isPlainDataRecord(remote)) throw new TypeError("Plain remote details are required.");
+    const acknowledgesDeletion = ownValue(remote, "exists", true) === false;
+    const revision = acknowledgesDeletion
+      ? cleanRevision(ownValue(remote, "revision", -1))
+      : current.revision;
+    if (acknowledgesDeletion && revision < current.revision) {
+      throw codedError("STALE_SYNC_RESULT", "A remote deletion cannot move synchronization backward.");
+    }
+    return normalizeMetadata({
+      ...current,
+      enabled: false,
+      revision,
+      remoteChecksum: acknowledgesDeletion ? "" : current.remoteChecksum,
+      status: "disabled",
+      pending: false,
+      conflict: null,
+      error: ""
+    }, expectation.accountId);
+  }
+
   global.CloudSyncModel = Object.freeze({
     VERSION,
     SUPPORTED_SNAPSHOT_SCHEMA_VERSION,
@@ -532,6 +555,7 @@
     completePush,
     completePull,
     markConflict,
-    markFailure
+    markFailure,
+    stopSync
   });
 })(globalThis);
