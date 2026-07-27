@@ -1,10 +1,19 @@
 (function attachWorkoutSessionModel(global) {
   "use strict";
 
-  const VERSION = 4;
+  const VERSION = 5;
   const DEFAULT_REST_SECONDS = 90;
   const VALID_STATUSES = new Set(["pending", "completed", "skipped"]);
   const VALID_METRICS = new Set(["reps", "seconds", "minutes", "completion"]);
+  const RECORD_TYPES = Object.freeze([
+    "weighted_reps",
+    "bodyweight_reps",
+    "assisted_or_added_weight_reps",
+    "duration_seconds",
+    "duration_minutes",
+    "completion_only"
+  ]);
+  const VALID_RECORD_TYPES = new Set(RECORD_TYPES);
   const FEELING_RPE = Object.freeze({ easy: 4, right: 6, hard: 8 });
   let idSequence = 0;
 
@@ -28,22 +37,46 @@
     return typeof value === "string" ? value.trim() : "";
   }
 
-  function inferMetric(metric, note = "", exerciseName = "") {
-    if (VALID_METRICS.has(metric)) return metric;
-    const cue = `${exerciseName} ${note}`;
-    if (/按秒|秒记录|平板支撑/.test(cue)) return "seconds";
-    if (/按分钟|分钟记录|快走/.test(cue)) return "minutes";
-    if (/完成即可|仅完成/.test(cue)) return "completion";
+  function legacyMetricForRecordType(recordType) {
+    if (recordType === "duration_seconds") return "seconds";
+    if (recordType === "duration_minutes") return "minutes";
+    if (recordType === "completion_only") return "completion";
     return "reps";
   }
 
-  function normalizeValues(values = {}) {
-    return {
+  function inferRecordType(recordType, metric, note = "", exerciseName = "", values = {}) {
+    if (VALID_RECORD_TYPES.has(recordType)) return recordType;
+    if (metric === "seconds") return "duration_seconds";
+    if (metric === "minutes") return "duration_minutes";
+    if (metric === "completion") return "completion_only";
+    const cue = `${exerciseName} ${note}`;
+    if (/按秒|秒记录|平板支撑/.test(cue)) return "duration_seconds";
+    if (/按分钟|分钟记录|快走|跑步/.test(cue)) return "duration_minutes";
+    if (/完成即可|仅完成/.test(cue)) return "completion_only";
+    if (/辅助引体|负重引体|引体向上|引体/.test(cue)) return "assisted_or_added_weight_reps";
+    if (/自重深蹲|徒手深蹲|俯卧撑|椅子深蹲|分腿蹲|深蹲跳|开合跳|鸟狗|死虫|臀桥|卷腹|徒手/.test(cue)) {
+      return "bodyweight_reps";
+    }
+    return "weighted_reps";
+  }
+
+  function inferMetric(metric, note = "", exerciseName = "") {
+    if (VALID_METRICS.has(metric)) return metric;
+    return legacyMetricForRecordType(inferRecordType("", metric, note, exerciseName));
+  }
+
+  function normalizeValues(values = {}, recordType = "weighted_reps") {
+    const normalized = {
       weight: optionalNumber(values.weight),
       reps: optionalNumber(values.reps),
       rpe: optionalNumber(values.rpe),
       note: normalizeText(values.note)
     };
+    if (["bodyweight_reps", "duration_seconds", "duration_minutes", "completion_only"].includes(recordType)) {
+      normalized.weight = null;
+    }
+    if (recordType === "completion_only") normalized.reps = null;
+    return normalized;
   }
 
   function emptyActual() {
@@ -84,20 +117,38 @@
   function normalizeSet(set = {}, exercise = {}, idFactory = defaultId) {
     const targetSource = set.target || set;
     const actualSource = set.actual || emptyActual();
+    const recordType = inferRecordType(
+      set.recordType || exercise.recordType,
+      set.metric || exercise.metric,
+      targetSource.note,
+      exercise.name,
+      { weight: targetSource.weight ?? actualSource.weight }
+    );
     return {
       id: set.id || idFactory("set"),
-      metric: inferMetric(set.metric || exercise.metric, targetSource.note, exercise.name),
+      recordType,
+      metric: legacyMetricForRecordType(recordType),
       status: VALID_STATUSES.has(set.status) ? set.status : "pending",
       restDurationSeconds: optionalNumber(set.restDurationSeconds ?? set.restSeconds),
-      target: normalizeValues(targetSource),
-      actual: normalizeValues(actualSource)
+      target: normalizeValues(targetSource, recordType),
+      actual: normalizeValues(actualSource, recordType)
     };
   }
 
   function normalizeExercise(exercise = {}, idFactory = defaultId) {
+    const firstSet = Array.isArray(exercise.sets) ? exercise.sets.find(set => set && typeof set === "object") : null;
+    const recordType = inferRecordType(
+      exercise.recordType,
+      exercise.metric,
+      firstSet?.target?.note ?? firstSet?.note,
+      exercise.name,
+      firstSet?.target || firstSet || {}
+    );
     return {
       id: exercise.id || idFactory("exercise"),
       name: normalizeText(exercise.name) || "未命名动作",
+      recordType,
+      metric: legacyMetricForRecordType(recordType),
       cue: normalizeText(exercise.cue),
       restDurationSeconds: optionalNumber(exercise.restDurationSeconds ?? exercise.restSeconds),
       sets: (Array.isArray(exercise.sets) ? exercise.sets : [])
@@ -185,14 +236,14 @@
 
   function updateActual(session, setId, patch = {}) {
     return updateSet(session, setId, set => {
-      set.actual = normalizeValues({ ...set.actual, ...patch });
+      set.actual = normalizeValues({ ...set.actual, ...patch }, set.recordType);
     });
   }
 
   function completeSet(session, setId, patch, options = {}) {
     if (findSet(session, setId)?.set.status !== "pending") return clone(session);
     const next = updateSet(session, setId, (set, _exercise, draft) => {
-      if (patch) set.actual = normalizeValues({ ...set.actual, ...patch });
+      if (patch) set.actual = normalizeValues({ ...set.actual, ...patch }, set.recordType);
       set.status = "completed";
       const targetSetId = nextPendingSetId(draft, setId);
       draft.currentSetId = targetSetId;
@@ -229,6 +280,7 @@
   }
 
   function skipSet(session, setId) {
+    if (findSet(session, setId)?.set.status !== "pending") return clone(session);
     return updateSet(session, setId, (set, _exercise, draft) => {
       set.status = "skipped";
       draft.currentSetId = nextPendingSetId(draft, setId);
@@ -323,6 +375,10 @@
     return Boolean(session.companion?.rest?.restPausedAt);
   }
 
+  function isRestLocked(session, now = new Date().toISOString()) {
+    return Boolean(session.companion?.rest) && remainingRestSeconds(session, now) > 0;
+  }
+
   function clearRest(session) {
     const next = clone(session);
     next.companion = normalizeCompanion(next.companion);
@@ -367,6 +423,7 @@
       reps: set.metric === "completion" ? null : set.actual.reps ?? set.target.reps,
       rpe: set.actual.rpe ?? set.target.rpe,
       note: set.actual.note,
+      recordType: set.recordType,
       metric: set.metric
     };
     return result;
@@ -413,7 +470,7 @@
 
   function migrateDraft(draft = {}, options = {}) {
     if (draft.version === VERSION) return createSession(draft, options);
-    if (draft.version === 3) return createSession(draft, options);
+    if ([3, 4].includes(draft.version)) return createSession(draft, options);
     if (draft.version === 2) return createSession({ ...draft, companion: emptyCompanion() }, options);
     const migrated = {
       id: draft.id,
@@ -424,12 +481,14 @@
       companion: emptyCompanion(),
       exercises: (Array.isArray(draft.exercises) ? draft.exercises : []).map(exercise => ({
         name: exercise.name,
+        recordType: exercise.recordType,
         metric: exercise.metric,
         sets: (Array.isArray(exercise.sets) ? exercise.sets : []).map(set => ({
+          recordType: set.recordType || exercise.recordType,
           metric: set.metric,
           status: optionalNumber(set.weight) !== null ? "completed" : "pending",
-          target: normalizeValues(set),
-          actual: normalizeValues(set)
+          target: normalizeValues(set, inferRecordType(set.recordType || exercise.recordType, set.metric || exercise.metric, set.note, exercise.name, set)),
+          actual: normalizeValues(set, inferRecordType(set.recordType || exercise.recordType, set.metric || exercise.metric, set.note, exercise.name, set))
         }))
       }))
     };
@@ -439,10 +498,13 @@
   global.WorkoutSessionModel = Object.freeze({
     VERSION,
     DEFAULT_REST_SECONDS,
+    RECORD_TYPES,
     VALID_METRICS: Object.freeze(Array.from(VALID_METRICS)),
     createSession,
     migrateDraft,
     inferMetric,
+    inferRecordType,
+    legacyMetricForRecordType,
     updateActual,
     completeSet,
     skipSet,
@@ -459,6 +521,7 @@
     pauseRest,
     resumeRest,
     isRestPaused,
+    isRestLocked,
     clearRest,
     prefillCurrentWeight,
     toWorkoutRecord

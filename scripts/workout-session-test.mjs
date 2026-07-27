@@ -20,11 +20,23 @@ function createPlan() {
 }
 
 assert.ok(model, "Workout session model should attach to globalThis.");
+assert.deepEqual(model.RECORD_TYPES, [
+  "weighted_reps",
+  "bodyweight_reps",
+  "assisted_or_added_weight_reps",
+  "duration_seconds",
+  "duration_minutes",
+  "completion_only"
+]);
+assert.equal(model.inferRecordType("", "seconds", "", "平板支撑", {}), "duration_seconds");
+assert.equal(model.inferRecordType("", "reps", "", "普通俯卧撑", {}), "bodyweight_reps");
+assert.equal(model.inferRecordType("", "reps", "", "引体向上", { weight: -20 }), "assisted_or_added_weight_reps");
+assert.equal(model.inferRecordType("", "reps", "", "我的自定义动作", {}), "weighted_reps");
 assert.equal(model.inferMetric(null, "按秒记录在次数里", "平板支撑"), "seconds");
 assert.equal(model.inferMetric(null, "按分钟记录在次数里", "快走"), "minutes");
 
 const initial = createPlan();
-assert.equal(initial.version, 4, "New sessions should use the resumable-rest schema.");
+assert.equal(initial.version, 5, "New sessions should use the typed-record schema.");
 assert.deepEqual(initial.companion, { rest: null, transition: null });
 assert.deepEqual(model.progress(initial), { total: 4, completed: 0, skipped: 0, pending: 4, percent: 0 });
 assert.equal(model.canFinish(initial), false, "A session with no completed set cannot finish.");
@@ -46,6 +58,7 @@ assert.deepEqual(model.completedExercises(completedDefault)[0].sets[0], {
   reps: 12,
   rpe: 6,
   note: "",
+  recordType: "weighted_reps",
   metric: "reps"
 }, "Unchanged template targets should materialize as the completed result.");
 
@@ -54,10 +67,13 @@ const walked = model.completeSet(timed, walkId);
 const cooledDown = model.completeSet(walked, cooldownId);
 const completedSets = model.completedExercises(cooledDown).flatMap(exercise => exercise.sets);
 assert.equal(completedSets[1].metric, "seconds");
+assert.equal(completedSets[1].recordType, "duration_seconds");
 assert.equal(completedSets[1].reps, 30, "Timed bodyweight sets should save without weight.");
 assert.equal(completedSets[2].metric, "minutes");
+assert.equal(completedSets[2].recordType, "duration_minutes");
 assert.equal(completedSets[2].reps, 10, "Minute-based sets should preserve their duration value.");
 assert.equal(completedSets[3].metric, "completion");
+assert.equal(completedSets[3].recordType, "completion_only");
 assert.equal(completedSets[3].reps, null, "Completion-only sets should not invent repetitions.");
 
 const skipped = model.skipSet(initial, squatId);
@@ -98,7 +114,7 @@ const legacy = model.migrateDraft({
     ]
   }]
 }, { idFactory, startedAt });
-assert.equal(legacy.version, 4);
+assert.equal(legacy.version, 5);
 assert.equal(legacy.exercises[0].sets[0].status, "completed", "Legacy weight is strong evidence of completion.");
 assert.equal(legacy.exercises[0].sets[1].status, "pending", "Ambiguous legacy values must remain pending.");
 assert.equal(legacy.exercises[0].sets[1].actual.reps, 12, "Legacy input should remain visible after migration.");
@@ -170,7 +186,7 @@ const manuallySelected = model.selectSet(companion, companionThird);
 assert.equal(manuallySelected.companion.transition, null, "Manual selection should clear stale transition context.");
 
 const v2Draft = model.migrateDraft({ ...companion, version: 2, companion: undefined }, { idFactory, startedAt: companionNow });
-assert.equal(v2Draft.version, 4);
+assert.equal(v2Draft.version, 5);
 assert.deepEqual(v2Draft.companion, { rest: null, transition: null });
 const corruptCompanion = model.createSession({
   ...companion,
